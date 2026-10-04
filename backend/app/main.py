@@ -99,7 +99,8 @@ def create_app() -> FastAPI:
             allow_origins=settings.cors_origin_list,
             # Only what the API actually uses; widen deliberately when new verbs appear.
             allow_methods=["GET", "POST"],
-            allow_headers=["Content-Type", "X-Request-ID"],
+            # X-Sentra-Console marks dashboard console calls (see api/console.py).
+            allow_headers=["Content-Type", "X-Request-ID", "X-Sentra-Console"],
         )
     app.middleware("http")(request_logging_middleware)
     # Added last so it runs first: oversized bodies are refused before any other work.

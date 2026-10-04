@@ -2,7 +2,13 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.api.deps import AgentToken, EnrollmentKey, EnrollmentTokenHeader, get_agent_service
+from app.api.deps import (
+    AgentToken,
+    EnrollmentKey,
+    EnrollmentTokenHeader,
+    get_agent_management_service,
+    get_agent_service,
+)
 from app.api.responses import error_responses
 from app.schemas.agent import (
     AgentRegisterRequest,
@@ -10,6 +16,8 @@ from app.schemas.agent import (
     HeartbeatRequest,
     HeartbeatResponse,
 )
+from app.schemas.agent_management import AgentList
+from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 
 router = APIRouter(prefix="/agents", tags=["agents"])
@@ -46,3 +54,14 @@ def register_agent(
 @router.post("/heartbeat", response_model=HeartbeatResponse, responses=error_responses(401, 413))
 def heartbeat(payload: HeartbeatRequest, service: Service, token: AgentToken) -> HeartbeatResponse:
     return service.heartbeat(payload, token)
+
+
+@router.get("", response_model=AgentList)
+def list_agents(
+    service: Annotated[AgentManagementService, Depends(get_agent_management_service)],
+) -> AgentList:
+    """Enrolled agents with liveness and credential state (read-only, like /assets).
+
+    Never returns tokens, hashes or enrollment tokens.
+    """
+    return service.list_agents()

@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import MAX_CREDENTIAL_LENGTH, enrollment_key_matches
 from app.db.session import get_db
+from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import AssetService
@@ -77,6 +78,12 @@ def get_enrollment_token_service(
     session: DbSession, settings: AppSettings
 ) -> EnrollmentTokenService:
     return EnrollmentTokenService(session, timedelta(minutes=settings.enrollment_token_ttl_minutes))
+
+
+def get_agent_management_service(
+    session: DbSession, settings: AppSettings
+) -> AgentManagementService:
+    return AgentManagementService(session, timedelta(seconds=settings.heartbeat_timeout_seconds))
 
 
 def get_asset_service(session: DbSession, settings: AppSettings) -> AssetService:

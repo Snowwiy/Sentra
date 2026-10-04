@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet } from "./client";
+import { ApiError, apiGet, apiPost } from "./client";
 
 function respond(status: number, body: string, contentType = "application/json") {
   const fetchMock = vi.fn(async () => new Response(body, { status, headers: { "Content-Type": contentType } }));
@@ -101,5 +101,32 @@ describe("apiGet", () => {
 
     const error = await failure(apiGet("/assets"));
     expect(error.code).toBe("invalid_response");
+  });
+});
+
+describe("apiPost and console calls", () => {
+  it("sends JSON, the console marker and never uses the HTTP cache", async () => {
+    const fetchMock = respond(201, JSON.stringify({ ok: true }));
+
+    await expect(apiPost("/console/enrollment-tokens", { max_uses: 1 }, { console: true })).resolves.toEqual({
+      ok: true,
+    });
+    const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toMatch(/\/api\/v1\/console\/enrollment-tokens$/);
+    expect(init.method).toBe("POST");
+    expect(init.body).toBe(JSON.stringify({ max_uses: 1 }));
+    expect(init.cache).toBe("no-store");
+    expect(init.headers).toEqual({
+      Accept: "application/json",
+      "Content-Type": "application/json",
+      "X-Sentra-Console": "1",
+    });
+  });
+
+  it("never sends an admin key", async () => {
+    const fetchMock = respond(200, "{}");
+    await apiGet("/console", { console: true });
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.stringify(init.headers).toLowerCase()).not.toContain("admin");
   });
 });

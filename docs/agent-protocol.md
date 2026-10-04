@@ -8,8 +8,8 @@ All timestamps are ISO 8601 **with timezone offset**; the server stores them in 
 - On first run the agent generates a random UUID (`agent_id`) and keeps it locally.
 - **Enrollment** (`POST /agents/register`) needs one of two credentials:
   - **Recommended: a one-time enrollment token** in the header `X-Enrollment-Token`. An
-    operator creates it on the server (`python -m app.cli create-enrollment-token`, or
-    `POST /api/v1/agent-enrollment-tokens` with `X-Admin-Key`). It starts with `sentra_et_`,
+    operator creates it on the server (dashboard Agentes page, `python -m app.cli
+    create-enrollment-token`, or `POST /api/v1/agent-enrollment-tokens` with `X-Admin-Key`). It starts with `sentra_et_`,
     expires after `ENROLLMENT_TOKEN_TTL_MINUTES` (15 by default), works for one agent by
     default (`max_uses`), can be restricted to a platform (`windows`/`linux`) and a hostname,
     and can be revoked while unused. The server stores only its SHA-256 hash and consumes it

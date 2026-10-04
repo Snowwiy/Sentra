@@ -6,6 +6,7 @@ from typing import Any
 
 import pytest
 
+from sentra_agent.__main__ import main
 from sentra_agent.config import load_config
 from tests.conftest import FakeApiState
 from tests.test_runner import build_agent
@@ -104,3 +105,78 @@ def test_config_reads_token_settings_from_environment(
 
     assert config.enrollment_token == TOKEN
     assert config.enrollment_token_file == tmp_path / "t"
+
+
+def _enroll_cli(url: str, state_dir: Path, token_file: Path | None = None) -> int:
+    extra = ["--enrollment-token-file", str(token_file)] if token_file else []
+    return main(["--api-url", url, "--state-dir", str(state_dir), "--enroll", *extra])
+
+
+def _write_token(path: Path, token: str) -> Path:
+    path.write_text(token + "\n", encoding="utf-8")
+    return path
+
+
+@pytest.fixture
+def no_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("SENTRA_AGENT_ENROLLMENT_KEY", raising=False)
+    monkeypatch.delenv("SENTRA_AGENT_ENROLLMENT_TOKEN", raising=False)
+
+
+@pytest.mark.usefixtures("no_env_credentials")
+def test_new_token_reenrolls_an_agent_whose_own_token_is_dead(
+    fake_api: tuple[str, FakeApiState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Revoked then reinstated (or server reset): the installer run with a new one-time
+    token must enroll again as the same agent instead of saying "already enrolled"."""
+    url, state = fake_api
+    state.enrollment_tokens.add(TOKEN)
+    assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t1", TOKEN)) == 0
+    agent_id, asset_id = next(iter(state.agents.items()))
+    state.tokens.pop(agent_id)  # the server no longer accepts the stored token
+    second = "sentra_et_" + "R" * 43
+    state.enrollment_tokens.add(second)
+    capsys.readouterr()
+
+    token_file = _write_token(tmp_path / "t2", second)
+    assert _enroll_cli(url, tmp_path, token_file) == 0
+
+    assert capsys.readouterr().out.startswith("enrolled:")
+    assert list(state.agents.items()) == [(agent_id, asset_id)]  # same agent, same asset
+    assert second not in state.enrollment_tokens and not token_file.exists()
+
+
+@pytest.mark.usefixtures("no_env_credentials")
+def test_new_token_is_not_spent_when_the_own_token_still_works(
+    fake_api: tuple[str, FakeApiState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    url, state = fake_api
+    state.enrollment_tokens.add(TOKEN)
+    assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t1", TOKEN)) == 0
+    second = "sentra_et_" + "S" * 43
+    state.enrollment_tokens.add(second)
+    capsys.readouterr()
+    before = state.paths().count("/agents/register")
+
+    assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t2", second)) == 0
+
+    assert capsys.readouterr().out.startswith("already enrolled:")
+    assert state.paths()[-1] == "/agents/heartbeat"  # checked, not enrolled again
+    assert state.paths().count("/agents/register") == before
+    assert second in state.enrollment_tokens  # still usable elsewhere (or revocable)
+
+
+@pytest.mark.usefixtures("no_env_credentials")
+def test_new_token_cannot_bring_back_a_revoked_agent(
+    fake_api: tuple[str, FakeApiState], tmp_path: Path
+) -> None:
+    url, state = fake_api
+    state.enrollment_tokens.add(TOKEN)
+    assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t1", TOKEN)) == 0
+    agent_id = next(iter(state.agents))
+    state.tokens.pop(agent_id)
+    state.revoked.add(agent_id)
+    second = "sentra_et_" + "T" * 43
+    state.enrollment_tokens.add(second)
+
+    assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t2", second)) == 4  # rejected

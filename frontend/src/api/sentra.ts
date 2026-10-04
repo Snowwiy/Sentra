@@ -1,5 +1,7 @@
-import { apiGet } from "./client";
+import { apiGet, apiPost } from "./client";
 import type {
+  Agent,
+  AgentList,
   Alert,
   AlertList,
   AlertRule,
@@ -10,9 +12,14 @@ import type {
   AssetStatus,
   ChangeCategory,
   ChangeList,
+  ConsoleInfo,
   DiscoveryJobList,
   DiscoveryScope,
   EventLevel,
+  EnrollmentToken,
+  EnrollmentTokenCreated,
+  EnrollmentTokenList,
+  EnrollmentTokenRequest,
   EventList,
   Exposure,
   Health,
@@ -119,4 +126,34 @@ export const sentraApi = {
     apiGet<DiscoveryJobList>(`/discovery/jobs${queryString({ limit })}`, { signal }),
   getAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal }),
+  listAgents: (signal?: AbortSignal) => apiGet<AgentList>("/agents", { signal }),
+  getAssetAgent: (assetId: string, signal?: AbortSignal) =>
+    apiGet<Agent>(`/assets/${encodeURIComponent(assetId)}/agent`, { signal }),
+};
+
+/**
+ * Agent administration through the dashboard console. The API performs these itself and
+ * answers only a browser on the Sentra server (no admin key in the frontend). The token in
+ * `createEnrollmentToken`'s answer exists only there: never store or log it.
+ */
+export const consoleApi = {
+  info: (signal?: AbortSignal) => apiGet<ConsoleInfo>("/console", { signal, console: true }),
+  listEnrollmentTokens: (signal?: AbortSignal) =>
+    apiGet<EnrollmentTokenList>("/console/enrollment-tokens", { signal, console: true }),
+  createEnrollmentToken: (request: EnrollmentTokenRequest) =>
+    apiPost<EnrollmentTokenCreated>("/console/enrollment-tokens", request, { console: true }),
+  revokeEnrollmentToken: (tokenId: string) =>
+    apiPost<EnrollmentToken>(
+      `/console/enrollment-tokens/${encodeURIComponent(tokenId)}/revoke`,
+      undefined,
+      { console: true },
+    ),
+  revokeAgent: (assetId: string) =>
+    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/revoke`, undefined, {
+      console: true,
+    }),
+  reinstateAgent: (assetId: string) =>
+    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`, undefined, {
+      console: true,
+    }),
 };

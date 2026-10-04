@@ -44,7 +44,7 @@ EXIT_UNREACHABLE = 5
 
 
 def _enroll(agent: Agent) -> int:
-    already = agent.identity.token is not None
+    before = agent.identity.token
     try:
         asset_id = agent.enroll()
     except EnrollmentKeyMissingError:
@@ -57,7 +57,9 @@ def _enroll(agent: Agent) -> int:
     except TransportError as exc:
         print(f"server unreachable: {exc}")
         return EXIT_UNREACHABLE
-    state = "already enrolled" if already else "enrolled"
+    # Same token as before: nothing was enrolled (a supplied one-time token stays unused).
+    unchanged = before is not None and agent.identity.token == before
+    state = "already enrolled" if unchanged else "enrolled"
     print(f"{state}: agent_id={agent.identity.agent_id} asset_id={asset_id}")
     return EXIT_ENROLLED
 

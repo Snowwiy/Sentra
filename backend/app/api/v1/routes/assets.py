@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from pydantic import IPvAnyNetwork
 
 from app.api.deps import (
+    get_agent_management_service,
     get_asset_service,
     get_exposure_service,
     get_inventory_service,
@@ -15,12 +16,14 @@ from app.api.params import text_query
 from app.api.responses import error_responses
 from app.models.asset import AssetStatus, MonitoringMethod
 from app.models.change import ChangeCategory
+from app.schemas.agent_management import AgentRead
 from app.schemas.asset import AssetList, AssetRead
 from app.schemas.change import ChangeList
 from app.schemas.discovery import ExposureRead
 from app.schemas.inventory import InventoryRead
 from app.schemas.process import ProcessSnapshotRead
 from app.schemas.telemetry import TelemetryHistory
+from app.services.agent_management_service import AgentManagementService
 from app.services.asset_service import AssetFilter, AssetService
 from app.services.exposure_service import ExposureService
 from app.services.inventory_service import InventoryService
@@ -54,6 +57,15 @@ def list_assets(
 @router.get("/{asset_id}", response_model=AssetRead, responses=error_responses(404))
 def get_asset(asset_id: UUID, service: Service) -> AssetRead:
     return service.get_asset(asset_id)
+
+
+@router.get("/{asset_id}/agent", response_model=AgentRead, responses=error_responses(404))
+def get_asset_agent(
+    asset_id: UUID,
+    service: Annotated[AgentManagementService, Depends(get_agent_management_service)],
+) -> AgentRead:
+    """The asset's agent and credential state (404 for assets without agent). No secrets."""
+    return service.get_agent(asset_id)
 
 
 @router.get(

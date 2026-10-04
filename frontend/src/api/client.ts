@@ -42,17 +42,38 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, "http_error", `HTTP ${response.status}`);
 }
 
-interface GetOptions {
+/**
+ * Marks calls to the dashboard console (/api/v1/console): the API only answers them for a
+ * browser on the Sentra server, and a custom header cannot be set by forms or simple
+ * cross-site requests. This is not a secret: there is no admin key in the frontend.
+ */
+export const CONSOLE_HEADER = "X-Sentra-Console";
+
+interface RequestOptions {
   signal?: AbortSignal;
   /** Non-2xx statuses whose body is still a valid `T` (e.g. 503 from /health). */
   acceptStatuses?: number[];
+  /** Send the console marker header (agent management calls). */
+  console?: boolean;
 }
 
-export async function apiGet<T>(path: string, { signal, acceptStatuses = [] }: GetOptions = {}): Promise<T> {
+async function request<T>(
+  method: "GET" | "POST",
+  path: string,
+  body: unknown,
+  { signal, acceptStatuses = [], console: isConsole = false }: RequestOptions,
+): Promise<T> {
+  const headers: Record<string, string> = { Accept: "application/json" };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+  if (isConsole) headers[CONSOLE_HEADER] = "1";
   let response: Response;
   try {
     response = await fetch(`${config.apiBaseUrl}/api/v1${path}`, {
-      headers: { Accept: "application/json" },
+      method,
+      headers,
+      body: body === undefined ? undefined : JSON.stringify(body),
+      // Responses may hold a one-time token: never from or into the HTTP cache.
+      cache: "no-store",
       signal,
     });
   } catch (error) {
@@ -65,4 +86,12 @@ export async function apiGet<T>(path: string, { signal, acceptStatuses = [] }: G
   } catch {
     throw new ApiError(response.status, "invalid_response", "Respuesta no válida de la API");
   }
+}
+
+export function apiGet<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return request<T>("GET", path, undefined, options);
+}
+
+export function apiPost<T>(path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
+  return request<T>("POST", path, body ?? {}, options);
 }

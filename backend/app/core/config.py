@@ -56,6 +56,18 @@ class Settings(BaseSettings):
     # Dashboard users/login do not exist yet, so this is a single operator credential.
     admin_api_key: SecretStr | None = Field(default=None, min_length=24)
 
+    # Agent management from the dashboard (/api/v1/console: enrollment tokens, revocation)
+    # without handing ADMIN_API_KEY to the browser. TEMPORARY until dashboard login/RBAC
+    # exists: the API itself performs the operation, only for a browser on the server
+    # machine (loopback peer, loopback Host, trusted Origin). Off by default (fail closed).
+    # See api/console.py and docs/agent-management.md.
+    dashboard_admin_enabled: bool = False
+    # URL agents use to reach this server, shown in the dashboard's install command
+    # (e.g. http://192.168.50.201:8000). Unset: suggested from this machine's addresses.
+    agent_server_url: str | None = Field(
+        default=None, pattern=r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~/-]*)?$"
+    )
+
     # An asset is reported offline when it has not been seen for this many seconds.
     heartbeat_timeout_seconds: int = Field(default=90, gt=0)
 
@@ -122,6 +134,15 @@ class Settings(BaseSettings):
     discovery_job_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     # Complete runs without seeing a host before it is reported offline/disappeared.
     discovery_offline_after_misses: int = Field(default=3, ge=1, le=100)
+
+    @field_validator("agent_server_url", mode="before")
+    @classmethod
+    def _blank_server_url(cls, value: object) -> object:
+        # `AGENT_SERVER_URL=` in .env means "not set", not an invalid URL.
+        if isinstance(value, str):
+            value = value.strip().rstrip("/")
+            return value or None
+        return value
 
     @field_validator("alert_critical_events")
     @classmethod

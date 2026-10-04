@@ -14,10 +14,11 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
 | Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0013 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
+| Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (BFF, local browser only, `DASHBOARD_ADMIN_ENABLED`): temporary until dashboard login/RBAC |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 303 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks and real TCP discovery on loopback), agent 133 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 36 unit tests (Vitest) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
+| Tests | Backend 336 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, console guard and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 70 tests (Vitest, incl. DOM tests of the Agentes page with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
 
 ## Architecture
 
@@ -62,9 +63,14 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
   15 min, single use, revocable, consumed atomically) or the legacy `AGENT_ENROLLMENT_KEY`
   (`X-Enrollment-Key`); returns a per-agent token once; all other agent calls need
   `Authorization: Bearer` with that token. Re-enrollment rotates the token.
-- Enrollment tokens are managed with `python -m app.cli create-enrollment-token` /
-  `list-enrollment-tokens` / `revoke-enrollment-token`, or the admin API
-  (`/agent-enrollment-tokens`, header `X-Admin-Key` = `ADMIN_API_KEY`; disabled if unset).
+- Enrollment tokens are managed from the dashboard (Agentes page, through `/console`), with
+  `python -m app.cli create-enrollment-token` / `list-enrollment-tokens` /
+  `revoke-enrollment-token`, or the admin API (`/agent-enrollment-tokens`, header
+  `X-Admin-Key` = `ADMIN_API_KEY`; disabled if unset). The browser never gets the admin key.
+- Dashboard console (`/console/*`, `api/console.py`): only with `DASHBOARD_ADMIN_ENABLED`,
+  loopback peer, loopback Host, trusted Origin and `X-Sentra-Console`; temporary until
+  dashboard login/RBAC. Revoking keeps all history; reinstating requires a new one-time
+  token (re-enrollment keeps the same asset).
 - Status: `unknown` until first contact; `online` while reporting; `offline` when
   `last_seen_at` is older than `HEARTBEAT_TIMEOUT_SECONDS` (computed at read time; server clock).
 - Alerts: CPU/RAM need `ALERT_SUSTAINED_SAMPLES` consecutive samples over threshold; disk alerts
@@ -76,11 +82,14 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
 
 ## Endpoints (`/api/v1`)
 
-Agent (token): `POST /agents/register` (enrollment key) · `POST /agents/heartbeat` ·
+Agent (token): `POST /agents/register` (one-time token or enrollment key) · `POST /agents/heartbeat` ·
 `POST /telemetry` · `POST /inventory` · `POST /events` · `POST /processes`.
 Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
 `GET /assets/{id}/telemetry` · `GET /assets/{id}/inventory` · `GET /assets/{id}/changes` ·
-`GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events`.
+`GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events` ·
+`GET /agents` · `GET /assets/{id}/agent`.
+Console (local dashboard): `GET /console` · `GET|POST /console/enrollment-tokens` ·
+`POST /console/enrollment-tokens/{id}/revoke` · `POST /console/agents/{id}/revoke|reinstate`.
 Operator CLI (`python -m app.cli`): `list-agents`, `revoke-agent`, `reinstate-agent`,
 `ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`.
 Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/jobs`.
@@ -131,7 +140,10 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Offline computed on read (+ sweeper for alerts) instead of a status-writing scheduler.
 - Token hashes with SHA-256 (tokens are 256-bit random; slow hashes add no security here).
 - Agent buffers up to 120 samples (memory + `telemetry_buffer.json`); backoff interval → 300 s with jitter.
-- Agent token at rest: DPAPI current-user scope via ctypes (no pywin32). Revocation via operator CLI (`python -m app.cli`), not HTTP, until dashboard auth exists.
+- Agent token at rest: DPAPI current-user scope via ctypes (no pywin32). Revocation via operator CLI (`python -m app.cli`) or the local dashboard console; no remote HTTP admin for it until dashboard auth exists.
+- Agent management in the browser without exposing ADMIN_API_KEY: backend-for-frontend
+  console restricted to the server's own browser (docs/agent-management.md), chosen over
+  typing the key into the page or a session scheme that would pre-empt the login design.
 - Agent uses stdlib + psutil + built-in `wevtutil.exe` (no pywin32).
 - Inventory as JSONB snapshot; normalize a section when SQL queries over it are needed.
 - Retention opt-in and per data type (`services/retention_service.py`): batches of 5000 rows,
@@ -142,7 +154,8 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Recommended next phase
 
-1. Dashboard authentication (users, login, sessions) — needs a product decision on the scheme.
+1. Dashboard authentication (users, login, sessions, roles) — needs a product decision on
+   the scheme; then replace the local-only console guard with a role check.
 2. Agent as a Windows service (would allow the Security event log) — needs a decision on
    running with elevated privileges.
 3. Alert acknowledgement from the dashboard (after 1), per-asset thresholds.

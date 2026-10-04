@@ -3,6 +3,7 @@ import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { sentraApi } from "../api/sentra";
 import { AlertsView } from "../components/AlertsView";
+import { AgentPanel } from "../components/asset/AgentPanel";
 import { ChangesList } from "../components/asset/ChangesList";
 import { EventsTab } from "../components/asset/EventsTab";
 import { ExposureTab } from "../components/asset/ExposureTab";
@@ -207,7 +208,12 @@ export function AssetDetailPage() {
       </nav>
 
       <div role="tabpanel">
-        {tab === "overview" && <OverviewTab asset={asset} />}
+        {tab === "overview" && (
+          <div className="stack">
+            <OverviewTab asset={asset} />
+            {managed && <AgentPanel assetId={asset.asset_id} />}
+          </div>
+        )}
         {INVENTORY_TABS.includes(tab) && inventoryContent()}
         {tab === "events" && <EventsTab assetId={asset.asset_id} />}
         {tab === "exposure" && <ExposureTab assetId={asset.asset_id} managed={managed} />}

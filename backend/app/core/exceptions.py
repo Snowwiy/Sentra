@@ -44,6 +44,16 @@ class AgentRevokedError(ForbiddenError):
     code = "agent_revoked"
 
 
+class ConsoleDisabledError(ForbiddenError):
+    # The dashboard console (api/console.py) is off: DASHBOARD_ADMIN_ENABLED is not set.
+    code = "console_disabled"
+
+
+class ConsoleNotLocalError(ForbiddenError):
+    # The console only answers a browser on the server machine itself.
+    code = "console_not_local"
+
+
 class ConflictError(SentraError):
     status_code = status.HTTP_409_CONFLICT
     code = "conflict"

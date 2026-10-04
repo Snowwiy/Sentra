@@ -7,6 +7,10 @@ installation and no `pip`, `venv`, `git` or compiler is needed.
 
 ## 1. Get a one-time enrollment token (on the Sentra server)
 
+From the dashboard: **Agentes → + Añadir agente → Linux → Generar token de instalación**. It
+also shows the install commands ready to copy ([agent-management.md](agent-management.md)).
+Or with the CLI:
+
 ```bash
 cd backend
 python -m app.cli create-enrollment-token --platform linux --note "PC de Ana"
@@ -79,7 +83,10 @@ sudo apt install ./sentra-agent_<new>_amd64.deb   # or the new .deb
 
 Configuration and identity are kept: no new token is needed and the host stays the same
 asset in Sentra. Running the normal install again on an enrolled host also keeps the
-identity (the token is not used).
+identity. If you pass a new token to an enrolled host, the agent first checks its own
+credential with one heartbeat: if it works, the new token is not used; if it no longer works
+(the agent was revoked and then reinstated in the dashboard), it enrolls again with the new
+token as the same asset.
 
 ## Uninstall
 
@@ -98,8 +105,8 @@ sudo /opt/sentra-agent/uninstall-sentra-agent.sh --purge
 | reinstall later | same asset, no token needed | needs a new token; new asset |
 
 With the .deb: `sudo apt remove sentra-agent` (= uninstall) or `sudo apt purge sentra-agent`.
-After a purge you can revoke the old agent on the server:
-`python -m app.cli revoke-agent <asset_id>`.
+After a purge you can revoke the old agent on the server (Agentes page, **Revocar**, or
+`python -m app.cli revoke-agent <asset_id>`).
 
 ## Files
 
@@ -159,6 +166,8 @@ Validated in a Linux container (Ubuntu 24.04, root, **without** systemd as PID 1
 installation with the real `useradd`/`runuser`, enrollment against a real Sentra server as
 the `sentra-agent` user, permissions, agent running as that user and reporting, upgrade
 keeping the identity, uninstall and purge, `.deb` install/remove/purge, and
-`systemd-analyze verify` of the unit. **Pending physical validation**: the service actually
+`systemd-analyze verify` of the unit; with 0.1.1 also the dashboard flow (token generated in
+the Agentes page, installer run with it, registration seen by the page, revoke, reinstate and
+re-enrollment as the same asset). **Pending physical validation**: the service actually
 started by systemd at boot on a real machine (enable/restart/stop/reboot) and the effect of
 the hardening options there.

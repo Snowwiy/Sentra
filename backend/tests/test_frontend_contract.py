@@ -49,6 +49,12 @@ INTERFACES = {
     "ExposedPort": "ExposedPort",
     "AgentListener": "AgentListener",
     "Exposure": "ExposureRead",
+    "Agent": "AgentRead",
+    "AgentSummary": "AgentSummary",
+    "AgentList": "AgentList",
+    "EnrollmentToken": "EnrollmentTokenRead",
+    "EnrollmentTokenList": "EnrollmentTokenList",
+    "ConsoleInfo": "ConsoleInfo",
 }
 ENUMS = [
     "AssetStatus",
@@ -62,6 +68,8 @@ ENUMS = [
     "DiscoveryJobStatus",
     "DiscoveryTrigger",
     "PortStateValue:PortState",
+    "CredentialStatus",
+    "EnrollmentTokenState",
 ]
 
 
@@ -110,3 +118,17 @@ def test_enum_values_match(schemas: dict[str, Any], name: str) -> None:
     # "Schema:TsType" when the TypeScript name differs from the API schema name.
     schema, _, ts_name = name.partition(":")
     assert _enum_values(_typescript(), ts_name or schema) == _schema(schemas, schema)["enum"]
+
+
+def test_created_token_is_the_listed_token_plus_the_value(schemas: dict[str, Any]) -> None:
+    # `EnrollmentTokenCreated extends EnrollmentToken` in types.ts adds only `token`.
+    source = _typescript()
+    match = re.search(
+        r"export interface EnrollmentTokenCreated extends EnrollmentToken \{(.*?)\n\}",
+        source,
+        re.DOTALL,
+    )
+    assert match
+    assert set(re.findall(r"^\s+(\w+)\??:", match.group(1), re.MULTILINE)) == {"token"}
+    created = set(_schema(schemas, "EnrollmentTokenCreated")["properties"])
+    assert created == set(_schema(schemas, "EnrollmentTokenRead")["properties"]) | {"token"}

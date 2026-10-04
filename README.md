@@ -63,6 +63,8 @@ Requirements: Python 3.12+, Node.js 20+, PostgreSQL 15+ running as a Windows ser
 
 Linux endpoints get a standalone package (tarball or `.deb`, systemd service, one command
 with a one-time enrollment token): [docs/agent-linux-installation.md](docs/agent-linux-installation.md).
+The **Agentes** page creates that token and the install command, and revokes agents, from
+the browser on the server (`DASHBOARD_ADMIN_ENABLED=true`): [docs/agent-management.md](docs/agent-management.md).
 
 To report this machine with the real agent:
 
@@ -85,6 +87,8 @@ Root `.env` (template: `.env.example`, never committed):
 | `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens |
 | `ENROLLMENT_TOKEN_TTL_MINUTES` | Default lifetime of one-time enrollment tokens (default 15, max 1440) |
 | `ADMIN_API_KEY` | Operator key (`X-Admin-Key`) for the administration API (enrollment tokens); unset = those endpoints disabled (403). The CLI works without it |
+| `DASHBOARD_ADMIN_ENABLED` | Agent management from the dashboard (`/api/v1/console`), only for a browser on the server itself; default off. Temporary until dashboard login: [docs/agent-management.md](docs/agent-management.md) |
+| `AGENT_SERVER_URL` | URL agents use to reach this server, shown in the dashboard's install command (unset = suggested from local addresses) |
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
 | `ALERT_SUSTAINED_SAMPLES` | Consecutive samples over threshold before CPU/RAM alert (default 3) |
@@ -118,6 +122,9 @@ cd backend
 | GET | `/api/v1/agent-enrollment-tokens` | **Admin**: list tokens and their state (never the token) |
 | POST | `/api/v1/agent-enrollment-tokens/{id}/revoke` | **Admin**: revoke an unused token |
 | POST | `/api/v1/agents/heartbeat` | Mark an agent alive (Bearer token) |
+| GET | `/api/v1/agents` | Enrolled agents with state, credential status and summary (no secrets) |
+| GET | `/api/v1/assets/{asset_id}/agent` | The asset's agent and credential status |
+| GET/POST | `/api/v1/console/...` | **Dashboard console** (local browser only): enrollment tokens, revoke/reinstate agents ([docs/agent-management.md](docs/agent-management.md)) |
 | GET | `/api/v1/assets` | List assets with status and latest telemetry |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |
 | GET | `/api/v1/assets/{asset_id}/telemetry?limit=120` | Telemetry history, oldest first |
@@ -172,7 +179,8 @@ npm run build
 ## Project status
 
 MVP working end to end with real data (PC → agent → API → PostgreSQL → web). Agents
-authenticate with an enrollment key and per-agent tokens. Per asset the dashboard shows
+enroll with one-time tokens (created and revoked from the Agentes page) and then use
+per-agent tokens. Per asset the dashboard shows
 overview, processes, services, software, network, users, events and alerts, plus the changes
 detected between inventories. **Hybrid monitoring**: hosts without agent are found by
 agentless network discovery on explicitly authorized networks (DISCOVERED), with their

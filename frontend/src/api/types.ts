@@ -380,3 +380,89 @@ export interface Exposure {
   ports: ExposedPort[];
   agent_listeners: AgentListener[];
 }
+
+// --- Agent management (Agentes page) --------------------------------------------------------
+
+export type AgentPlatform = "windows" | "linux" | "other";
+
+/** active: valid own token · revoked: cut off by an operator · re_enrollment_required: no
+ * valid token, must enroll again with a new one-time token. */
+export type CredentialStatus = "active" | "revoked" | "re_enrollment_required";
+
+/** An enrolled agent. Never contains a token, a hash or any secret. */
+export interface Agent {
+  asset_id: string;
+  agent_id: string;
+  display_name: string;
+  hostname: string | null;
+  primary_ip: string;
+  os_name: string | null;
+  os_version: string | null;
+  architecture: string | null;
+  platform: AgentPlatform;
+  agent_version: string | null;
+  monitoring_method: MonitoringMethod;
+  /** unknown = enrolled, never reported yet (Pending). */
+  status: AssetStatus;
+  credential_status: CredentialStatus;
+  enrolled_at: IsoDateTime;
+  credential_issued_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  last_seen_at: IsoDateTime | null;
+}
+
+export interface AgentSummary {
+  total: number;
+  online: number;
+  offline: number;
+  pending: number;
+  revoked: number;
+}
+
+export interface AgentList {
+  summary: AgentSummary;
+  items: Agent[];
+}
+
+export type EnrollmentTokenState = "active" | "consumed" | "expired" | "revoked";
+
+/** A one-time enrollment token as listed: never contains the token itself. */
+export interface EnrollmentToken {
+  token_id: string;
+  state: EnrollmentTokenState;
+  created_at: IsoDateTime;
+  expires_at: IsoDateTime;
+  consumed_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  last_used_at: IsoDateTime | null;
+  max_uses: number;
+  use_count: number;
+  expected_platform: string | null;
+  expected_hostname: string | null;
+  note: string | null;
+  created_via: string;
+  last_asset_id: string | null;
+}
+
+/** Only the create response carries `token`, once. Keep it in memory only. */
+export interface EnrollmentTokenCreated extends EnrollmentToken {
+  token: string;
+}
+
+export interface EnrollmentTokenList {
+  items: EnrollmentToken[];
+}
+
+export interface EnrollmentTokenRequest {
+  ttl_minutes?: number;
+  max_uses?: number;
+  expected_platform?: "windows" | "linux";
+  expected_hostname?: string;
+  note?: string;
+}
+
+export interface ConsoleInfo {
+  enrollment_token_ttl_minutes: number;
+  suggested_server_urls: string[];
+  server_url_configured: boolean;
+}

@@ -259,11 +259,20 @@ class Agent:
         """Enroll now if needed (no other API call) and return the asset id we report as.
 
         Used by installers to verify enrollment before starting the service. An agent that
-        already holds its own token does not contact the server and keeps its identity, so
-        a reinstall or upgrade never enrolls twice. Raises like a cycle would:
+        already holds its own token keeps its identity, so a reinstall or upgrade never
+        enrolls twice; it only contacts the server when a new one-time token was supplied,
+        to check whether its own token still works. Raises like a cycle would:
         EnrollmentKeyMissingError, CredentialsRejectedError, TransportError.
         """
-        self._ensure_enrolled()
+        if self.identity.token is not None and self._bootstrap_token() is not None:
+            # An operator handed us a new one-time token although we hold our own: it may be
+            # dead (agent revoked then reinstated, server database reset). Prove it with one
+            # heartbeat; on 401 `_authenticated` enrolls again with the new token, keeping
+            # our agent_id (same asset, same history). A valid token is kept and the new
+            # one-time token stays unused.
+            self._authenticated(self._heartbeat)
+        else:
+            self._ensure_enrolled()
         return self.identity.asset_id
 
     def _bootstrap_token(self) -> str | None:
