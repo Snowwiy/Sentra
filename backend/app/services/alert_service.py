@@ -35,7 +35,16 @@ from app.schemas.alert import AlertList, AlertRead
 
 logger = logging.getLogger(__name__)
 
-EVENT_RULES = (AlertRule.CRITICAL_EVENT, AlertRule.EVENT_BURST, AlertRule.ADMIN_CHANGED)
+EVENT_RULES = (
+    AlertRule.CRITICAL_EVENT,
+    AlertRule.EVENT_BURST,
+    AlertRule.ADMIN_CHANGED,
+    # Discovery changes are signals of something that happened, like events.
+    AlertRule.ASSET_DISCOVERED,
+    AlertRule.UNKNOWN_DEVICE,
+    AlertRule.PORT_EXPOSED,
+    AlertRule.PORT_CLOSED,
+)
 _SEVERITY_RANK = {AlertSeverity.INFO: 0, AlertSeverity.WARNING: 1, AlertSeverity.CRITICAL: 2}
 _BURST_LEVELS = (EventLevel.ERROR, EventLevel.CRITICAL)
 # Long event messages are cut in alert details; the full text stays on the event.
@@ -289,6 +298,26 @@ class AlertService:
         self._session.commit()
         return len(quiet)
 
+    # --- Network discovery -----------------------------------------------------------------
+
+    def raise_alert(
+        self,
+        asset: Asset,
+        rule: AlertRule,
+        severity: AlertSeverity,
+        message: str,
+        now: datetime,
+        details: dict[str, Any],
+    ) -> None:
+        """Open the alert or count one more occurrence on the active one. No commit."""
+        self._trigger(asset, rule, severity, message[:500], now, details)
+
+    def resolve_rule(self, asset: Asset, rule: AlertRule, now: datetime) -> None:
+        """Resolve the active alert of this rule, if any. No commit."""
+        existing = self._alerts.get_active(asset.id, rule)
+        if existing is not None:
+            _resolve(existing, now)
+
     # --- Operator actions (CLI) ------------------------------------------------------------
 
     def acknowledge(self, alert_public_id: UUID) -> Alert:
@@ -415,7 +444,7 @@ def _to_read(alert: Alert, asset: Asset, event_id: UUID | None) -> AlertRead:
     return AlertRead(
         alert_id=alert.public_id,
         asset_id=asset.public_id,
-        hostname=asset.hostname,
+        hostname=asset.display_name,
         rule=alert.rule,
         severity=alert.severity,
         status=alert.status,
@@ -432,10 +461,16 @@ def _to_read(alert: Alert, asset: Asset, event_id: UUID | None) -> AlertRead:
 
 
 def resolve_offline_alert(session: Session, asset_id: int, now: datetime) -> None:
-    """Resolve the offline alert as soon as the agent reports again (no sweep delay)."""
-    existing = AlertRepository(session).get_active(asset_id, AlertRule.ASSET_OFFLINE)
-    if existing is not None:
-        _resolve(existing, now)
+    """Resolve the offline alert as soon as the agent reports again (no sweep delay).
+
+    Also "monitoring lost" (host up on the network, agent silent): any agent contact
+    proves the agent is back.
+    """
+    repository = AlertRepository(session)
+    for rule in (AlertRule.ASSET_OFFLINE, AlertRule.MONITORING_LOST):
+        existing = repository.get_active(asset_id, rule)
+        if existing is not None:
+            _resolve(existing, now)
 
 
 def _resolve(alert: Alert, now: datetime) -> None:

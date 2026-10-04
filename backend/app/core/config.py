@@ -1,8 +1,11 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from app.discovery.ports import parse_ports
+from app.discovery.targets import DiscoveryScope
 
 
 def parse_name_list(value: str) -> list[str]:
@@ -86,12 +89,53 @@ class Settings(BaseSettings):
     alert_retention_days: int | None = Field(default=None, ge=1)
     retention_sweep_interval_seconds: int = Field(default=3600, ge=60)
 
+    # --- Agentless network discovery (app/discovery). Off unless networks are listed. ---
+    # Comma separated CIDRs/addresses Sentra may probe, e.g. "192.168.1.0/24,10.0.10.0/24".
+    # Empty (the default) disables discovery entirely. Public Internet space is refused
+    # unless DISCOVERY_ALLOW_PUBLIC_NETWORKS=true; 0.0.0.0/0 is always refused.
+    discovery_allowed_networks: str = ""
+    # Addresses/networks never probed, even inside an allowed network.
+    discovery_excluded: str = ""
+    discovery_allow_public_networks: bool = False
+    # Largest network accepted (addresses), so a /8 typo is refused, not scanned.
+    discovery_max_hosts_per_network: int = Field(default=1024, ge=1, le=65_536)
+    # Port profiles (minimal, common, windows, printers, web) and/or ports and ranges.
+    discovery_ports: str = "common"
+    discovery_timeout_ms: int = Field(default=800, ge=50, le=10_000)
+    # Probes in flight at once, and started per second, for the whole server.
+    discovery_concurrency: int = Field(default=64, ge=1, le=256)
+    discovery_max_probes_per_second: int = Field(default=200, ge=1, le=5000)
+    discovery_icmp: bool = True
+    discovery_reverse_dns: bool = True
+    # Periodic runs over every allowed network; unset = manual only (CLI `discover`).
+    discovery_interval_minutes: int | None = Field(default=None, ge=5, le=10_080)
+    # A run is stopped (results kept as partial) after this long.
+    discovery_job_timeout_minutes: int = Field(default=30, ge=1, le=1440)
+    # Complete runs without seeing a host before it is reported offline/disappeared.
+    discovery_offline_after_misses: int = Field(default=3, ge=1, le=100)
+
     @field_validator("alert_critical_events")
     @classmethod
     def _check_critical_events(cls, value: str) -> str:
         # Fail at startup instead of silently ignoring a misspelled rule.
         parse_critical_events(value)
         return value
+
+    @model_validator(mode="after")
+    def _check_discovery(self) -> "Settings":
+        # Same rule as for alert lists: a bad allowlist stops the API at startup, it is
+        # never silently ignored or "fixed" into something that might scan more.
+        self.discovery_scope()
+        parse_ports(self.discovery_ports)
+        return self
+
+    def discovery_scope(self) -> DiscoveryScope:
+        return DiscoveryScope.parse(
+            self.discovery_allowed_networks,
+            self.discovery_excluded,
+            self.discovery_max_hosts_per_network,
+            self.discovery_allow_public_networks,
+        )
 
     @property
     def cors_origin_list(self) -> list[str]:

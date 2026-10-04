@@ -3,6 +3,7 @@ import { Layout } from "./components/Layout";
 import { AlertsPage } from "./pages/AlertsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 
 export function App() {
@@ -12,6 +13,7 @@ export function App() {
         <Route element={<Layout />}>
           <Route index element={<DashboardPage />} />
           <Route path="assets/:assetId" element={<AssetDetailPage />} />
+          <Route path="network" element={<NetworkPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="*" element={<NotFoundPage />} />
         </Route>

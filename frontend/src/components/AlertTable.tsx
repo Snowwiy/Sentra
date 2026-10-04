@@ -11,6 +11,12 @@ export const RULE_LABELS: Record<AlertRule, string> = {
   event_burst: "Ráfaga de errores",
   admin_changed: "Cambio de administradores",
   critical_event: "Evento crítico",
+  asset_discovered: "Nuevo activo",
+  unknown_device: "Dispositivo desconocido",
+  asset_disappeared: "Activo desaparecido",
+  port_exposed: "Nuevo puerto expuesto",
+  port_closed: "Puerto cerrado",
+  monitoring_lost: "Monitorización perdida",
 };
 
 const SEVERITY_LABELS: Record<AlertSeverity, string> = {

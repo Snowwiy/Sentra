@@ -799,3 +799,43 @@ h2 {
 .inventory-age {
   margin: -8px 0 0;
 }
+
+/* Hybrid monitoring: method badges, network view */
+
+.text-warn {
+  color: var(--warn);
+}
+
+.badge--method-agent {
+  color: var(--ok);
+  border-color: rgb(34 197 94 / 0.5);
+}
+
+.badge--method-agentless {
+  color: var(--accent);
+  border-color: rgb(56 189 248 / 0.5);
+}
+
+.badge--method-discovered {
+  color: var(--warn);
+  border-color: rgb(245 158 11 / 0.45);
+}
+
+td .badge + .badge,
+td .badge {
+  margin-left: 6px;
+}
+
+td > .badge:first-child {
+  margin-left: 0;
+}
+
+.banner:not(.banner--warn) {
+  color: var(--text-muted);
+  background: var(--surface);
+  border-color: var(--border);
+}
+
+.fields--inline {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}

@@ -19,15 +19,28 @@ const KIND_LABELS: Record<ChangeKind, string> = {
   disabled: "Deshabilitada",
   admin_granted: "Ahora administrador",
   admin_revoked: "Ya no es administrador",
+  port_opened: "Puerto abierto",
+  port_closed: "Puerto cerrado",
+  appeared: "Visible de nuevo",
+  disappeared: "Desaparecido",
 };
 
 const CATEGORY_LABELS: Record<ChangeCategory, string> = {
   service: "Servicio",
   software: "Software",
   account: "Cuenta",
+  exposure: "Exposición",
+  network: "Red",
 };
 
-const ATTENTION: ChangeKind[] = ["stopped", "removed", "admin_granted", "disabled"];
+const ATTENTION: ChangeKind[] = [
+  "stopped",
+  "removed",
+  "admin_granted",
+  "disabled",
+  "port_opened",
+  "disappeared",
+];
 
 function show(value: unknown): string {
   if (Array.isArray(value)) return value.filter((v) => v !== "").join(", ") || "—";
@@ -63,7 +76,7 @@ export function ChangesList({
     <section className="panel">
       <div className="panel__toolbar">
         <h2>{title}</h2>
-        <span className="muted small">detectados entre inventarios sucesivos</span>
+        <span className="muted small">detectados por el agente y el descubrimiento de red</span>
       </div>
       {loading ? (
         <LoadingState label="Cargando cambios…" />
@@ -71,7 +84,7 @@ export function ChangesList({
         <ErrorState message={errorMessage(error)} onRetry={refresh} />
       ) : !data || data.items.length === 0 ? (
         <EmptyState title="Sin cambios registrados">
-          Se registran al comparar cada inventario con el anterior.
+          Se registran al comparar cada inventario o ejecución del descubrimiento con la anterior.
         </EmptyState>
       ) : (
         <div className="table-wrap">

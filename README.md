@@ -91,6 +91,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `TELEMETRY_RETENTION_DAYS`, `EVENT_RETENTION_DAYS` | Delete telemetry samples / host events older than N days (unset = keep forever, the default) |
 | `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` | Delete inventory changes / **resolved** alerts older than N days (unset = keep forever; active alerts are never deleted) |
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
+| `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](docs/discovery.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
 
@@ -122,9 +123,15 @@ cd backend
 | POST | `/api/v1/telemetry` | Ingest CPU, RAM, disk and uptime (Bearer token) |
 | POST | `/api/v1/events` | Ingest host log events (Bearer token, idempotent) |
 | GET | `/api/v1/events?asset_id=&min_level=&channel=&event_code=&q=&limit=&offset=` | Events, newest first (`has_more` instead of a total) |
+| GET | `/api/v1/assets?method=&status=&device_type=&subnet=&q=` | (filters, all optional) agent and discovered assets |
+| GET | `/api/v1/assets/{asset_id}/exposure` | Ports reachable from the Sentra server, correlated with the agent's listeners |
+| GET | `/api/v1/discovery/scope` | Networks and ports discovery may probe (configuration) |
+| GET | `/api/v1/discovery/jobs?limit=` | Recent discovery runs |
 
 Alerts are acknowledged or resolved by an operator from the server, not over HTTP (the
 dashboard has no login yet): `python -m app.cli ack-alert <id>` / `resolve-alert <id>`.
+Network discovery runs the same way: `python -m app.cli discover` (or periodically with
+`DISCOVERY_INTERVAL_MINUTES`); there is no HTTP endpoint that starts a scan.
 
 Payloads and error format: [docs/agent-protocol.md](docs/agent-protocol.md). Interactive docs at
 `/docs` in development.
@@ -159,7 +166,10 @@ npm run build
 MVP working end to end with real data (PC → agent → API → PostgreSQL → web). Agents
 authenticate with an enrollment key and per-agent tokens. Per asset the dashboard shows
 overview, processes, services, software, network, users, events and alerts, plus the changes
-detected between inventories. Monitoring only: no remote actions on hosts. See
+detected between inventories. **Hybrid monitoring**: hosts without agent are found by
+agentless network discovery on explicitly authorized networks (DISCOVERED), with their
+reachable ports and changes; installing the agent (MANAGED) merges both views into one
+asset ([docs/discovery.md](docs/discovery.md)). Monitoring only: no remote actions on hosts. See
 [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md) for details and known issues.
 Known limitation: the dashboard has **no login yet**; keep the API on a trusted network
 (it binds to 127.0.0.1 by default).
@@ -170,4 +180,6 @@ Known limitation: the dashboard has **no login yet**; keep the API on a trusted 
 2. Agent as a Windows service; alert acknowledgement from the dashboard (needs login).
 3. Telemetry downsampling (opt-in retention exists); journald events on Linux.
 4. Live updates (WebSockets/SSE).
-5. Optional integrations (Wazuh, Suricata, Syslog, SNMP).
+5. Agentless collectors (WinRM/WMI, SSH, SNMP; contracts in `backend/app/agentless/`) once
+   a credential store is decided; OUI vendor database.
+6. Optional integrations (Wazuh, Suricata, Syslog).

@@ -11,6 +11,7 @@ from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import AssetService
 from app.services.event_service import EventService
+from app.services.exposure_service import ExposureService
 from app.services.health_service import HealthService
 from app.services.inventory_service import InventoryService
 from app.services.process_service import ProcessService
@@ -73,3 +74,7 @@ def get_event_service(session: DbSession, thresholds: Thresholds) -> EventServic
 
 def get_process_service(session: DbSession) -> ProcessService:
     return ProcessService(session)
+
+
+def get_exposure_service(session: DbSession, settings: AppSettings) -> ExposureService:
+    return ExposureService(session, settings)

@@ -14,6 +14,10 @@ class ChangeCategory(enum.StrEnum):
     SERVICE = "service"
     SOFTWARE = "software"
     ACCOUNT = "account"
+    # Ports reachable from the Sentra server (discovery).
+    EXPOSURE = "exposure"
+    # The asset's presence on the network (discovery).
+    NETWORK = "network"
 
 
 class ChangeKind(enum.StrEnum):
@@ -27,6 +31,10 @@ class ChangeKind(enum.StrEnum):
     DISABLED = "disabled"
     ADMIN_GRANTED = "admin_granted"
     ADMIN_REVOKED = "admin_revoked"
+    PORT_OPENED = "port_opened"
+    PORT_CLOSED = "port_closed"
+    APPEARED = "appeared"
+    DISAPPEARED = "disappeared"
 
 
 def _enum(enum_cls: type[enum.Enum], name: str) -> Enum:
@@ -37,8 +45,9 @@ class AssetChange(Base):
     """A difference Sentra found between two inventory snapshots of an asset.
 
     Derived on the server when a newer snapshot arrives (services, software, local accounts),
-    so it works for every agent version and needs no privileged host log. Append-only; old
-    rows go with CHANGE_RETENTION_DAYS.
+    so it works for every agent version and needs no privileged host log; and by network
+    discovery (exposed ports, presence on the network). Append-only; old rows go with
+    CHANGE_RETENTION_DAYS.
     """
 
     __tablename__ = "asset_changes"

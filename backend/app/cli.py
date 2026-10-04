@@ -16,19 +16,25 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.core.exceptions import ConflictError, NotFoundError
 from app.db.session import get_sessionmaker
+from app.discovery.targets import TargetError
 from app.models.asset import Asset
+from app.models.discovery import DiscoveryTrigger
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
 
 
 def _list_agents(session: Session) -> None:
-    assets = session.scalars(select(Asset).order_by(Asset.hostname, Asset.id)).all()
+    # Only assets with an agent: discovered hosts have no credential to manage.
+    assets = session.scalars(
+        select(Asset).where(Asset.agent_id.is_not(None)).order_by(Asset.hostname, Asset.id)
+    ).all()
     print(f"{'asset_id':36}  {'hostname':24}  {'token':8}  revoked_at")
     for asset in assets:
         token = "issued" if asset.agent_token_hash else "none"
         revoked = asset.agent_token_revoked_at.isoformat() if asset.agent_token_revoked_at else "-"
-        print(f"{asset.public_id!s:36}  {asset.hostname[:24]:24}  {token:8}  {revoked}")
+        print(f"{asset.public_id!s:36}  {asset.display_name[:24]:24}  {token:8}  {revoked}")
 
 
 def _purge_old_data(session: Session) -> int:
@@ -69,6 +75,50 @@ def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
     return 0
 
 
+def _discovery_scope() -> int:
+    """Show what discovery may touch, without probing anything."""
+    settings = get_settings()
+    scope = settings.discovery_scope()
+    if not scope.enabled:
+        print("discovery disabled: DISCOVERY_ALLOWED_NETWORKS is empty")
+        return 0
+    for network in scope.allowed:
+        hosts = sum(1 for _ in scope.hosts(network))
+        print(f"allowed  {network!s:20}  {hosts} addresses to probe")
+    for network in scope.excluded:
+        print(f"excluded {network}")
+    ports = DiscoveryConfig.from_settings(settings).scan.ports
+    print(f"ports    {', '.join(map(str, ports))}")
+    return 0
+
+
+def _discover(target: str | None) -> int:
+    # Manual run, here rather than over HTTP: probing the network is an active operation and
+    # the dashboard has no authentication yet. Same allowlist checks as the periodic job.
+    settings = get_settings()
+    service = DiscoveryService(
+        get_sessionmaker(),
+        DiscoveryConfig.from_settings(settings),
+        AlertThresholds.from_settings(settings),
+    )
+    try:
+        summaries = service.run(target, DiscoveryTrigger.MANUAL)
+    except TargetError as exc:
+        print(f"refused: {exc}", file=sys.stderr)
+        return 2
+    if not summaries:
+        print("nothing scanned (a run for that network is already in progress)", file=sys.stderr)
+        return 1
+    for summary in summaries:
+        baseline = " (baseline)" if summary.baseline else ""
+        print(
+            f"{summary.target}: {summary.status.value}{baseline}, {summary.hosts_scanned} scanned,"
+            f" {summary.hosts_alive} up, {summary.hosts_new} new, {summary.open_ports} open ports,"
+            f" {len(summary.errors)} errors"
+        )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Sentra operator tools")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -89,7 +139,21 @@ def main(argv: list[str] | None = None) -> int:
     ):
         command = commands.add_parser(name, help=text)
         command.add_argument("alert_id", type=UUID, help="public alert id")
+    commands.add_parser(
+        "discovery-scope", help="show the networks and ports discovery may probe (no probing)"
+    )
+    discover = commands.add_parser(
+        "discover", help="run network discovery now over the allowed networks (or one target)"
+    )
+    discover.add_argument(
+        "--target", help="CIDR or address inside DISCOVERY_ALLOWED_NETWORKS (default: all)"
+    )
     args = parser.parse_args(argv)
+
+    if args.command == "discovery-scope":
+        return _discovery_scope()
+    if args.command == "discover":
+        return _discover(args.target)
 
     with get_sessionmaker()() as session:
         if args.command == "list-agents":
@@ -106,7 +170,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"asset {args.asset_id} not found", file=sys.stderr)
             return 1
         state = "revoked" if asset.agent_token_revoked_at else "reinstated"
-        print(f"agent of asset {asset.public_id} ({asset.hostname}) {state}")
+        print(f"agent of asset {asset.public_id} ({asset.display_name}) {state}")
     return 0
 
 

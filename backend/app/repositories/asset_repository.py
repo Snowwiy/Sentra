@@ -22,4 +22,12 @@ class AssetRepository:
         return self._session.scalar(select(Asset).where(Asset.agent_id == agent_id))
 
     def list_all(self) -> Sequence[Asset]:
-        return self._session.scalars(select(Asset).order_by(Asset.hostname, Asset.id)).all()
+        # Assets without hostname (discovered) sort by address after the named ones.
+        return self._session.scalars(
+            select(Asset).order_by(
+                Asset.hostname.asc().nulls_last(),
+                Asset.reverse_dns.asc().nulls_last(),
+                Asset.primary_ip,
+                Asset.id,
+            )
+        ).all()

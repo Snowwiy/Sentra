@@ -827,6 +827,46 @@ def test_offline() -> None:
     )
 
 
+def test_hybrid_read() -> None:
+    """Hybrid monitoring read API. Never starts a scan: runs are CLI/periodic only."""
+    _, _, asset_id = enroll("qa-hybrid")
+    asset = call("GET", f"/assets/{asset_id}").body
+    check(
+        "agent asset is MANAGED with network fields",
+        asset.get("monitoring_method") == "agent"
+        and asset.get("agent_status") in ("unknown", "online")
+        and asset.get("open_ports") == []
+        and "display_name" in asset,
+        asset,
+    )
+    r = call("GET", "/assets?method=agent")
+    check(
+        "filter by method",
+        r.status == 200 and all(a["monitoring_method"] == "agent" for a in r.body["items"]),
+        r.body,
+    )
+    for query in ("method=bogus", "subnet=10.0.0.5/24", "subnet=x", "device_type=A%00", "q=a%00"):
+        r = call("GET", f"/assets?{query}")
+        check(
+            f"assets {query.split('=')[0]} invalid -> 422", r.status == 422 and is_error_envelope(r)
+        )
+    r = call("GET", f"/assets/{asset_id}/exposure")
+    check("exposure of unscanned asset", r.status == 200 and r.body["ports"] == [], r.body)
+    check(
+        "exposure unknown asset -> 404",
+        call("GET", f"/assets/{uuid.uuid4()}/exposure").status == 404,
+    )
+    r = call("GET", "/discovery/scope")
+    check("discovery scope readable", r.status == 200 and "allowed_networks" in r.body, r.body)
+    r = call("GET", "/discovery/jobs?limit=5")
+    check(
+        "discovery jobs readable", r.status == 200 and isinstance(r.body.get("items"), list), r.body
+    )
+    check("discovery jobs limit 0 -> 422", call("GET", "/discovery/jobs?limit=0").status == 422)
+    r = call("POST", "/discovery/jobs", {"target": "0.0.0.0/0"})
+    check("no HTTP endpoint starts a scan", r.status in (404, 405), (r.status, r.body))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="also wait for the offline sweeper")
@@ -845,6 +885,7 @@ def main() -> int:
         test_alerts,
         test_hardening,
         test_operational,
+        test_hybrid_read,
     ]
     if args.offline:
         groups.append(test_offline)

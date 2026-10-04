@@ -11,6 +11,7 @@ export function Layout() {
         </Link>
         <nav className="topbar__nav">
           <Link to="/">Activos</Link>
+          <Link to="/network">Red</Link>
           <Link to="/alerts">Alertas</Link>
         </nav>
         <HealthIndicator />

@@ -4,6 +4,7 @@ import { sentraApi } from "../api/sentra";
 import type { Asset, AssetStatus } from "../api/types";
 import { AlertTable } from "../components/AlertTable";
 import { EventTable } from "../components/EventTable";
+import { MethodBadge, deviceTypeLabel } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
@@ -31,8 +32,8 @@ function countByStatus(assets: Asset[]): Record<Filter, number> {
 function matches(asset: Asset, query: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
-  return [asset.hostname, asset.primary_ip, asset.os_name].some((field) =>
-    field.toLowerCase().includes(q),
+  return [asset.display_name, asset.primary_ip, asset.os_name, asset.device_type].some((field) =>
+    (field ?? "").toLowerCase().includes(q),
   );
 }
 
@@ -57,7 +58,7 @@ export function DashboardPage() {
   const navigate = useNavigate();
 
   const assets = useMemo(
-    () => [...(data?.items ?? [])].sort((a, b) => a.hostname.localeCompare(b.hostname)),
+    () => [...(data?.items ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name)),
     [data],
   );
   const counts = useMemo(() => countByStatus(assets), [assets]);
@@ -125,7 +126,7 @@ export function DashboardPage() {
           <input
             type="search"
             className="input"
-            placeholder="Buscar hostname, IP u OS"
+            placeholder="Buscar nombre, IP, OS o tipo"
             value={query}
             onChange={(event) => setQuery(event.target.value)}
             aria-label="Buscar activos"
@@ -134,7 +135,8 @@ export function DashboardPage() {
 
         {assets.length === 0 ? (
           <EmptyState title="No hay activos registrados">
-            Los activos aparecerán aquí cuando un agente se registre en la API.
+            Los activos aparecerán aquí cuando un agente se registre en la API o cuando el
+            descubrimiento de red encuentre equipos en las redes autorizadas.
           </EmptyState>
         ) : visible.length === 0 ? (
           <EmptyState title="Ningún activo coincide con el filtro" />
@@ -145,7 +147,8 @@ export function DashboardPage() {
                 <tr>
                   <th>Hostname</th>
                   <th>Estado</th>
-                  <th>OS</th>
+                  <th>Método</th>
+                  <th>OS / tipo</th>
                   <th>IP</th>
                   <th>CPU</th>
                   <th>RAM</th>
@@ -164,14 +167,23 @@ export function DashboardPage() {
                     >
                       <td>
                         <Link to={`/assets/${asset.asset_id}`} className="strong">
-                          {asset.hostname}
+                          {asset.display_name}
                         </Link>
                       </td>
                       <td>
                         <StatusBadge status={asset.status} />
                       </td>
                       <td>
-                        {asset.os_name} <span className="muted">{asset.os_version}</span>
+                        <MethodBadge method={asset.monitoring_method} />
+                      </td>
+                      <td>
+                        {asset.os_name ? (
+                          <>
+                            {asset.os_name} <span className="muted">{asset.os_version}</span>
+                          </>
+                        ) : (
+                          <span className="muted">{deviceTypeLabel(asset.device_type)}</span>
+                        )}
                       </td>
                       <td className="mono">{asset.primary_ip}</td>
                       <td>
@@ -183,8 +195,9 @@ export function DashboardPage() {
                       <td>
                         <MetricBar value={t?.disk_percent} label="Disco" />
                       </td>
-                      <td title={formatDateTime(asset.last_seen_at)}>
-                        {formatRelative(asset.last_seen_at)}
+                      {/* Agent contact, or the last discovery run that saw it (no agent). */}
+                      <td title={formatDateTime(asset.last_seen_at ?? asset.last_network_seen_at)}>
+                        {formatRelative(asset.last_seen_at ?? asset.last_network_seen_at)}
                       </td>
                     </tr>
                   );

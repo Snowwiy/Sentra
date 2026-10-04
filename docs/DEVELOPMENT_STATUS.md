@@ -11,12 +11,12 @@ outage during which the agent buffered samples and delivered them on reconnectio
 
 | Component | State |
 |-----------|-------|
-| Backend API (FastAPI) | Done: agents (enrollment + tokens), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0011 |
+| Backend API (FastAPI) | Done: agents (enrollment + tokens), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0012 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
-| Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail |
-| Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 216 (real PostgreSQL, incl. model/migration drift, indexed foreign keys and frontend type contract checks), agent 108 (3 Windows-only, 2 Linux-only); frontend 33 unit tests (Vitest) + tsc + ESLint + build; `qa/e2e_api.py` 130 contract checks |
+| Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab |
+| Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
+| Tests | Backend 278 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks and real TCP discovery on loopback), agent 108 (3 Windows-only, 2 Linux-only); frontend 36 unit tests (Vitest) + tsc + ESLint + build; `qa/e2e_api.py` 143 contract checks |
 
 ## Architecture
 
@@ -44,6 +44,12 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
   asset+rule.
 - `asset_changes`: differences between consecutive inventories (service/software/account).
 - `asset_process_snapshots`: latest process list per asset (one row, replaced; no history).
+- `assets` also holds hosts without agent (`monitoring_method` discovered/agentless/agent;
+  agent fields null for them) and the network view (MAC, reverse DNS, device type, network
+  status, discovery times).
+- `asset_ports`: TCP exposure per asset and port (open/closed, first/last seen), updated in
+  place; history in `asset_changes` (category exposure/network).
+- `discovery_jobs`: one row per discovery run and network; one running job per network.
 - `asset_inventories`: one JSONB snapshot per asset (interfaces, disks, listening/established
   connections, users, processes, services, software, accounts, network); newer snapshots
   replace older only.
@@ -70,7 +76,8 @@ Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
 `GET /assets/{id}/telemetry` · `GET /assets/{id}/inventory` · `GET /assets/{id}/changes` ·
 `GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events`.
 Operator CLI (`python -m app.cli`): `list-agents`, `revoke-agent`, `reinstate-agent`,
-`ack-alert`, `resolve-alert`, `purge-old-data`.
+`ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`.
+Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/jobs`.
 Details: `docs/agent-protocol.md`.
 
 ## Run
@@ -109,6 +116,8 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Free-text search over all events (no asset filter) scans the table: 0.8 s at 1M events.
   Per-asset search is 40 ms. A trigram index (pg_trgm) would fix it if it becomes a need.
 - Alert thresholds are global environment variables, not per asset.
+- Discovery: no OUI vendor database; `GET /assets` is not paginated (about 850 KB and 120 ms
+  with 1000 assets); agentless collectors are contracts only (no credential store yet).
 - Local PostgreSQL listens on 5433 on the dev PC (setup detects it).
 
 ## Decisions

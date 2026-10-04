@@ -1,4 +1,5 @@
 import logging
+import threading
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
@@ -14,10 +15,17 @@ from app.core.logging import configure_logging
 from app.core.middleware import request_logging_middleware
 from app.db.migrations import expected_heads, is_up_to_date
 from app.db.session import get_engine, get_sessionmaker
-from app.services.background import PeriodicJob, purge_old_data, sweep_offline_assets
+from app.services.background import (
+    PeriodicJob,
+    discovery_job,
+    purge_old_data,
+    sweep_offline_assets,
+)
 from app.services.retention_service import RetentionPolicy
 
 logger = logging.getLogger(__name__)
+
+DISCOVERY_FIRST_RUN_SECONDS = 60
 
 
 def _log_schema_state() -> None:
@@ -49,6 +57,19 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         if RetentionPolicy.from_settings(settings).enabled:
             jobs.append(
                 PeriodicJob("retention", settings.retention_sweep_interval_seconds, purge_old_data)
+            )
+        # Only with an allowlist and an interval: by default nothing is ever probed.
+        if settings.discovery_interval_minutes and settings.discovery_scope().enabled:
+            stop = threading.Event()
+            jobs.append(
+                PeriodicJob(
+                    "discovery",
+                    settings.discovery_interval_minutes * 60,
+                    discovery_job(stop),
+                    stop=stop,
+                    # A fresh install shows the network soon, not one interval later.
+                    first_run_after=DISCOVERY_FIRST_RUN_SECONDS,
+                )
             )
     for job in jobs:
         job.start()

@@ -39,6 +39,17 @@ class AlertRule(enum.StrEnum):
     ADMIN_CHANGED = "admin_changed"
     # A host event from the critical list (ALERT_CRITICAL_EVENTS), e.g. unexpected shutdown.
     CRITICAL_EVENT = "critical_event"
+    # Network discovery (after the first, baseline run of a network):
+    # a host not known before appeared; identified (name or type) or not.
+    ASSET_DISCOVERED = "asset_discovered"
+    UNKNOWN_DEVICE = "unknown_device"
+    # A discovered asset was not seen for DISCOVERY_OFFLINE_AFTER_MISSES complete runs.
+    ASSET_DISAPPEARED = "asset_disappeared"
+    # A port became reachable / stopped being reachable from the Sentra server.
+    PORT_EXPOSED = "port_exposed"
+    PORT_CLOSED = "port_closed"
+    # The host answers on the network but its agent stopped reporting.
+    MONITORING_LOST = "monitoring_lost"
 
 
 class AlertSeverity(enum.StrEnum):

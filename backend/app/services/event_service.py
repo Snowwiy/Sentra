@@ -88,7 +88,7 @@ class EventService:
             EventRead(
                 event_id=event.public_id,
                 asset_id=asset.public_id,
-                hostname=asset.hostname,
+                hostname=asset.display_name,
                 source=event.source,
                 channel=event.channel,
                 event_code=event.event_code,

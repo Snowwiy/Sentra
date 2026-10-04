@@ -11,18 +11,30 @@ from collections.abc import Callable
 
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
+from app.models.discovery import DiscoveryTrigger
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
 
 logger = logging.getLogger(__name__)
 
 
 class PeriodicJob:
-    def __init__(self, name: str, interval_seconds: float, job: Callable[[], None]) -> None:
+    def __init__(
+        self,
+        name: str,
+        interval_seconds: float,
+        job: Callable[[], None],
+        stop: threading.Event | None = None,
+        first_run_after: float | None = None,
+    ) -> None:
         self._name = name
         self._interval = interval_seconds
+        # Delay before the first run (default: one interval).
+        self._first = interval_seconds if first_run_after is None else first_run_after
         self._job = job
-        self._stop = threading.Event()
+        # Shared with long jobs (discovery) so shutdown interrupts them instead of waiting.
+        self._stop = stop or threading.Event()
         self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
 
     def start(self) -> None:
@@ -30,10 +42,12 @@ class PeriodicJob:
 
     def stop(self) -> None:
         self._stop.set()
-        self._thread.join(timeout=self._interval + 5)
+        self._thread.join(timeout=min(self._interval, 30) + 5)
 
     def _loop(self) -> None:
-        while not self._stop.wait(self._interval):
+        delay = self._first
+        while not self._stop.wait(delay):
+            delay = self._interval
             try:
                 self._job()
             except Exception:
@@ -69,3 +83,19 @@ def purge_old_data() -> None:
                 "alerts": result.alerts,
             },
         )
+
+
+def discovery_job(stop: threading.Event) -> Callable[[], None]:
+    """Periodic discovery over every allowed network; `stop` cancels a run in progress."""
+
+    def run() -> None:
+        settings = get_settings()
+        service = DiscoveryService(
+            get_sessionmaker(),
+            DiscoveryConfig.from_settings(settings),
+            AlertThresholds.from_settings(settings),
+            cancel=stop,
+        )
+        service.run(trigger=DiscoveryTrigger.SCHEDULED)
+
+    return run

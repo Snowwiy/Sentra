@@ -7,12 +7,17 @@ import type {
   AlertStatus,
   Asset,
   AssetList,
+  AssetStatus,
   ChangeCategory,
   ChangeList,
+  DiscoveryJobList,
+  DiscoveryScope,
   EventLevel,
   EventList,
+  Exposure,
   Health,
   Inventory,
+  MonitoringMethod,
   ProcessSnapshot,
   TelemetryHistory,
 } from "./types";
@@ -28,6 +33,16 @@ export interface AlertQuery {
   q?: string;
   limit?: number;
   offset?: number;
+}
+
+export interface AssetQuery {
+  method?: MonitoringMethod;
+  status?: AssetStatus;
+  /** A device type, or "unknown". */
+  deviceType?: string;
+  /** CIDR, e.g. 192.168.1.0/24. */
+  subnet?: string;
+  q?: string;
 }
 
 export interface EventQuery {
@@ -53,7 +68,17 @@ function queryString(params: Record<string, string | number | boolean | undefine
 export const sentraApi = {
   // /health answers 503 with a valid body when degraded; that is data, not a failure.
   health: (signal?: AbortSignal) => apiGet<Health>("/health", { signal, acceptStatuses: [503] }),
-  listAssets: (signal?: AbortSignal) => apiGet<AssetList>("/assets", { signal }),
+  listAssets: (signal?: AbortSignal, query: AssetQuery = {}) =>
+    apiGet<AssetList>(
+      `/assets${queryString({
+        method: query.method,
+        status: query.status,
+        device_type: query.deviceType,
+        subnet: query.subnet,
+        q: query.q,
+      })}`,
+      { signal },
+    ),
   getAsset: (assetId: string, signal?: AbortSignal) =>
     apiGet<Asset>(`/assets/${encodeURIComponent(assetId)}`, { signal }),
   getTelemetry: (assetId: string, limit: number, signal?: AbortSignal) =>
@@ -87,6 +112,11 @@ export const sentraApi = {
       `/alerts${queryString({ status, active, severity, rule, asset_id: assetId, q, limit, offset })}`,
       { signal },
     ),
+  getExposure: (assetId: string, signal?: AbortSignal) =>
+    apiGet<Exposure>(`/assets/${encodeURIComponent(assetId)}/exposure`, { signal }),
+  discoveryScope: (signal?: AbortSignal) => apiGet<DiscoveryScope>("/discovery/scope", { signal }),
+  discoveryJobs: (limit: number, signal?: AbortSignal) =>
+    apiGet<DiscoveryJobList>(`/discovery/jobs${queryString({ limit })}`, { signal }),
   getAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal }),
 };

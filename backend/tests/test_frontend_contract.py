@@ -42,6 +42,13 @@ INTERFACES = {
     "ProcessSnapshot": "ProcessSnapshotRead",
     "AssetChange": "ChangeRead",
     "ChangeList": "ChangeList",
+    "DiscoveryScope": "DiscoveryScopeRead",
+    "DiscoveryJob": "DiscoveryJobRead",
+    "DiscoveryJobList": "DiscoveryJobList",
+    "PortProcess": "PortProcess",
+    "ExposedPort": "ExposedPort",
+    "AgentListener": "AgentListener",
+    "Exposure": "ExposureRead",
 }
 ENUMS = [
     "AssetStatus",
@@ -51,6 +58,10 @@ ENUMS = [
     "EventLevel",
     "ChangeCategory",
     "ChangeKind",
+    "MonitoringMethod",
+    "DiscoveryJobStatus",
+    "DiscoveryTrigger",
+    "PortStateValue:PortState",
 ]
 
 
@@ -96,4 +107,6 @@ def test_interface_fields_match_the_response_schema(
 
 @pytest.mark.parametrize("name", ENUMS)
 def test_enum_values_match(schemas: dict[str, Any], name: str) -> None:
-    assert _enum_values(_typescript(), name) == _schema(schemas, name)["enum"]
+    # "Schema:TsType" when the TypeScript name differs from the API schema name.
+    schema, _, ts_name = name.partition(":")
+    assert _enum_values(_typescript(), ts_name or schema) == _schema(schemas, schema)["enum"]

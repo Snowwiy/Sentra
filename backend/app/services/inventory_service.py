@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -21,6 +22,7 @@ from app.schemas.inventory import (
 from app.services.agent_service import authenticate_agent, record_contact
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.change_detection import admin_changes, diff_inventory
+from app.services.reconciliation import adopt_discovered, interface_identity, primary_mac
 
 # Services start one by one after a reboot: their state changes are not news then.
 BOOT_GRACE = timedelta(minutes=10)
@@ -68,8 +70,19 @@ class InventoryService:
             if previous is not None:
                 self._record_changes(asset, previous, document, data.collected_at, now)
             self._alerts.evaluate_services(asset, document.get("services") or [])
+            self._reconcile(asset, document.get("interfaces"))
         self._session.commit()
         return InventoryAccepted(asset_id=asset.public_id, collected_at=data.collected_at)
+
+    def _reconcile(self, asset: Asset, interfaces: Any) -> None:
+        """Record the agent's MAC and merge a discovered record of this host, if any."""
+        if not isinstance(interfaces, list):
+            return
+        mac = primary_mac(interfaces, asset.primary_ip)
+        if mac and asset.mac_address != mac:
+            asset.mac_address = mac
+        ips, macs = interface_identity(interfaces)
+        adopt_discovered(self._session, asset, ips, macs)
 
     def _record_changes(
         self,

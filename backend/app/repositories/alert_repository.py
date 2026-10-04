@@ -74,6 +74,9 @@ class AlertRepository:
                 or_(
                     Alert.message.ilike(pattern, escape="\\"),
                     Asset.hostname.ilike(pattern, escape="\\"),
+                    # Discovered assets have no hostname: their name or address.
+                    Asset.reverse_dns.ilike(pattern, escape="\\"),
+                    Asset.primary_ip.ilike(pattern, escape="\\"),
                 )
             )
         return stmt

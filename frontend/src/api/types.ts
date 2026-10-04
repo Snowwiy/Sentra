@@ -14,20 +14,42 @@ export interface TelemetrySnapshot {
   uptime_seconds: number;
 }
 
+/** DISCOVERED (network only) → MONITORED (agentless, reserved) → MANAGED (agent). */
+export type MonitoringMethod = "discovered" | "agentless" | "agent";
+
 export interface Asset {
   asset_id: string;
-  hostname: string;
-  os_name: string;
-  os_version: string;
-  architecture: string;
+  /** Hostname, reverse DNS name or address: always set. */
+  display_name: string;
+  monitoring_method: MonitoringMethod;
+  /** Reported by the agent; null for assets only seen on the network. */
+  hostname: string | null;
+  os_name: string | null;
+  os_version: string | null;
+  architecture: string | null;
   primary_ip: string;
-  agent_version: string;
+  agent_version: string | null;
+  /** Agent liveness for agent assets, network status for the others. */
   status: AssetStatus;
+  agent_status: AssetStatus | null;
+  network_status: AssetStatus | null;
   first_seen_at: IsoDateTime;
   last_seen_at: IsoDateTime | null;
   created_at: IsoDateTime;
   updated_at: IsoDateTime;
   latest_telemetry: TelemetrySnapshot | null;
+  mac_address: string | null;
+  reverse_dns: string | null;
+  vendor: string | null;
+  /** "windows" | "linux" | "printer" | "network_device"; null when it cannot be told. */
+  device_type: string | null;
+  device_type_reason: string | null;
+  discovery_sources: string[];
+  discovery_network: string | null;
+  discovered_at: IsoDateTime | null;
+  last_network_seen_at: IsoDateTime | null;
+  /** Open TCP ports reachable from the Sentra server. */
+  open_ports: number[];
 }
 
 export interface AssetList {
@@ -64,7 +86,13 @@ export type AlertRule =
   | "service_stopped"
   | "event_burst"
   | "admin_changed"
-  | "critical_event";
+  | "critical_event"
+  | "asset_discovered"
+  | "unknown_device"
+  | "asset_disappeared"
+  | "port_exposed"
+  | "port_closed"
+  | "monitoring_lost";
 export type AlertSeverity = "info" | "warning" | "critical";
 /** "acknowledged": seen by an operator, still active (not resolved). */
 export type AlertStatus = "open" | "acknowledged" | "resolved";
@@ -211,7 +239,7 @@ export interface ProcessSnapshot {
   processes: ProcessEntry[];
 }
 
-export type ChangeCategory = "service" | "software" | "account";
+export type ChangeCategory = "service" | "software" | "account" | "exposure" | "network";
 export type ChangeKind =
   | "added"
   | "removed"
@@ -222,7 +250,11 @@ export type ChangeKind =
   | "enabled"
   | "disabled"
   | "admin_granted"
-  | "admin_revoked";
+  | "admin_revoked"
+  | "port_opened"
+  | "port_closed"
+  | "appeared"
+  | "disappeared";
 
 /** A difference Sentra found between two inventory snapshots. */
 export interface AssetChange {
@@ -266,4 +298,85 @@ export interface EventList {
   total: number;
   /** More events match after this page. */
   has_more: boolean;
+}
+
+// --- Network discovery -----------------------------------------------------------------------
+
+export type DiscoveryJobStatus = "running" | "completed" | "cancelled" | "failed";
+export type DiscoveryTrigger = "manual" | "scheduled";
+export type PortState = "open" | "closed";
+
+export interface DiscoveryScope {
+  enabled: boolean;
+  allowed_networks: string[];
+  excluded: string[];
+  ports: number[];
+  interval_minutes: number | null;
+  icmp: boolean;
+  reverse_dns: boolean;
+  timeout_ms: number;
+  concurrency: number;
+  max_probes_per_second: number;
+}
+
+export interface DiscoveryJob {
+  job_id: string;
+  target: string;
+  trigger: DiscoveryTrigger;
+  status: DiscoveryJobStatus;
+  /** First complete run of the network: records the baseline, raises no alerts. */
+  baseline: boolean;
+  started_at: IsoDateTime;
+  completed_at: IsoDateTime | null;
+  duration_seconds: number | null;
+  hosts_scanned: number;
+  hosts_alive: number;
+  hosts_new: number;
+  open_ports: number;
+  probes: number;
+  error_count: number;
+  errors: string[];
+}
+
+export interface DiscoveryJobList {
+  items: DiscoveryJob[];
+}
+
+/** The agent's view of who listens on a port. */
+export interface PortProcess {
+  pid: number | null;
+  name: string | null;
+  exe: string | null;
+  username: string | null;
+  local_address: string | null;
+}
+
+export interface ExposedPort {
+  protocol: string;
+  port: number;
+  state: PortState;
+  /** IANA name for the port number: a hint, the service is never contacted. */
+  service_hint: string | null;
+  sensitive: boolean;
+  first_seen_at: IsoDateTime;
+  opened_at: IsoDateTime;
+  last_seen_at: IsoDateTime;
+  closed_at: IsoDateTime | null;
+  process: PortProcess | null;
+}
+
+export interface AgentListener {
+  protocol: string;
+  port: number;
+  process: PortProcess;
+  /** true reachable, false probed and not reachable, null never probed. */
+  exposed: boolean | null;
+}
+
+export interface Exposure {
+  asset_id: string;
+  baseline_at: IsoDateTime | null;
+  last_network_seen_at: IsoDateTime | null;
+  ports: ExposedPort[];
+  agent_listeners: AgentListener[];
 }

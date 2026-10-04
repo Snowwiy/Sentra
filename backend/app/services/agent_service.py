@@ -28,6 +28,7 @@ from app.schemas.agent import (
     HostInfo,
 )
 from app.services.alert_service import resolve_offline_alert
+from app.services.reconciliation import adopt_discovered
 
 
 def record_contact(session: Session, asset: Asset, now: datetime) -> None:
@@ -162,6 +163,10 @@ class AgentService:
         asset.agent_token_issued_at = datetime.now(UTC)
 
         try:
+            self._session.flush()
+            # Installed on a host discovery already knew: converge into this asset. Only by
+            # address here (the agent reports MACs with its inventory, which retries it).
+            adopt_discovered(self._session, asset, {str(data.primary_ip)}, set())
             self._session.commit()
         except IntegrityError as exc:
             # A concurrent first registration with the same agent_id won the race; the agent
@@ -171,7 +176,7 @@ class AgentService:
 
         response = AgentRegisterResponse(
             asset_id=asset.public_id,
-            agent_id=asset.agent_id,
+            agent_id=data.agent_id,
             status=asset.status,
             first_seen_at=asset.first_seen_at,
             agent_token=token,

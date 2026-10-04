@@ -60,7 +60,10 @@ limit, telemetry idempotency, read endpoints (404/422, limits), alert lifecycle 
 detection, and the operational features: process snapshots (stale/out of range), inventory
 change detection, service-stopped and critical-event alerts (resend not counted, linked
 event, auto-resolution), alert and event filters, NUL in search parameters and accounts that
-carry a `password` field (422).
+carry a `password` field (422), and the hybrid read API (asset method/subnet filters,
+exposure, discovery scope and jobs, and that no HTTP endpoint starts a scan). Discovery
+runs themselves are covered by `backend/tests/test_discovery_*.py`, including real TCP
+probes against listeners on 127.0.0.0/8.
 
 ## 4. Real agent and dashboard against the QA API
 
