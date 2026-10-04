@@ -6,6 +6,9 @@ os.environ["BACKGROUND_JOBS_ENABLED"] = "false"
 # Fixed test-only key so tests never depend on (or reveal) the developer's real .env value.
 TEST_ENROLLMENT_KEY = "test-enrollment-key-0123456789abcdef"
 os.environ["AGENT_ENROLLMENT_KEY"] = TEST_ENROLLMENT_KEY
+# Same idea for the administration API (enrollment tokens).
+TEST_ADMIN_KEY = "test-admin-key-0123456789abcdef-xyz"
+os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
 
 from collections.abc import Iterator
 from pathlib import Path
@@ -96,7 +99,7 @@ def client(engine: Engine) -> Iterator[TestClient]:
         connection.execute(
             text(
                 "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
-                " discovery_jobs"
+                " discovery_jobs, agent_enrollment_tokens"
                 " RESTART IDENTITY CASCADE"
             )
         )

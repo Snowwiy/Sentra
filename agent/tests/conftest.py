@@ -45,6 +45,8 @@ class FakeApiState:
     headers: list[dict[str, str]] = field(default_factory=list)
     # Bodies larger than this get 413, like the real API's 4 MiB limit.
     max_body: int = 4 * 1024 * 1024
+    # One-time enrollment tokens the server accepts; each is removed when used.
+    enrollment_tokens: set[str] = field(default_factory=set)
     # When True the server stores telemetry but the connection drops before the response.
     lose_next_response: bool = False
 
@@ -93,7 +95,13 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
 
             agent_id = body.get("agent_id", "")
             if path == "/agents/register":
-                if self.headers.get("X-Enrollment-Key") != ENROLLMENT_KEY:
+                one_time = self.headers.get("X-Enrollment-Token")
+                if one_time is not None:
+                    if one_time not in state.enrollment_tokens:
+                        self._send(401, {"error": {"code": "unauthorized", "message": "bad"}})
+                        return
+                    state.enrollment_tokens.discard(one_time)  # single use, like the server
+                elif self.headers.get("X-Enrollment-Key") != ENROLLMENT_KEY:
                     self._send(401, {"error": {"code": "unauthorized", "message": "bad key"}})
                     return
                 if agent_id in state.revoked:

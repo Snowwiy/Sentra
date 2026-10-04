@@ -1,3 +1,4 @@
+import logging
 from datetime import UTC, datetime
 from uuid import UUID
 
@@ -28,7 +29,10 @@ from app.schemas.agent import (
     HostInfo,
 )
 from app.services.alert_service import resolve_offline_alert
+from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.reconciliation import adopt_discovered
+
+logger = logging.getLogger(__name__)
 
 
 def record_contact(session: Session, asset: Asset, now: datetime) -> None:
@@ -117,25 +121,36 @@ class AgentService:
         self._session = session
         self._assets = AssetRepository(session)
         self._enrollment_key = enrollment_key
+        self._tokens = EnrollmentTokenService(session)
 
     def register(
-        self, data: AgentRegisterRequest, provided_key: str | None
+        self,
+        data: AgentRegisterRequest,
+        provided_key: str | None,
+        enrollment_token: str | None = None,
     ) -> tuple[AgentRegisterResponse, bool]:
         """Enroll an agent and issue a fresh token. Returns (response, created).
 
-        A valid enrollment key is required. Enrolling an agent_id that already exists is
-        allowed and rotates its token: this is how an agent that lost its token (reinstall,
-        deleted state) recovers. It is safe because only enrollment-key holders can do it;
-        the previous token stops working immediately.
+        Two credentials can authorize it:
+        - a one-time enrollment token (recommended): validated and locked here, consumed in
+          the same transaction as the enrollment, so it can never be used twice;
+        - the shared enrollment key (legacy, kept for existing installations).
+        Enrolling an agent_id that already exists is allowed and rotates its token: this is
+        how an agent that lost its token (reinstall, deleted state) recovers. The previous
+        token stops working immediately.
         """
-        if self._enrollment_key is None:
-            raise ForbiddenError("Agent enrollment is disabled on this server")
-        if not enrollment_key_matches(provided_key, self._enrollment_key):
-            raise UnauthorizedError("Invalid enrollment key")
+        bootstrap = None
+        if enrollment_token is not None:
+            bootstrap = self._tokens.lock_for_enrollment(enrollment_token, data)
+        else:
+            if self._enrollment_key is None:
+                raise ForbiddenError("Agent enrollment is disabled on this server")
+            if not enrollment_key_matches(provided_key, self._enrollment_key):
+                raise UnauthorizedError("Invalid enrollment key")
 
         asset = self._assets.get_by_agent_id(data.agent_id)
-        # Checked only after the enrollment key, so revocation status is never revealed to
-        # callers without the key.
+        # Checked only after the credential, so revocation status is never revealed to
+        # callers without one. A revoked agent does not consume the enrollment token.
         if asset is not None and asset.agent_token_revoked_at is not None:
             raise AgentRevokedError("This agent has been revoked by an operator")
 
@@ -167,6 +182,13 @@ class AgentService:
             # Installed on a host discovery already knew: converge into this asset. Only by
             # address here (the agent reports MACs with its inventory, which retries it).
             adopt_discovered(self._session, asset, {str(data.primary_ip)}, set())
+            if bootstrap is not None:
+                self._tokens.consume(bootstrap, asset)
+            else:
+                logger.info(
+                    "agent enrolled with the shared enrollment key (legacy)",
+                    extra={"agent_id": str(data.agent_id)},
+                )
             self._session.commit()
         except IntegrityError as exc:
             # A concurrent first registration with the same agent_id won the race; the agent

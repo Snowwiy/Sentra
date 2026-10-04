@@ -1,0 +1,14 @@
+Package: sentra-agent
+Version: @VERSION@
+Architecture: @ARCH@
+Maintainer: Sentra <sentra@localhost>
+Depends: python3 (>= 3.12), adduser | passwd, systemd
+Section: admin
+Priority: optional
+Installed-Size: @SIZE@
+Homepage: https://github.com/Snowwiy/Sentra
+Description: Sentra endpoint monitoring agent
+ Reports heartbeat, telemetry, inventory and events of this host to a Sentra server.
+ Runs as the unprivileged system user sentra-agent under the systemd service
+ sentra-agent. After installing, enroll it with a one-time token:
+   sudo sentra-agent-setup --server http://SERVER:8000 --token-file ./enrollment.token

@@ -32,3 +32,5 @@ Thumbs.db
 
 # Local review notes
 REVIEW_BEFORE_PUSH.md
+
+agent/agent.toml

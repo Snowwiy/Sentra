@@ -6,9 +6,22 @@ All timestamps are ISO 8601 **with timezone offset**; the server stores them in 
 ## Identity and authentication
 
 - On first run the agent generates a random UUID (`agent_id`) and keeps it locally.
-- **Enrollment**: `POST /agents/register` requires the header `X-Enrollment-Key` with the
-  server's `AGENT_ENROLLMENT_KEY`. Without a configured key the server refuses all
-  enrollments (403).
+- **Enrollment** (`POST /agents/register`) needs one of two credentials:
+  - **Recommended: a one-time enrollment token** in the header `X-Enrollment-Token`. An
+    operator creates it on the server (`python -m app.cli create-enrollment-token`, or
+    `POST /api/v1/agent-enrollment-tokens` with `X-Admin-Key`). It starts with `sentra_et_`,
+    expires after `ENROLLMENT_TOKEN_TTL_MINUTES` (15 by default), works for one agent by
+    default (`max_uses`), can be restricted to a platform (`windows`/`linux`) and a hostname,
+    and can be revoked while unused. The server stores only its SHA-256 hash and consumes it
+    in the same transaction as the enrollment (a row lock stops two hosts racing with one
+    token). Unknown, expired, revoked, used-up and mismatching tokens all answer the same 401
+    "Invalid enrollment token"; the reason is in the server log (token id, never the token).
+    When this header is present the shared key is not consulted.
+  - **Legacy: the shared key** in `X-Enrollment-Key` (the server's `AGENT_ENROLLMENT_KEY`).
+    Still supported for existing installations. Without a configured key, key-based
+    enrollment answers 403; token-based enrollment still works.
+- The one-time token is **only** an enrollment credential. Heartbeat, telemetry, inventory,
+  processes and events accept nothing but the per-agent token.
 - Enrollment returns an `agent_token` **once**. The server stores only its SHA-256 hash.
 - Every other agent call sends `Authorization: Bearer <agent_token>` and its `agent_id`.
   Unknown agent, missing token and wrong token all answer 401 (no hint about which).
@@ -21,6 +34,10 @@ All timestamps are ISO 8601 **with timezone offset**; the server stores them in 
   is only revealed to callers holding a valid enrollment key.
 - The server records `agent_token_issued_at` for a future rotation policy (not enforced yet).
 - The agent keeps the token encrypted with DPAPI (Windows) and never logs it.
+- Agent side: the one-time token comes from `SENTRA_AGENT_ENROLLMENT_TOKEN` or, preferably,
+  a file (`enrollment_token_file` / `--enrollment-token-file`; not a command-line value,
+  which other users can see). After a successful enrollment, or when the server refuses
+  the token, the agent forgets it and deletes the file; it is tried at most once per run.
 - The server assigns a separate public `asset_id` used by the UI and query endpoints.
 
 ## Lifecycle

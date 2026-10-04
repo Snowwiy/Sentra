@@ -56,12 +56,12 @@ class JsonFormatter(logging.Formatter):
         return redact(json.dumps(payload, default=str))
 
 
-def configure_logging(state_dir: Path, level: str) -> Path:
+def configure_logging(state_dir: Path, level: str, log_dir: Path | None = None) -> Path:
     """Log to the console and to a size-capped local file.
 
     Rotation (5 x 1 MB) bounds disk usage on hosts where the agent runs for months unattended.
     """
-    log_dir = state_dir / "logs"
+    log_dir = log_dir or state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
     log_file = log_dir / "agent.log"
 

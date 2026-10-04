@@ -1,0 +1,15 @@
+#!/bin/sh
+# Create the service user, directories and launcher. Enrollment needs a one-time token, so
+# the service is not started here: run `sudo sentra-agent-setup --server ... --token-file ...`.
+set -e
+if [ "$1" = "configure" ]; then
+  /opt/sentra-agent/share/install-sentra-agent.sh --package-postinst
+  # Upgrade of an already enrolled agent: restart it on the new version.
+  if [ -d /run/systemd/system ] && [ -f /etc/sentra-agent/agent.toml ]; then
+    systemctl daemon-reload || true
+    if systemctl is-enabled --quiet sentra-agent 2>/dev/null; then
+      systemctl restart sentra-agent || true
+    fi
+  fi
+fi
+exit 0

@@ -79,12 +79,21 @@ class SentraClient:
             # ValueError: a proxy or captive portal answered 2xx with a non-JSON body.
             raise TransportError(str(error)) from error
 
-    def register(self, agent_id: UUID, host: dict[str, Any], enrollment_key: str) -> dict[str, Any]:
-        return self._post(
-            "/agents/register",
-            {"agent_id": str(agent_id), **host},
-            {"X-Enrollment-Key": enrollment_key},
+    def register(
+        self,
+        agent_id: UUID,
+        host: dict[str, Any],
+        enrollment_key: str | None = None,
+        *,
+        enrollment_token: str | None = None,
+    ) -> dict[str, Any]:
+        # The one-time token, when present, is the credential; the shared key is legacy.
+        headers = (
+            {"X-Enrollment-Token": enrollment_token}
+            if enrollment_token
+            else {"X-Enrollment-Key": enrollment_key or ""}
         )
+        return self._post("/agents/register", {"agent_id": str(agent_id), **host}, headers)
 
     def heartbeat(
         self, agent_id: UUID, token: str, host: dict[str, Any] | None = None

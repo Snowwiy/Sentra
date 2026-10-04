@@ -61,6 +61,9 @@ Requirements: Python 3.12+, Node.js 20+, PostgreSQL 15+ running as a Windows ser
 .\scripts\start_frontend.ps1    # dashboard on http://localhost:5173
 ```
 
+Linux endpoints get a standalone package (tarball or `.deb`, systemd service, one command
+with a one-time enrollment token): [docs/agent-linux-installation.md](docs/agent-linux-installation.md).
+
 To report this machine with the real agent:
 
 ```powershell
@@ -79,7 +82,9 @@ Root `.env` (template: `.env.example`, never committed):
 | `TEST_DATABASE_URL` | Separate database used by the test suite |
 | `CORS_ORIGINS` | Comma separated browser origins allowed to call the API |
 | `MAX_REQUEST_BYTES` | Largest accepted request body, default 4 MiB (413 above it) |
-| `AGENT_ENROLLMENT_KEY` | Secret agents need to enroll (min 24 chars; unset disables enrollment) |
+| `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens |
+| `ENROLLMENT_TOKEN_TTL_MINUTES` | Default lifetime of one-time enrollment tokens (default 15, max 1440) |
+| `ADMIN_API_KEY` | Operator key (`X-Admin-Key`) for the administration API (enrollment tokens); unset = those endpoints disabled (403). The CLI works without it |
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
 | `ALERT_SUSTAINED_SAMPLES` | Consecutive samples over threshold before CPU/RAM alert (default 3) |
@@ -108,7 +113,10 @@ cd backend
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/v1/health` | API, database and migration state (503 when degraded) |
-| POST | `/api/v1/agents/register` | Enroll an agent (`X-Enrollment-Key`); returns its token once |
+| POST | `/api/v1/agents/register` | Enroll an agent (`X-Enrollment-Token` one-time token, or legacy `X-Enrollment-Key`); returns its token once |
+| POST | `/api/v1/agent-enrollment-tokens` | **Admin** (`X-Admin-Key`): create a one-time enrollment token (shown once) |
+| GET | `/api/v1/agent-enrollment-tokens` | **Admin**: list tokens and their state (never the token) |
+| POST | `/api/v1/agent-enrollment-tokens/{id}/revoke` | **Admin**: revoke an unused token |
 | POST | `/api/v1/agents/heartbeat` | Mark an agent alive (Bearer token) |
 | GET | `/api/v1/assets` | List assets with status and latest telemetry |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |

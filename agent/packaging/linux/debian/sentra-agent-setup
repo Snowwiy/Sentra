@@ -1,0 +1,3 @@
+#!/bin/sh
+# Enroll and start the agent installed from the .deb (same options as the installer).
+exec /opt/sentra-agent/share/install-sentra-agent.sh --package-configure "$@"

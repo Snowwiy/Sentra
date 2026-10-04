@@ -5,8 +5,11 @@ Python agent that reports this host to the Sentra API. Windows first, Linux-comp
 
 ## What it does
 
-- Generates a persistent identity (`agent_id`) on first run and enrolls with the server's
-  enrollment key (`SENTRA_AGENT_ENROLLMENT_KEY`), receiving its own token. On 401 it enrolls
+- Generates a persistent identity (`agent_id`) on first run and enrolls with a **one-time
+  enrollment token** created on the server (`SENTRA_AGENT_ENROLLMENT_TOKEN`, or better a file
+  given with `--enrollment-token-file` / `enrollment_token_file`, deleted once enrolled), or
+  with the legacy shared enrollment key (`SENTRA_AGENT_ENROLLMENT_KEY`), receiving its own
+  token. The one-time token is used for enrollment only and forgotten afterwards. On 401 it enrolls
   again with the same identity. If the server answers 403 (agent revoked by an operator,
   enrollment disabled) or 401 to the enrollment key, it logs the reason and retries only at
   `max_backoff_seconds`.
@@ -41,6 +44,16 @@ Python agent that reports this host to the Sentra API. Windows first, Linux-comp
 State (identity, encrypted token, telemetry buffer, event cursor and logs) lives in `%LOCALAPPDATA%\Sentra\Agent` on Windows and
 `~/.local/state/sentra-agent` on Linux.
 
+## Install on Linux (no repository, no venv, no pip)
+
+```bash
+sudo ./install-sentra-agent.sh --server http://SERVER:8000 --token-file ./enrollment.token
+```
+
+From the tarball or `.deb` built by `packaging/linux/build.sh`: installs only the agent as the
+systemd service `sentra-agent` running as the unprivileged user `sentra-agent`. Full guide,
+upgrade and uninstall/purge: [docs/agent-linux-installation.md](../docs/agent-linux-installation.md).
+
 ## Run
 
 ```powershell
@@ -63,7 +76,8 @@ cd agent
 
 ## Not yet
 
-Runs as the current user in the foreground: no Windows service, installer or auto-update yet.
+On Windows it still runs as the current user in the foreground: no Windows service,
+installer or auto-update yet (Linux has a package and a systemd service, see above).
 A service running under another account will re-enroll once (same `agent_id`) because the
 DPAPI blob is bound to the Windows user. No mTLS; use https for non-loopback API URLs (the
 agent warns otherwise).

@@ -2,7 +2,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Response, status
 
-from app.api.deps import AgentToken, EnrollmentKey, get_agent_service
+from app.api.deps import AgentToken, EnrollmentKey, EnrollmentTokenHeader, get_agent_service
 from app.api.responses import error_responses
 from app.schemas.agent import (
     AgentRegisterRequest,
@@ -33,8 +33,11 @@ def register_agent(
     service: Service,
     response: Response,
     enrollment_key: EnrollmentKey = None,
+    # Recommended credential: a one-time token (see /agent-enrollment-tokens). When sent,
+    # the shared key is not consulted.
+    enrollment_token: EnrollmentTokenHeader = None,
 ) -> AgentRegisterResponse:
-    result, created = service.register(payload, enrollment_key)
+    result, created = service.register(payload, enrollment_key, enrollment_token)
     if not created:
         response.status_code = status.HTTP_200_OK
     return result

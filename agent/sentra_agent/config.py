@@ -35,9 +35,18 @@ class AgentConfig:
     buffer_size: int = 120
     state_dir: Path = field(default_factory=default_state_dir)
     log_level: str = "INFO"
+    # Directory of the rotating log file (default: <state_dir>/logs). The Linux package uses
+    # /var/log/sentra-agent; under systemd the console output also goes to the journal.
+    log_dir: Path | None = None
     # Needed only to enroll (first start, or after the server revoked our token). Prefer the
     # SENTRA_AGENT_ENROLLMENT_KEY environment variable over writing it into a config file.
     enrollment_key: str | None = field(default=None, repr=False)
+    # Recommended instead of the shared key: a one-time enrollment token created by an
+    # operator (`python -m app.cli create-enrollment-token` on the server). Pass it in
+    # SENTRA_AGENT_ENROLLMENT_TOKEN or, better, in a file (enrollment_token_file) that the
+    # agent deletes once enrolled. It is used for enrollment only, never for other calls.
+    enrollment_token: str | None = field(default=None, repr=False)
+    enrollment_token_file: Path | None = None
 
     def validate(self) -> "AgentConfig":
         parsed = urlparse(self.api_url)
@@ -70,8 +79,10 @@ def _coerce(name: str, value: Any) -> Any:
         return int(value)
     if target in (float, "float"):
         return float(value)
-    if name == "enrollment_key":
-        return str(value) or None
+    if name in ("enrollment_key", "enrollment_token"):
+        return str(value).strip() or None
+    if name in ("enrollment_token_file", "log_dir"):
+        return Path(value).expanduser() if str(value) else None
     if target in (Path, "Path"):
         return Path(value).expanduser()
     return str(value)

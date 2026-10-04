@@ -5,6 +5,7 @@ import random
 import threading
 import time
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime
 from typing import Any, Protocol
 from uuid import UUID, uuid4
@@ -39,7 +40,7 @@ class EventSource(Protocol):
 
 
 class EnrollmentKeyMissingError(Exception):
-    """The agent has no token and no enrollment key to obtain one."""
+    """The agent has no token and no enrollment credential (token or key) to obtain one."""
 
 
 class CredentialsRejectedError(Exception):
@@ -107,6 +108,10 @@ class Agent:
         self.identity: Identity = store.load_or_create()
         register_secret(self.identity.token)
         register_secret(config.enrollment_key)
+        register_secret(config.enrollment_token)
+        # A one-time token is tried at most once per run: once used (or refused) it cannot
+        # work again, so it is forgotten and never sent anywhere else.
+        self._bootstrap_spent = False
 
     def run(self, once: bool = False) -> None:
         logger.info(
@@ -140,8 +145,9 @@ class Agent:
                 )
             except EnrollmentKeyMissingError:
                 logger.error(
-                    "agent is not enrolled and no enrollment key is configured; "
-                    "set SENTRA_AGENT_ENROLLMENT_KEY"
+                    "agent is not enrolled and has no enrollment credential; create a one-time"
+                    " token on the server and set SENTRA_AGENT_ENROLLMENT_TOKEN (or"
+                    " enrollment_token_file)"
                 )
             except CredentialsRejectedError as exc:
                 delay = backoff_delay(
@@ -249,17 +255,73 @@ class Agent:
             _raise_if_forbidden(exc)
             raise
 
+    def enroll(self) -> UUID | None:
+        """Enroll now if needed (no other API call) and return the asset id we report as.
+
+        Used by installers to verify enrollment before starting the service. An agent that
+        already holds its own token does not contact the server and keeps its identity, so
+        a reinstall or upgrade never enrolls twice. Raises like a cycle would:
+        EnrollmentKeyMissingError, CredentialsRejectedError, TransportError.
+        """
+        self._ensure_enrolled()
+        return self.identity.asset_id
+
+    def _bootstrap_token(self) -> str | None:
+        """The one-time token from the config or its file, unless already spent this run."""
+        if self._bootstrap_spent:
+            return None
+        if self.config.enrollment_token:
+            return self.config.enrollment_token
+        path = self.config.enrollment_token_file
+        if path is not None and path.is_file():
+            try:
+                token = path.read_text(encoding="utf-8").strip()
+            except OSError as exc:
+                logger.warning("enrollment token file unreadable", extra={"error": str(exc)})
+                return None
+            register_secret(token)
+            return token or None
+        return None
+
+    def _forget_bootstrap(self) -> None:
+        """Drop every copy of the one-time token we control (memory and its file)."""
+        self._bootstrap_spent = True
+        self.config = replace(self.config, enrollment_token=None)
+        path = self.config.enrollment_token_file
+        if path is not None:
+            try:
+                path.unlink(missing_ok=True)
+                logger.info("enrollment token file deleted", extra={"path": str(path)})
+            except OSError as exc:
+                logger.warning(
+                    "could not delete the enrollment token file; delete it by hand",
+                    extra={"path": str(path), "error": str(exc)},
+                )
+
     def _ensure_enrolled(self) -> str:
         """Return our token, enrolling first if we do not have one."""
         if self.identity.token is not None:
             return self.identity.token
-        if not self.config.enrollment_key:
+        bootstrap = self._bootstrap_token()
+        if bootstrap is None and not self.config.enrollment_key:
             raise EnrollmentKeyMissingError
         try:
-            response = self.client.register(
-                self.identity.agent_id, self.host_info().as_payload(), self.config.enrollment_key
-            )
+            if bootstrap is not None:
+                response = self.client.register(
+                    self.identity.agent_id,
+                    self.host_info().as_payload(),
+                    enrollment_token=bootstrap,
+                )
+            else:
+                response = self.client.register(
+                    self.identity.agent_id,
+                    self.host_info().as_payload(),
+                    self.config.enrollment_key,
+                )
         except ApiError as exc:
+            if exc.status in (HTTP_FORBIDDEN, HTTP_UNAUTHORIZED) and bootstrap is not None:
+                # Expired, used, revoked or not for this host: it will never work again.
+                self._forget_bootstrap()
             if exc.status == HTTP_FORBIDDEN:
                 # Either this agent was revoked by an operator or enrollment is disabled.
                 reason = (
@@ -269,7 +331,12 @@ class Agent:
                 )
                 raise CredentialsRejectedError(reason, exc.status) from exc
             if exc.status == HTTP_UNAUTHORIZED:
-                raise CredentialsRejectedError("invalid enrollment key", exc.status) from exc
+                reason = (
+                    "enrollment token invalid, expired or already used; create a new one"
+                    if bootstrap is not None
+                    else "invalid enrollment key"
+                )
+                raise CredentialsRejectedError(reason, exc.status) from exc
             raise
         # Persist the token before using it: if we crash right after, the next start must not
         # enroll again and silently revoke a token the server already considers current.
@@ -279,7 +346,16 @@ class Agent:
         self.identity.token_issued_at = datetime.now(UTC)
         self.identity.asset_id = UUID(response["asset_id"])
         self.store.save(self.identity)
-        logger.info("agent enrolled", extra={"asset_id": response["asset_id"]})
+        if bootstrap is not None:
+            # Enrolled: only the per-agent token (just saved) is used from now on.
+            self._forget_bootstrap()
+        logger.info(
+            "agent enrolled",
+            extra={
+                "asset_id": response["asset_id"],
+                "method": "one-time token" if bootstrap is not None else "shared key (legacy)",
+            },
+        )
         return token
 
     def _heartbeat(self, token: str) -> None:

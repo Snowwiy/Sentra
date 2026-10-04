@@ -6,10 +6,13 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings, get_settings
+from app.core.exceptions import ForbiddenError, UnauthorizedError
+from app.core.security import MAX_CREDENTIAL_LENGTH, enrollment_key_matches
 from app.db.session import get_db
 from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import AssetService
+from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.event_service import EventService
 from app.services.exposure_service import ExposureService
 from app.services.health_service import HealthService
@@ -46,6 +49,34 @@ def get_agent_token(
 
 AgentToken = Annotated[str | None, Depends(get_agent_token)]
 EnrollmentKey = Annotated[str | None, Header(alias="X-Enrollment-Key")]
+# One-time bootstrap token (recommended); only POST /agents/register reads it.
+EnrollmentTokenHeader = Annotated[str | None, Header(alias="X-Enrollment-Token")]
+
+
+def require_admin(
+    settings: AppSettings, admin_key: Annotated[str | None, Header(alias="X-Admin-Key")] = None
+) -> None:
+    """Guard for the administration API (enrollment tokens).
+
+    Fail closed: without ADMIN_API_KEY configured the endpoints answer 403, so a server never
+    exposes them by accident. There are no dashboard users yet; this single operator key is
+    the stopgap, and the CLI (shell access) remains the alternative.
+    """
+    expected = settings.admin_api_key
+    if expected is None:
+        raise ForbiddenError("Administration API disabled: set ADMIN_API_KEY on the server")
+    if (
+        not admin_key
+        or len(admin_key) > MAX_CREDENTIAL_LENGTH
+        or not enrollment_key_matches(admin_key, expected.get_secret_value())
+    ):
+        raise UnauthorizedError("Invalid or missing admin key")
+
+
+def get_enrollment_token_service(
+    session: DbSession, settings: AppSettings
+) -> EnrollmentTokenService:
+    return EnrollmentTokenService(session, timedelta(minutes=settings.enrollment_token_ttl_minutes))
 
 
 def get_asset_service(session: DbSession, settings: AppSettings) -> AssetService:

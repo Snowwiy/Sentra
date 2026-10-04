@@ -11,12 +11,13 @@ outage during which the agent buffered samples and delivered them on reconnectio
 
 | Component | State |
 |-----------|-------|
-| Backend API (FastAPI) | Done: agents (enrollment + tokens), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0012 |
+| Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0013 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
+| Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 278 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks and real TCP discovery on loopback), agent 108 (3 Windows-only, 2 Linux-only); frontend 36 unit tests (Vitest) + tsc + ESLint + build; `qa/e2e_api.py` 143 contract checks |
+| Tests | Backend 303 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks and real TCP discovery on loopback), agent 133 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 36 unit tests (Vitest) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
 
 ## Architecture
 
@@ -57,8 +58,13 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
 
 ## Key rules
 
-- Agent auth: enrollment requires `AGENT_ENROLLMENT_KEY` (`X-Enrollment-Key`); returns a token
-  once; all other agent calls need `Authorization: Bearer`. Re-enrollment rotates the token.
+- Agent auth: enrollment with a one-time token (`X-Enrollment-Token`, recommended: hash-only,
+  15 min, single use, revocable, consumed atomically) or the legacy `AGENT_ENROLLMENT_KEY`
+  (`X-Enrollment-Key`); returns a per-agent token once; all other agent calls need
+  `Authorization: Bearer` with that token. Re-enrollment rotates the token.
+- Enrollment tokens are managed with `python -m app.cli create-enrollment-token` /
+  `list-enrollment-tokens` / `revoke-enrollment-token`, or the admin API
+  (`/agent-enrollment-tokens`, header `X-Admin-Key` = `ADMIN_API_KEY`; disabled if unset).
 - Status: `unknown` until first contact; `online` while reporting; `offline` when
   `last_seen_at` is older than `HEARTBEAT_TIMEOUT_SECONDS` (computed at read time; server clock).
 - Alerts: CPU/RAM need `ALERT_SUSTAINED_SAMPLES` consecutive samples over threshold; disk alerts

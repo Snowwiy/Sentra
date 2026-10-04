@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     # (fail closed): an open registration endpoint would let anyone inject fake assets.
     agent_enrollment_key: SecretStr | None = Field(default=None, min_length=24)
 
+    # One-time enrollment tokens (recommended over the shared key): lifetime when created
+    # without an explicit one. See services/enrollment_token_service.py.
+    enrollment_token_ttl_minutes: int = Field(default=15, ge=1, le=1440)
+
+    # Key for the administration API (X-Admin-Key): creating, listing and revoking
+    # enrollment tokens. Unset (the default) disables those endpoints; the CLI keeps working.
+    # Dashboard users/login do not exist yet, so this is a single operator credential.
+    admin_api_key: SecretStr | None = Field(default=None, min_length=24)
+
     # An asset is reported offline when it has not been seen for this many seconds.
     heartbeat_timeout_seconds: int = Field(default=90, gt=0)
 

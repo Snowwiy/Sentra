@@ -867,6 +867,25 @@ def test_hybrid_read() -> None:
     check("no HTTP endpoint starts a scan", r.status in (404, 405), (r.status, r.body))
 
 
+def test_enrollment_tokens() -> None:
+    """One-time enrollment tokens over real HTTP. The QA server has no ADMIN_API_KEY, so the
+    administration API must be closed; token creation itself is covered by backend tests."""
+    r = call("POST", "/agent-enrollment-tokens", {})
+    check("admin API disabled without ADMIN_API_KEY -> 403", r.status == 403, (r.status, r.body))
+    check(
+        "admin API listing disabled -> 403", call("GET", "/agent-enrollment-tokens").status == 403
+    )
+    bogus = "sentra_et_" + "Z" * 43
+    r = call("POST", "/agents/register", host(str(uuid.uuid4())), {"X-Enrollment-Token": bogus})
+    check(
+        "unknown enrollment token -> 401 without echoing it",
+        r.status == 401 and is_error_envelope(r) and bogus not in json.dumps(r.body),
+        (r.status, r.body),
+    )
+    r = call("POST", "/agents/heartbeat", {"agent_id": str(uuid.uuid4())}, bearer(bogus))
+    check("enrollment token is not an agent credential -> 401", r.status == 401, r.status)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="also wait for the offline sweeper")
@@ -886,6 +905,7 @@ def main() -> int:
         test_hardening,
         test_operational,
         test_hybrid_read,
+        test_enrollment_tokens,
     ]
     if args.offline:
         groups.append(test_offline)

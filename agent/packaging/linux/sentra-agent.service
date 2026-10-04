@@ -1,0 +1,56 @@
+# Sentra Agent: endpoint monitoring service (heartbeat, telemetry, inventory, events).
+# A normal, visible system service: `systemctl status sentra-agent`, `journalctl -u sentra-agent`.
+[Unit]
+Description=Sentra Agent (endpoint monitoring)
+Documentation=https://github.com/Snowwiy/Sentra/blob/main/docs/agent-linux-installation.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=sentra-agent
+Group=sentra-agent
+WorkingDirectory=/var/lib/sentra-agent
+ExecStart=/opt/sentra-agent/bin/sentra-agent --config /etc/sentra-agent/agent.toml
+# The agent stops between cycles on SIGTERM; give an in-flight request time to finish.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+# Crash or failed start: retry after 10 s, at most 5 times per 5 minutes (limits in
+# [Unit]), then stay failed until an administrator looks (`systemctl reset-failed
+# sentra-agent`). The agent itself backs off when the API is unreachable: this is for crashes.
+Restart=on-failure
+RestartSec=10
+UMask=0077
+
+# Hardening: least privilege, nothing the collectors need is taken away. The collectors
+# read /proc, /sys, /etc/passwd, /etc/group, systemctl and dpkg/rpm output; they never
+# write outside the two directories below.
+NoNewPrivileges=true
+CapabilityBoundingSet=
+AmbientCapabilities=
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/sentra-agent /var/log/sentra-agent
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Deliberately NOT set (they would blind the collectors):
+#   ProtectProc=invisible  -> the process list would only show the agent's own processes
+#   PrivateDevices=true    -> disk partition listing needs /dev
+#   PrivateNetwork=true    -> the agent must reach the Sentra server
+#   MemoryDenyWriteExecute -> can break ctypes/libffi used by Python
+
+[Install]
+WantedBy=multi-user.target

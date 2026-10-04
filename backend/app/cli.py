@@ -8,8 +8,10 @@ and its database credentials, which is the right bar until dashboard auth exists
 
 import argparse
 import sys
+from datetime import timedelta
 from uuid import UUID
 
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -19,9 +21,11 @@ from app.db.session import get_sessionmaker
 from app.discovery.targets import TargetError
 from app.models.asset import Asset
 from app.models.discovery import DiscoveryTrigger
+from app.schemas.enrollment import EnrollmentTokenCreate
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
+from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.retention_service import RetentionPolicy, RetentionService
 
 
@@ -72,6 +76,49 @@ def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
         print(f"alert {alert_id}: {exc.message}", file=sys.stderr)
         return 1
     print(f"alert {alert.public_id} ({alert.rule.value}) is {alert.status.value}")
+    return 0
+
+
+def _enrollment_tokens(session: Session, args: argparse.Namespace) -> int:
+    settings = get_settings()
+    service = EnrollmentTokenService(
+        session, timedelta(minutes=settings.enrollment_token_ttl_minutes)
+    )
+    if args.command == "create-enrollment-token":
+        created = service.create(
+            EnrollmentTokenCreate(
+                ttl_minutes=args.ttl_minutes,
+                max_uses=args.max_uses,
+                expected_platform=args.platform,
+                expected_hostname=args.hostname,
+                note=args.note,
+            ),
+            created_via="cli",
+        )
+        # The only time the token is shown: it is not stored and cannot be listed later.
+        print(f"token:      {created.token}")
+        print(f"token id:   {created.token_id}")
+        print(f"expires at: {created.expires_at.isoformat()}  (uses: {created.max_uses})")
+        print("Give it to the new host (SENTRA_AGENT_ENROLLMENT_TOKEN or a token file).")
+        return 0
+    if args.command == "list-enrollment-tokens":
+        print(f"{'token_id':36}  {'state':9}  {'uses':5}  {'expires_at':25}  note")
+        for item in service.list(args.limit).items:
+            uses = f"{item.use_count}/{item.max_uses}"
+            print(
+                f"{item.token_id!s:36}  {item.state.value:9}  {uses:5}"
+                f"  {item.expires_at.isoformat()[:25]:25}  {item.note or ''}"
+            )
+        return 0
+    try:
+        revoked = service.revoke(args.token_id)
+    except NotFoundError:
+        print(f"enrollment token {args.token_id} not found", file=sys.stderr)
+        return 1
+    except ConflictError as exc:
+        print(f"enrollment token {args.token_id}: {exc.message}", file=sys.stderr)
+        return 1
+    print(f"enrollment token {revoked.token_id} is {revoked.state.value}")
     return 0
 
 
@@ -139,6 +186,23 @@ def main(argv: list[str] | None = None) -> int:
     ):
         command = commands.add_parser(name, help=text)
         command.add_argument("alert_id", type=UUID, help="public alert id")
+    create = commands.add_parser(
+        "create-enrollment-token",
+        help="create a one-time token for enrolling a new agent (shown once)",
+    )
+    create.add_argument("--ttl-minutes", type=int, help="lifetime (default from settings, 15)")
+    create.add_argument("--max-uses", type=int, default=1, help="agents it may enroll (1)")
+    create.add_argument("--platform", choices=["windows", "linux"], help="only this OS")
+    create.add_argument("--hostname", help="only a host with this hostname")
+    create.add_argument("--note", help="free text shown when listing (no secrets)")
+    listing = commands.add_parser(
+        "list-enrollment-tokens", help="list enrollment tokens and their state (never the token)"
+    )
+    listing.add_argument("--limit", type=int, default=50)
+    revoke = commands.add_parser(
+        "revoke-enrollment-token", help="revoke an enrollment token that was not used up"
+    )
+    revoke.add_argument("token_id", type=UUID, help="token id (from create/list)")
     commands.add_parser(
         "discovery-scope", help="show the networks and ports discovery may probe (no probing)"
     )
@@ -161,6 +225,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "purge-old-data":
             return _purge_old_data(session)
+        if args.command in (
+            "create-enrollment-token",
+            "list-enrollment-tokens",
+            "revoke-enrollment-token",
+        ):
+            try:
+                return _enrollment_tokens(session, args)
+            except ValidationError as exc:
+                print(f"invalid value: {exc.errors()[0]['msg']}", file=sys.stderr)
+                return 2
         if args.command in ("ack-alert", "resolve-alert"):
             return _alert_action(session, args.command, args.alert_id)
         action = revoke_agent if args.command == "revoke-agent" else reinstate_agent
