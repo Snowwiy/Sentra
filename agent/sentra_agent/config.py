@@ -26,6 +26,9 @@ class AgentConfig:
     # Inventory changes slowly and is the largest payload; send it far less often.
     inventory_interval_seconds: int = 900
     events_interval_seconds: int = 60
+    # Process list: changes constantly, so sent far more often than the inventory; only the
+    # latest snapshot is kept by the server.
+    processes_interval_seconds: int = 60
     request_timeout_seconds: float = 10.0
     max_backoff_seconds: int = 300
     # Samples kept in memory while the API is unreachable, sent once it is back.
@@ -46,6 +49,8 @@ class AgentConfig:
             raise ValueError("inventory_interval_seconds must be between 60 and 86400")
         if not 10 <= self.events_interval_seconds <= 3600:
             raise ValueError("events_interval_seconds must be between 10 and 3600")
+        if not 15 <= self.processes_interval_seconds <= 3600:
+            raise ValueError("processes_interval_seconds must be between 15 and 3600")
         if self.request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive")
         if self.max_backoff_seconds < self.interval_seconds:

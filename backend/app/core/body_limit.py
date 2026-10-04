@@ -83,6 +83,10 @@ class BodySizeLimitMiddleware:
                     (b"content-type", b"application/json"),
                     (b"content-length", str(len(body)).encode()),
                     (b"connection", b"close"),
+                    # Same as SECURITY_HEADERS (core/middleware.py): this answer is sent
+                    # before that middleware runs.
+                    (b"x-content-type-options", b"nosniff"),
+                    (b"cache-control", b"no-store"),
                 ],
             }
         )

@@ -76,7 +76,8 @@ class IdentityStore:
         if self.path.exists():
             try:
                 return self._load()
-            except (ValueError, KeyError, TypeError) as exc:
+            # AttributeError: valid JSON of the wrong shape (a list, a number as agent_id).
+            except (ValueError, KeyError, TypeError, AttributeError) as exc:
                 # Unreadable identity (should not happen thanks to atomic writes, but disks and
                 # people fail). Keep the evidence and start fresh: an agent that refuses to start
                 # is worse than one stale duplicate asset on the server.

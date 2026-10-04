@@ -83,7 +83,14 @@ Root `.env` (template: `.env.example`, never committed):
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
 | `ALERT_SUSTAINED_SAMPLES` | Consecutive samples over threshold before CPU/RAM alert (default 3) |
+| `ALERT_WATCHED_SERVICES` | Services whose stop raises an alert (default `EventLog,WinDefend,mpssvc`; empty disables; services set to disabled are skipped) |
+| `ALERT_CRITICAL_EVENTS` | `Provider:EventID` list that raises an alert on its own (default: unexpected shutdown 41/6008, log cleared 1102/104) |
+| `ALERT_EVENT_BURST_COUNT`, `ALERT_EVENT_BURST_MINUTES` | Error/critical events from one asset within the window that raise a burst alert (default 10 in 10 min) |
+| `ALERT_EVENT_QUIET_MINUTES` | Event-based alerts resolve after this long without firing again (default 60) |
 | `BACKGROUND_JOBS_ENABLED`, `OFFLINE_SWEEP_INTERVAL_SECONDS` | Offline alert sweeper (default on, 30 s) |
+| `TELEMETRY_RETENTION_DAYS`, `EVENT_RETENTION_DAYS` | Delete telemetry samples / host events older than N days (unset = keep forever, the default) |
+| `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` | Delete inventory changes / **resolved** alerts older than N days (unset = keep forever; active alerts are never deleted) |
+| `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
 
 Frontend variables are documented in `frontend/.env.example`.
 
@@ -105,12 +112,19 @@ cd backend
 | GET | `/api/v1/assets` | List assets with status and latest telemetry |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |
 | GET | `/api/v1/assets/{asset_id}/telemetry?limit=120` | Telemetry history, oldest first |
-| GET | `/api/v1/alerts?status=open&asset_id=&limit=` | Alerts (open/resolved) |
+| GET | `/api/v1/alerts?status=&active=&severity=&rule=&asset_id=&q=&limit=&offset=` | Alerts, newest first; `total` is the number matching the filters |
+| GET | `/api/v1/alerts/{alert_id}` | Alert detail (details, occurrences, source event) |
 | POST | `/api/v1/inventory` | Ingest inventory snapshot (Bearer token) |
 | GET | `/api/v1/assets/{asset_id}/inventory` | Latest inventory snapshot |
+| GET | `/api/v1/assets/{asset_id}/changes?category=&limit=&offset=` | Changes detected between inventories (services, software, accounts) |
+| POST | `/api/v1/processes` | Ingest a process snapshot (Bearer token; only the latest is kept) |
+| GET | `/api/v1/assets/{asset_id}/processes` | Latest process snapshot |
 | POST | `/api/v1/telemetry` | Ingest CPU, RAM, disk and uptime (Bearer token) |
 | POST | `/api/v1/events` | Ingest host log events (Bearer token, idempotent) |
-| GET | `/api/v1/events?asset_id=&min_level=&limit=` | Events, newest first |
+| GET | `/api/v1/events?asset_id=&min_level=&channel=&event_code=&q=&limit=&offset=` | Events, newest first (`has_more` instead of a total) |
+
+Alerts are acknowledged or resolved by an operator from the server, not over HTTP (the
+dashboard has no login yet): `python -m app.cli ack-alert <id>` / `resolve-alert <id>`.
 
 Payloads and error format: [docs/agent-protocol.md](docs/agent-protocol.md). Interactive docs at
 `/docs` in development.
@@ -128,10 +142,24 @@ cd backend
 .venv\Scripts\python.exe -m mypy app tests
 ```
 
+The backend suite also fails when the ORM models and the migrations drift apart (the
+equivalent of `alembic check`), so a model change always needs its migration.
+
+Frontend (Vitest unit tests for the API client and formatting helpers, then lint and build):
+
+```powershell
+cd frontend
+npm test
+npm run lint
+npm run build
+```
+
 ## Project status
 
 MVP working end to end with real data (PC → agent → API → PostgreSQL → web). Agents
-authenticate with an enrollment key and per-agent tokens. See
+authenticate with an enrollment key and per-agent tokens. Per asset the dashboard shows
+overview, processes, services, software, network, users, events and alerts, plus the changes
+detected between inventories. Monitoring only: no remote actions on hosts. See
 [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md) for details and known issues.
 Known limitation: the dashboard has **no login yet**; keep the API on a trusted network
 (it binds to 127.0.0.1 by default).
@@ -139,7 +167,7 @@ Known limitation: the dashboard has **no login yet**; keep the API on a trusted 
 ## Roadmap
 
 1. Dashboard users and authentication.
-2. Agent as a Windows service; event-based alerts.
-3. Telemetry/event retention; Linux collectors.
+2. Agent as a Windows service; alert acknowledgement from the dashboard (needs login).
+3. Telemetry downsampling (opt-in retention exists); journald events on Linux.
 4. Live updates (WebSockets/SSE).
 5. Optional integrations (Wazuh, Suricata, Syslog, SNMP).

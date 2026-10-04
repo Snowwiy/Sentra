@@ -6,6 +6,7 @@ from fastapi.encoders import jsonable_encoder
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 logger = logging.getLogger(__name__)
@@ -84,9 +85,10 @@ async def _http_error_handler(_: Request, exc: Exception) -> JSONResponse:
 
 async def _database_unavailable_handler(request: Request, exc: Exception) -> JSONResponse:
     # OperationalError means the database could not serve the request (down, restarting,
-    # connection dropped, timeout). That is transient, so answer 503: the agent treats 5xx as
-    # "retry later" and buffers, and the dashboard can say the service is unavailable instead
-    # of a generic internal error. Logged without a traceback because an outage would
+    # connection dropped, timeout); a pool TimeoutError means every connection of the pool is
+    # busy (load spike, slow queries). Both are transient, so answer 503: the agent treats 5xx
+    # as "retry later" and buffers, and the dashboard can say the service is unavailable
+    # instead of a generic internal error. Logged without a traceback because an outage would
     # otherwise flood the log with one identical stack per request.
     logger.warning(
         "Database unavailable",
@@ -110,4 +112,5 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(RequestValidationError, _validation_error_handler)
     app.add_exception_handler(StarletteHTTPException, _http_error_handler)
     app.add_exception_handler(OperationalError, _database_unavailable_handler)
+    app.add_exception_handler(PoolTimeoutError, _database_unavailable_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)

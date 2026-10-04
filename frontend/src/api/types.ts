@@ -1,4 +1,5 @@
-// Mirrors the response schemas in backend/app/schemas. Keep in sync with the API.
+// Mirrors the response schemas in backend/app/schemas. Keep in sync with the API:
+// backend/tests/test_frontend_contract.py fails when field names or enum values drift.
 
 export type AssetStatus = "online" | "offline" | "unknown";
 
@@ -55,9 +56,18 @@ export interface TelemetryHistory {
   items: TelemetrySnapshot[];
 }
 
-export type AlertRule = "asset_offline" | "high_cpu" | "high_ram" | "disk_critical";
+export type AlertRule =
+  | "asset_offline"
+  | "high_cpu"
+  | "high_ram"
+  | "disk_critical"
+  | "service_stopped"
+  | "event_burst"
+  | "admin_changed"
+  | "critical_event";
 export type AlertSeverity = "info" | "warning" | "critical";
-export type AlertStatus = "open" | "resolved";
+/** "acknowledged": seen by an operator, still active (not resolved). */
+export type AlertStatus = "open" | "acknowledged" | "resolved";
 
 export interface Alert {
   alert_id: string;
@@ -68,7 +78,15 @@ export interface Alert {
   status: AlertStatus;
   message: string;
   value: number | null;
+  /** Structured context: stopped services, changed accounts, the triggering event... */
+  details: Record<string, unknown> | null;
+  /** Times the condition fired while active (event-based rules count each event). */
+  occurrences: number;
+  last_triggered_at: IsoDateTime | null;
+  /** Host event that triggered the alert, while it is still stored. */
+  event_id: string | null;
   opened_at: IsoDateTime;
+  acknowledged_at: IsoDateTime | null;
   resolved_at: IsoDateTime | null;
 }
 
@@ -97,6 +115,11 @@ export interface ProcessInfo {
   name: string;
   username: string | null;
   memory_bytes: number;
+  // Optional fields, sent by newer agents.
+  exe?: string | null;
+  ppid?: number | null;
+  cpu_percent?: number | null;
+  started_at?: IsoDateTime | null;
 }
 
 export interface ServiceInfo {
@@ -104,12 +127,30 @@ export interface ServiceInfo {
   display_name: string | null;
   status: string;
   start_type: string | null;
+  pid?: number | null;
 }
 
 export interface SoftwareInfo {
   name: string;
   version: string | null;
   publisher: string | null;
+  /** YYYY-MM-DD when the host records it. */
+  install_date?: string | null;
+  architecture?: string | null;
+}
+
+/** A local account: identity and state only, never secrets. */
+export interface AccountInfo {
+  name: string;
+  /** null: unknown on this host. */
+  enabled: boolean | null;
+  is_admin: boolean | null;
+  last_logon: IsoDateTime | null;
+}
+
+export interface NetworkSummary {
+  gateways: string[];
+  dns_servers: string[];
 }
 
 export interface DiskInfo {
@@ -145,6 +186,60 @@ export interface Inventory {
   // Older snapshots (before agents collected them) may lack these sections.
   disks?: DiskInfo[];
   connections?: NetworkConnection[];
+  accounts?: AccountInfo[];
+  network?: NetworkSummary | null;
+}
+
+/** One process of the latest process snapshot (refreshed every minute by the agent). */
+export interface ProcessEntry {
+  pid: number;
+  ppid: number | null;
+  name: string;
+  exe: string | null;
+  username: string | null;
+  /** Share of the whole machine, 0-100. */
+  cpu_percent: number | null;
+  memory_bytes: number;
+  started_at: IsoDateTime | null;
+  status: string | null;
+}
+
+export interface ProcessSnapshot {
+  asset_id: string;
+  collected_at: IsoDateTime;
+  received_at: IsoDateTime;
+  processes: ProcessEntry[];
+}
+
+export type ChangeCategory = "service" | "software" | "account";
+export type ChangeKind =
+  | "added"
+  | "removed"
+  | "started"
+  | "stopped"
+  | "start_type_changed"
+  | "version_changed"
+  | "enabled"
+  | "disabled"
+  | "admin_granted"
+  | "admin_revoked";
+
+/** A difference Sentra found between two inventory snapshots. */
+export interface AssetChange {
+  change_id: string;
+  category: ChangeCategory;
+  kind: ChangeKind;
+  item: string;
+  details: Record<string, unknown> | null;
+  collected_at: IsoDateTime;
+  detected_at: IsoDateTime;
+}
+
+export interface ChangeList {
+  asset_id: string;
+  items: AssetChange[];
+  total: number;
+  has_more: boolean;
 }
 
 export type EventLevel = "info" | "warning" | "error" | "critical";
@@ -159,10 +254,16 @@ export interface SystemEvent {
   provider: string;
   level: EventLevel;
   message: string;
+  record_id: number;
+  /** Host name recorded in the event (null for events from older agents). */
+  computer: string | null;
   occurred_at: IsoDateTime;
 }
 
 export interface EventList {
   items: SystemEvent[];
+  /** Items in this page (event tables are not counted). */
   total: number;
+  /** More events match after this page. */
+  has_more: boolean;
 }

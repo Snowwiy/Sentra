@@ -41,6 +41,13 @@ class FakeEvents:
         self.committed = cursor
 
 
+def processes() -> dict[str, Any]:
+    return {
+        "collected_at": datetime.now(UTC).isoformat(),
+        "processes": [{"pid": 4, "name": "System", "memory_bytes": 1, "cpu_percent": None}],
+    }
+
+
 def build_agent(config: Any, metrics: Any = sample, events: Any = None) -> Agent:
     return Agent(
         config,
@@ -50,6 +57,7 @@ def build_agent(config: Any, metrics: Any = sample, events: Any = None) -> Agent
         metrics=metrics,
         inventory=snapshot,
         events=events or FakeEvents(),
+        processes=processes,
     )
 
 
@@ -61,7 +69,13 @@ def test_first_cycle_registers_and_reports(
 
     agent.cycle()
 
-    assert state.paths() == ["/agents/register", "/agents/heartbeat", "/telemetry", "/inventory"]
+    assert state.paths() == [
+        "/agents/register",
+        "/agents/heartbeat",
+        "/telemetry",
+        "/inventory",
+        "/processes",
+    ]
     # No events queued: nothing to send, so no /events request.
     assert state.requests[0][1]["hostname"] == "PC-TEST"
     assert len(state.telemetry) == 1
@@ -266,3 +280,60 @@ def test_events_are_sent_once_and_cursor_advances_only_after_acceptance(
     agent._events_sent_at = None
     agent.cycle()
     assert [e["record_id"] for e in state.events] == [1, 2, 3]
+
+
+def test_process_snapshots_are_sent_once_per_interval(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, state = fake_api
+    agent = build_agent(make_config(url))
+
+    agent.cycle()
+    agent.cycle()  # within processes_interval_seconds: not sent again
+
+    assert len(state.processes) == 1
+    assert state.processes[0]["processes"][0]["name"] == "System"
+
+
+def test_older_server_without_process_endpoint_is_not_asked_again(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, state = fake_api
+    state.processes_endpoint = False
+    agent = build_agent(make_config(url))
+
+    agent.cycle()  # 404: disabled for this run, the cycle still succeeds
+    agent._processes_sent_at = None
+    agent.cycle()
+
+    assert state.paths().count("/processes") == 1
+    assert len(state.telemetry) == 2
+
+
+def test_unknown_item_fields_are_dropped_instead_of_losing_the_batch(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, state = fake_api
+    state.unknown_item_fields = {("events", "computer"), ("services", "pid")}
+    events = FakeEvents()
+    events.queue = [
+        {"record_id": 1, "channel": "System", "computer": "PC", "message": "m"},
+        {"record_id": 2, "channel": "System", "computer": "PC", "message": "n"},
+    ]
+    agent = build_agent(make_config(url), events=events)
+    agent.inventory = lambda: {
+        "collected_at": sample()["timestamp"],
+        "services": [{"name": "Spooler", "status": "running", "pid": 1234}],
+    }
+
+    agent.cycle()
+    events.queue.append({"record_id": 3, "channel": "System", "computer": "PC", "message": "o"})
+    agent._events_sent_at = None
+    agent.cycle()
+
+    # Everything arrived, without the fields this (older) server does not know.
+    assert [e["record_id"] for e in state.events] == [1, 2, 3]
+    assert all("computer" not in e for e in state.events)
+    assert state.inventory[0]["services"] == [{"name": "Spooler", "status": "running"}]
+    # Learned once: the second batch went through on the first try.
+    assert state.paths().count("/events") == 3

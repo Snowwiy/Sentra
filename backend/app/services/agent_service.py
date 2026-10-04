@@ -1,6 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
+from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -26,13 +27,26 @@ from app.schemas.agent import (
     HeartbeatResponse,
     HostInfo,
 )
-from app.services.alert_service import AlertService, AlertThresholds
+from app.services.alert_service import resolve_offline_alert
 
 
-def mark_seen(asset: Asset, now: datetime) -> None:
-    """Record proof of life. `now` must be server time so agents cannot fake liveness."""
-    asset.last_seen_at = now
-    asset.status = AssetStatus.ONLINE
+def record_contact(session: Session, asset: Asset, now: datetime) -> None:
+    """Record proof of life from any authenticated agent call and resolve its offline alert.
+
+    `now` must be server time so agents cannot fake liveness. One UPDATE with GREATEST
+    because concurrent calls of one agent (heartbeat, telemetry, events, inventory) take
+    `now` before they commit, not necessarily in the same order: last_seen_at must never move
+    backwards. The UPDATE also takes the asset's row lock, which the offline sweeper honors
+    (AlertService.sweep_offline), so no offline alert is opened for an asset that is
+    reporting at that very moment. Every agent call resolves the offline alert, not only
+    heartbeats: the asset is shown online as soon as any of them arrives.
+    """
+    session.execute(
+        update(Asset)
+        .where(Asset.id == asset.id)
+        .values(last_seen_at=func.greatest(Asset.last_seen_at, now), status=AssetStatus.ONLINE)
+    )
+    resolve_offline_alert(session, asset.id, now)
 
 
 def apply_host_info(asset: Asset, host: HostInfo) -> None:
@@ -98,12 +112,9 @@ def reinstate_agent(session: Session, asset_public_id: UUID) -> Asset:
 
 
 class AgentService:
-    def __init__(
-        self, session: Session, thresholds: AlertThresholds, enrollment_key: str | None
-    ) -> None:
+    def __init__(self, session: Session, enrollment_key: str | None) -> None:
         self._session = session
         self._assets = AssetRepository(session)
-        self._alerts = AlertService(session, thresholds)
         self._enrollment_key = enrollment_key
 
     def register(
@@ -170,9 +181,14 @@ class AgentService:
     def heartbeat(self, data: HeartbeatRequest, token: str | None) -> HeartbeatResponse:
         asset = authenticate_agent(self._assets, data.agent_id, token)
         now = datetime.now(UTC)
-        mark_seen(asset, now)
+        record_contact(self._session, asset, now)
         if data.host is not None:
             apply_host_info(asset, data.host)
-        self._alerts.asset_seen(asset, now)
         self._session.commit()
-        return HeartbeatResponse(asset_id=asset.public_id, status=asset.status, last_seen_at=now)
+        return HeartbeatResponse(
+            asset_id=asset.public_id,
+            status=AssetStatus.ONLINE,
+            # The stored value: a delayed heartbeat never reports an older time than the
+            # newest contact already recorded.
+            last_seen_at=asset.last_seen_at or now,
+        )

@@ -12,7 +12,7 @@ from app.schemas.telemetry import (
     TelemetryHistory,
     TelemetrySnapshot,
 )
-from app.services.agent_service import authenticate_agent, mark_seen
+from app.services.agent_service import authenticate_agent, record_contact
 from app.services.alert_service import AlertService, AlertThresholds
 
 
@@ -39,8 +39,7 @@ class TelemetryService:
         # Receiving telemetry proves the agent is alive. Server time is used, not the
         # agent's clock, so a skewed agent cannot fake its liveness.
         now = datetime.now(UTC)
-        mark_seen(asset, now)
-        self._alerts.asset_seen(asset, now)
+        record_contact(self._session, asset, now)
         if stored:
             # Same transaction as the sample: alerts never reference data that was rolled back.
             # A duplicate changes no data, so there is nothing new to evaluate.

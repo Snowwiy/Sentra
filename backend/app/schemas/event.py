@@ -1,7 +1,7 @@
 from datetime import UTC, datetime
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator
 
 from app.models.event import EventLevel
 from app.schemas.common import BIGINT_MAX, RequestModel, ResponseModel
@@ -11,9 +11,7 @@ MAX_EVENTS_PER_BATCH = 500
 MAX_MESSAGE_LENGTH = 4000
 
 
-class EventIn(BaseModel):
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
-
+class EventIn(RequestModel):
     source: str = Field(min_length=1, max_length=32, examples=["windows_eventlog"])
     channel: str = Field(min_length=1, max_length=255, examples=["System"])
     record_id: int = Field(ge=0, le=BIGINT_MAX)
@@ -22,6 +20,8 @@ class EventIn(BaseModel):
     level: EventLevel
     # Long messages are truncated by the agent; the bound protects the API either way.
     message: str = Field(max_length=MAX_MESSAGE_LENGTH)
+    # Host name the event was recorded on (Windows <Computer>); optional for older agents.
+    computer: str | None = Field(default=None, max_length=255)
     occurred_at: AwareDatetime
 
     @field_validator("occurred_at")
@@ -54,9 +54,14 @@ class EventRead(ResponseModel):
     provider: str
     level: EventLevel
     message: str
+    record_id: int
+    computer: str | None
     occurred_at: datetime
 
 
 class EventList(ResponseModel):
     items: list[EventRead]
+    # Number of items in this page. Event tables grow large, so they are not counted.
     total: int
+    # True when more events match after this page (use `offset` to read them).
+    has_more: bool = False

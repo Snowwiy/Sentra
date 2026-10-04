@@ -3,13 +3,19 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import AgentToken, get_telemetry_service
+from app.api.responses import error_responses
 from app.schemas.telemetry import TelemetryAccepted, TelemetryCreate
 from app.services.telemetry_service import TelemetryService
 
 router = APIRouter(prefix="/telemetry", tags=["telemetry"])
 
 
-@router.post("", response_model=TelemetryAccepted, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "",
+    response_model=TelemetryAccepted,
+    status_code=status.HTTP_201_CREATED,
+    responses=error_responses(401, 413),
+)
 def ingest_telemetry(
     payload: TelemetryCreate,
     service: Annotated[TelemetryService, Depends(get_telemetry_service)],

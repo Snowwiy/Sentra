@@ -108,16 +108,19 @@ def unprotect_token(stored: object) -> str:
     if scheme == SCHEME_PLAIN:
         return value
     if scheme == SCHEME_DPAPI:
-        if sys.platform != "win32":
-            raise CredentialError("DPAPI-protected token can only be read on Windows")
-        try:
-            blob = base64.b64decode(value, validate=True)
-        except ValueError as exc:
-            raise CredentialError("corrupted DPAPI blob") from exc
-        try:
-            return _dpapi(blob, protect=False).decode()
-        except UnicodeDecodeError as exc:
-            raise CredentialError("decrypted token is not text") from exc
+        # Positive platform check (not an early `!= "win32"` raise): mypy only skips
+        # platform-specific code inside `if sys.platform == ...` blocks, so the early-raise
+        # form made `mypy` fail on Linux (and in CI) with `_dpapi` undefined.
+        if sys.platform == "win32":
+            try:
+                blob = base64.b64decode(value, validate=True)
+            except ValueError as exc:
+                raise CredentialError("corrupted DPAPI blob") from exc
+            try:
+                return _dpapi(blob, protect=False).decode()
+            except UnicodeDecodeError as exc:
+                raise CredentialError("decrypted token is not text") from exc
+        raise CredentialError("DPAPI-protected token can only be read on Windows")
     raise CredentialError(f"unknown token scheme {scheme!r}")
 
 

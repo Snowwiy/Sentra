@@ -2,11 +2,15 @@ import { Link } from "react-router-dom";
 import type { Alert, AlertRule, AlertSeverity } from "../api/types";
 import { formatDateTime, formatRelative } from "../lib/format";
 
-const RULE_LABELS: Record<AlertRule, string> = {
+export const RULE_LABELS: Record<AlertRule, string> = {
   asset_offline: "Activo offline",
   high_cpu: "CPU elevada",
   high_ram: "RAM elevada",
   disk_critical: "Disco crítico",
+  service_stopped: "Servicio detenido",
+  event_burst: "Ráfaga de errores",
+  admin_changed: "Cambio de administradores",
+  critical_event: "Evento crítico",
 };
 
 const SEVERITY_LABELS: Record<AlertSeverity, string> = {
@@ -53,6 +57,10 @@ export function AlertTable({ alerts, showAsset = true }: { alerts: Alert[]; show
               <td>
                 {alert.status === "open" ? (
                   <span className="alert-state alert-state--open">Abierta</span>
+                ) : alert.status === "acknowledged" ? (
+                  <span className="alert-state" title={formatDateTime(alert.acknowledged_at)}>
+                    Reconocida
+                  </span>
                 ) : (
                   <span className="muted" title={formatDateTime(alert.resolved_at)}>
                     Resuelta {formatRelative(alert.resolved_at)}

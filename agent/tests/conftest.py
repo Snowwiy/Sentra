@@ -35,6 +35,11 @@ class FakeApiState:
     revoked: set[str] = field(default_factory=set)
     # Inventory sections this fake server does not know (simulates an older backend).
     unknown_sections: set[str] = field(default_factory=set)
+    # Item fields it does not know, as (list name, field), e.g. ("events", "computer").
+    unknown_item_fields: set[tuple[str, str]] = field(default_factory=set)
+    processes: list[dict[str, Any]] = field(default_factory=list)
+    # False simulates a backend without the /processes endpoint (404).
+    processes_endpoint: bool = True
     # When set, every request is throttled with 429 and this Retry-After value.
     throttle_retry_after: str | None = None
     headers: list[dict[str, str]] = field(default_factory=list)
@@ -112,9 +117,14 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 self._send(401, {"error": {"code": "unauthorized", "message": "bad token"}})
             elif path == "/agents/heartbeat":
                 self._send(200, {"asset_id": state.agents[agent_id], "status": "online"})
+            elif self._reject_unknown_item_fields(body):
+                return
             elif path == "/events":
                 state.events.extend(body["events"])
                 self._send(201, {"asset_id": state.agents[agent_id]})
+            elif path == "/processes" and state.processes_endpoint:
+                state.processes.append(body)
+                self._send(201, {"asset_id": state.agents[agent_id], "stored": True})
             elif path == "/inventory":
                 extra = sorted(state.unknown_sections & set(body))
                 if extra:
@@ -145,6 +155,18 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 self._send(201, {"asset_id": state.agents[agent_id], "stored": stored})
             else:
                 self._send(404, {"error": {"code": "http_error", "message": "Not Found"}})
+
+        def _reject_unknown_item_fields(self, body: dict[str, Any]) -> bool:
+            details = [
+                {"loc": ["body", section, index, name], "msg": "Extra", "type": "extra_forbidden"}
+                for section, name in sorted(state.unknown_item_fields)
+                for index, item in enumerate(body.get(section) or [])
+                if isinstance(item, dict) and name in item
+            ]
+            if details:
+                error = {"code": "validation_error", "message": "bad", "details": details}
+                self._send(422, {"error": error})
+            return bool(details)
 
     return Handler
 

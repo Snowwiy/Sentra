@@ -114,3 +114,35 @@ def test_invalid_event_batches_are_rejected(
     client: TestClient, registered_agent: dict[str, Any], events: list[dict[str, Any]]
 ) -> None:
     assert send(client, registered_agent["payload"]["agent_id"], events).status_code == 422
+
+
+def test_event_filters_search_and_pagination(
+    client: TestClient, registered_agent: dict[str, Any]
+) -> None:
+    agent_id = registered_agent["payload"]["agent_id"]
+    send(
+        client,
+        agent_id,
+        [
+            event(1, computer="PC-ADMIN-01"),
+            event(2, channel="Application", provider="Application Error", event_code=1000),
+            event(3, message="Disk 100% full_now"),
+        ],
+    )
+
+    def codes(**params: Any) -> list[int]:
+        body = client.get("/api/v1/events", params=params).json()
+        return [item["event_code"] for item in body["items"]]
+
+    assert codes(channel="Application") == [1000]
+    assert codes(event_code=1000) == [1000]
+    assert codes(q="application ERROR") == [1000]  # provider, case-insensitive
+    assert codes(q="100% full_") == [7034]  # wildcards in the search are literal
+    assert codes(q="100%_full") == []
+    first = client.get("/api/v1/events", params={"limit": 2}).json()
+    rest = client.get("/api/v1/events", params={"limit": 2, "offset": 2}).json()
+    assert (len(first["items"]), first["has_more"]) == (2, True)
+    assert (len(rest["items"]), rest["has_more"]) == (1, False)
+    by_record = {item["record_id"]: item for item in first["items"] + rest["items"]}
+    assert by_record[1]["computer"] == "PC-ADMIN-01"
+    assert by_record[2]["computer"] is None  # older agents do not send it

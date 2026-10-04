@@ -6,11 +6,18 @@ collected independently so one failing source (e.g. access denied) does not lose
 Limits mirror the API's validation bounds so a busy host never produces a rejected payload.
 """
 
+import ipaddress
+import json
 import logging
+import os
+import platform
+import re
 import socket
+import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import psutil
@@ -24,12 +31,16 @@ MAX_SERVICES = 2000
 MAX_SOFTWARE = 5000
 MAX_DISKS = 64
 MAX_CONNECTIONS = 1000
+MAX_ACCOUNTS = 1000
 
 
 def _clip(value: object, length: int) -> str | None:
     if value is None:
         return None
-    text = str(value).strip()
+    # NUL can appear in raw OS strings (e.g. a malformed registry value) and the API rejects
+    # it (PostgreSQL cannot store it): drop it here so one bad entry does not cost the whole
+    # snapshot.
+    text = str(value).replace("\x00", "").strip()
     return text[:length] or None
 
 
@@ -163,7 +174,7 @@ def collect_connections() -> list[dict[str, Any]]:
 
 def collect_services() -> list[dict[str, Any]]:
     if sys.platform != "win32":
-        return []  # systemd units: future Linux support
+        return _systemd_services()
     services = []
     for service in psutil.win_service_iter():
         try:
@@ -176,6 +187,8 @@ def collect_services() -> list[dict[str, Any]]:
                 "display_name": _clip(info.get("display_name"), 512),
                 "status": _clip(info.get("status"), 32) or "unknown",
                 "start_type": _clip(info.get("start_type"), 32),
+                # 🪟 VALIDACIÓN LOCAL EN WINDOWS: psutil reports 0/None for stopped ones.
+                "pid": info.get("pid") or None,
             }
         )
     return services[:MAX_SERVICES]
@@ -183,18 +196,21 @@ def collect_services() -> list[dict[str, Any]]:
 
 def collect_software() -> list[dict[str, Any]]:
     if sys.platform != "win32":
-        return []  # dpkg/rpm: future Linux support
+        return _linux_packages()
     import winreg
 
     uninstall = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Uninstall"
-    # 64-bit and 32-bit (WOW6432Node) machine-wide installs, plus per-user installs.
+    # Native and 32-bit (WOW6432Node) machine-wide installs, plus per-user installs, each
+    # with the architecture its registry view implies (per-user: unknown).
+    # 🪟 VALIDACIÓN LOCAL EN WINDOWS (install date and architecture).
     sources = [
-        (winreg.HKEY_LOCAL_MACHINE, uninstall),
+        (winreg.HKEY_LOCAL_MACHINE, uninstall, windows_architecture(platform.machine())),
         (
             winreg.HKEY_LOCAL_MACHINE,
             r"SOFTWARE\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall",
+            "x86",
         ),
-        (winreg.HKEY_CURRENT_USER, uninstall),
+        (winreg.HKEY_CURRENT_USER, uninstall, None),
     ]
 
     def value(key: Any, name: str) -> Any:
@@ -205,7 +221,7 @@ def collect_software() -> list[dict[str, Any]]:
 
     seen: set[tuple[str, str | None]] = set()
     software = []
-    for hive, path in sources:
+    for hive, path, architecture in sources:
         try:
             root = winreg.OpenKey(hive, path)
         except OSError:
@@ -228,6 +244,8 @@ def collect_software() -> list[dict[str, Any]]:
                                 "name": name,
                                 "version": version,
                                 "publisher": _clip(value(entry, "Publisher"), 512),
+                                "install_date": registry_date(value(entry, "InstallDate")),
+                                "architecture": architecture,
                             }
                         )
                 except OSError:
@@ -236,7 +254,419 @@ def collect_software() -> list[dict[str, Any]]:
     return software[:MAX_SOFTWARE]
 
 
-SECTIONS: dict[str, Callable[[], list[dict[str, Any]]]] = {
+def windows_architecture(machine: str) -> str | None:
+    """Native architecture name for the 64-bit registry view (platform.machine())."""
+    return {"amd64": "x64", "x86_64": "x64", "arm64": "arm64", "x86": "x86"}.get(machine.lower())
+
+
+def registry_date(raw: object) -> str | None:
+    """Uninstall InstallDate is "YYYYMMDD" by convention; anything else is dropped."""
+    text = str(raw or "").strip()
+    try:
+        return datetime.strptime(text, "%Y%m%d").date().isoformat() if len(text) == 8 else None
+    except ValueError:
+        return None
+
+
+# --- Linux ------------------------------------------------------------------------------
+#
+# Read with the distribution's own read-only query tools, through absolute paths so a binary
+# planted earlier in PATH is never run (same reasoning as wevtutil.exe on Windows). No shell,
+# fixed arguments, bounded run time.
+
+_SYSTEMCTL = ("/usr/bin/systemctl", "/bin/systemctl")
+_DPKG_QUERY = ("/usr/bin/dpkg-query", "/bin/dpkg-query")
+_RPM = ("/usr/bin/rpm", "/bin/rpm")
+# Maintainer fields look like "Ubuntu Developers <ubuntu-devel@lists.ubuntu.com>".
+_EMAIL = re.compile(r"\s*<[^>]*>")
+
+
+def _first_existing(candidates: tuple[str, ...]) -> str | None:
+    return next((path for path in candidates if os.path.isfile(path)), None)
+
+
+def _run(executable: str, *args: str) -> str:
+    result = subprocess.run(  # noqa: S603  (absolute path, fixed arguments, no shell)
+        [executable, *args], capture_output=True, timeout=60, check=False
+    )
+    if result.returncode != 0:
+        error = result.stderr.decode("utf-8", "replace").strip()
+        raise OSError(f"{os.path.basename(executable)} failed ({result.returncode}): {error}")
+    return result.stdout.decode("utf-8", "replace")
+
+
+def parse_systemd_services(units: str, unit_files: str) -> list[dict[str, Any]]:
+    """Parse `systemctl list-units --plain` and `list-unit-files` output into API services.
+
+    `status` is the unit's sub-state (running, exited, dead, failed...), which is what the
+    dashboard colors; `start_type` is the unit file state (enabled, disabled, static...).
+    """
+    start_types = {}
+    for line in unit_files.splitlines():
+        fields = line.split()
+        if len(fields) >= 2:
+            start_types[fields[0]] = fields[1]
+    services = []
+    for line in units.splitlines():
+        # UNIT LOAD ACTIVE SUB DESCRIPTION (the description may contain spaces).
+        fields = line.split(None, 4)
+        if len(fields) < 4 or not fields[0].endswith(".service") or fields[1] == "not-found":
+            continue
+        unit = fields[0]
+        services.append(
+            {
+                "name": _clip(unit.removesuffix(".service"), 255) or "unknown",
+                "display_name": _clip(fields[4] if len(fields) > 4 else None, 512),
+                "status": _clip(fields[3], 32) or "unknown",
+                "start_type": _clip(start_types.get(unit), 32),
+            }
+        )
+    return services[:MAX_SERVICES]
+
+
+def _systemd_services() -> list[dict[str, Any]]:
+    # sd_booted(): systemd manages this host only if this directory exists. Containers and
+    # other init systems have no units to report; that is not an error.
+    systemctl = _first_existing(_SYSTEMCTL)
+    if systemctl is None or not os.path.isdir("/run/systemd/system"):
+        return []
+    common = ("--type=service", "--no-legend", "--no-pager", "--plain")
+    units = _run(systemctl, "list-units", "--all", *common)
+    unit_files = _run(systemctl, "list-unit-files", *common)
+    return parse_systemd_services(units, unit_files)
+
+
+def parse_package_list(output: str) -> list[dict[str, Any]]:
+    """Parse tab-separated package lines (dpkg-query or rpm output).
+
+    Fields: name, version, publisher, then optionally architecture and install time (epoch
+    seconds, rpm only; dpkg does not record one).
+    """
+    seen: set[tuple[str, str | None]] = set()
+    software = []
+    for line in output.splitlines():
+        fields = line.split("\t")
+        if not 3 <= len(fields) <= 5:
+            continue
+        fields += [""] * (5 - len(fields))
+        name = _clip(fields[0], 512)
+        version = _clip(fields[1], 128)
+        publisher = _EMAIL.sub("", fields[2])
+        if not name or (name, version) in seen:
+            continue  # multi-arch packages (libc6:amd64 and :i386) report the same version
+        seen.add((name, version))
+        software.append(
+            {
+                "name": name,
+                "version": version,
+                # rpm prints "(none)" for packages without a vendor.
+                "publisher": None if publisher == "(none)" else _clip(publisher, 512),
+                "architecture": _clip(fields[3], 16) if fields[3] != "(none)" else None,
+                "install_date": _epoch_date(fields[4]),
+            }
+        )
+    software.sort(key=lambda item: str(item["name"]).lower())
+    return software[:MAX_SOFTWARE]
+
+
+def _installed_dpkg_lines(output: str) -> str:
+    """Keep the packages dpkg reports as installed, without the status column.
+
+    db:Status-Abbrev is three letters: desired action, package state, error flag. The second
+    one is "i" for installed, whatever the first says ("ii" normal, "hi" on hold); removed
+    packages with leftover configuration ("rc") are not installed software.
+    """
+    installed = []
+    for line in output.splitlines():
+        status, _, rest = line.partition("\t")
+        if len(status) >= 2 and status[1] == "i":
+            installed.append(rest)
+    return "\n".join(installed)
+
+
+def _linux_packages() -> list[dict[str, Any]]:
+    dpkg_query = _first_existing(_DPKG_QUERY)
+    if dpkg_query is not None:
+        output = _run(
+            dpkg_query,
+            "--show",
+            "--showformat=${db:Status-Abbrev}\\t${Package}\\t${Version}\\t${Maintainer}"
+            "\\t${Architecture}\\n",
+        )
+        return parse_package_list(_installed_dpkg_lines(output))
+    rpm = _first_existing(_RPM)
+    if rpm is not None:
+        return parse_package_list(
+            _run(
+                rpm,
+                "--query",
+                "--all",
+                "--queryformat",
+                "%{NAME}\\t%{VERSION}-%{RELEASE}\\t%{VENDOR}\\t%{ARCH}\\t%{INSTALLTIME}\\n",
+            )
+        )
+    return []  # other package managers: not supported yet
+
+
+def _epoch_date(raw: str) -> str | None:
+    text = raw.strip()
+    if not text.isdigit():
+        return None
+    try:
+        return datetime.fromtimestamp(int(text), UTC).date().isoformat()
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+# --- Local accounts ------------------------------------------------------------------------
+#
+# Identity and state only (name, enabled, administrator, last logon). Never passwords, hashes
+# or anything else secret: the collectors do not read them and the API rejects extra fields.
+
+# Windows PowerShell 5.1 ships the LocalAccounts module. The Administrators group is found by
+# its well-known SID, so the result does not depend on the Windows display language.
+# Get-LocalGroupMember fails on hosts with orphaned (unresolvable) members: then membership is
+# reported as unknown (null) for everyone instead of guessing.
+_ACCOUNTS_SCRIPT = """
+[Console]::OutputEncoding = [System.Text.Encoding]::UTF8
+$ErrorActionPreference = 'Stop'
+$admins = $null
+try {
+  $admins = @(Get-LocalGroupMember -SID 'S-1-5-32-544' | ForEach-Object { [string]$_.SID.Value })
+} catch { $admins = $null }
+$users = @(Get-LocalUser | ForEach-Object {
+  [pscustomobject]@{
+    name = [string]$_.Name
+    sid = [string]$_.SID.Value
+    enabled = [bool]$_.Enabled
+    last_logon = if ($_.LastLogon) { $_.LastLogon.ToUniversalTime().ToString('o') } else { $null }
+  }
+})
+[pscustomobject]@{ users = $users; admins = $admins } | ConvertTo-Json -Depth 4 -Compress
+"""
+# Groups whose members can become root on Debian/Ubuntu (sudo, admin) and RHEL/Fedora (wheel).
+_LINUX_ADMIN_GROUPS = {"sudo", "wheel", "admin"}
+
+
+def _powershell() -> str:
+    root = Path(os.environ.get("SYSTEMROOT", r"C:\Windows"))
+    # A 32-bit Python on 64-bit Windows is redirected to the 32-bit PowerShell, which has no
+    # LocalAccounts module; Sysnative reaches the native one.
+    system = "Sysnative" if os.environ.get("PROCESSOR_ARCHITEW6432") else "System32"
+    return str(root / system / "WindowsPowerShell" / "v1.0" / "powershell.exe")
+
+
+def parse_windows_accounts(output: str) -> list[dict[str, Any]]:
+    """Parse the JSON printed by _ACCOUNTS_SCRIPT."""
+    data = json.loads(output.lstrip("\ufeff") or "{}")
+    users = data.get("users") or []
+    if isinstance(users, dict):  # ConvertTo-Json unwraps single-element arrays
+        users = [users]
+    admins = data.get("admins")
+    admin_sids = None if admins is None else {str(sid) for sid in _as_list(admins)}
+    accounts = []
+    for user in users:
+        if not isinstance(user, dict) or not user.get("name"):
+            continue
+        accounts.append(
+            {
+                "name": _clip(user["name"], 255),
+                "enabled": user.get("enabled") if isinstance(user.get("enabled"), bool) else None,
+                "is_admin": None if admin_sids is None else str(user.get("sid")) in admin_sids,
+                "last_logon": _iso_utc(user.get("last_logon")),
+            }
+        )
+    return accounts[:MAX_ACCOUNTS]
+
+
+def _as_list(value: Any) -> list[Any]:
+    return value if isinstance(value, list) else [value]
+
+
+def _iso_utc(value: Any) -> str | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed.astimezone(UTC).isoformat() if parsed.tzinfo else None
+
+
+def parse_linux_accounts(passwd: str, group: str) -> list[dict[str, Any]]:
+    """Human accounts (root and UID 1000-65533) from /etc/passwd and /etc/group.
+
+    Without root the shadow file is unreadable, so a locked password cannot be seen:
+    `enabled` is False only for accounts that cannot log in at all (nologin/false shell)
+    and unknown (null) otherwise.
+    """
+    admin_gids: set[str] = set()
+    admin_members: set[str] = set()
+    for line in group.splitlines():
+        fields = line.split(":")
+        if len(fields) >= 4 and fields[0] in _LINUX_ADMIN_GROUPS:
+            admin_gids.add(fields[2])
+            admin_members.update(m for m in fields[3].split(",") if m)
+    accounts = []
+    for line in passwd.splitlines():
+        fields = line.split(":")
+        if len(fields) < 7 or not fields[2].isdigit():
+            continue
+        name, uid, gid, shell = fields[0], int(fields[2]), fields[3], fields[6]
+        if uid != 0 and not 1000 <= uid < 65534:
+            continue  # system accounts (daemons) and nobody
+        no_login = shell.rstrip().endswith(("nologin", "/false"))
+        accounts.append(
+            {
+                "name": _clip(name, 255),
+                "enabled": False if no_login else None,
+                "is_admin": uid == 0 or name in admin_members or gid in admin_gids,
+                "last_logon": None,
+            }
+        )
+    return accounts[:MAX_ACCOUNTS]
+
+
+def collect_accounts() -> list[dict[str, Any]]:
+    if sys.platform == "win32":
+        # 🪟 VALIDACIÓN LOCAL EN WINDOWS: PowerShell 5.1 LocalAccounts, as a standard user.
+        return parse_windows_accounts(
+            _run(_powershell(), "-NoProfile", "-NonInteractive", "-Command", _ACCOUNTS_SCRIPT)
+        )
+    try:
+        passwd = Path("/etc/passwd").read_text(encoding="utf-8", errors="replace")
+        group = Path("/etc/group").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return []
+    return parse_linux_accounts(passwd, group)
+
+
+# --- Network summary (gateways, DNS servers) -----------------------------------------------
+
+_MAX_ADDRESSES = 16
+
+
+def ip_list(values: Any) -> list[str]:
+    """Valid, distinct IP addresses from registry/text values ("a b,c" or a list of them)."""
+    found: list[str] = []
+    for value in _flatten(values):
+        for token in re.split(r"[\s,;]+", str(value or "")):
+            token = token.split("%", 1)[0]  # IPv6 zone index
+            try:
+                address = ipaddress.ip_address(token)
+            except ValueError:
+                continue
+            text = str(address)
+            if not address.is_unspecified and text not in found:
+                found.append(text)
+    return found[:_MAX_ADDRESSES]
+
+
+def _flatten(values: Any) -> list[Any]:
+    # REG_MULTI_SZ values are lists, collected into a list per interface.
+    if not isinstance(values, list):
+        return [values]
+    return [item for value in values for item in _flatten(value)]
+
+
+def parse_proc_route(text: str) -> list[str]:
+    """Default IPv4 gateways from /proc/net/route (hex, little-endian)."""
+    gateways = []
+    for line in text.splitlines()[1:]:
+        fields = line.split()
+        if len(fields) < 4 or fields[1] != "00000000":
+            continue
+        try:
+            if int(fields[3], 16) & 0x2:  # RTF_GATEWAY
+                gateways.append(str(ipaddress.IPv4Address(bytes.fromhex(fields[2])[::-1])))
+        except ValueError:
+            continue
+    return ip_list(gateways)
+
+
+def parse_resolv_conf(text: str) -> list[str]:
+    return ip_list(
+        [
+            line.split()[1]
+            for line in text.splitlines()
+            if line.strip().startswith("nameserver") and len(line.split()) > 1
+        ]
+    )
+
+
+def _windows_network() -> dict[str, Any]:
+    """Gateways/DNS of the interfaces that are up, from the TCP/IP registry keys.
+
+    🪟 VALIDACIÓN LOCAL EN WINDOWS. Read-only registry access, no admin rights. Static values
+    win over DHCP ones, as Windows itself does. Interfaces are matched by their friendly name
+    (Connection\\Name), the same name psutil reports, so adapters that are down (whose
+    last DHCP values stay in the registry) are left out.
+    """
+    if sys.platform != "win32":  # keeps mypy on Linux from checking winreg calls
+        return {"gateways": [], "dns_servers": []}
+    import winreg
+
+    def values(key: Any, *names: str) -> Any:
+        for name in names:
+            try:
+                value = winreg.QueryValueEx(key, name)[0]
+            except OSError:
+                continue
+            if ip_list(value):
+                return value
+        return None
+
+    def subkeys(path: str) -> list[str]:
+        try:
+            with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, path) as key:
+                return [winreg.EnumKey(key, i) for i in range(winreg.QueryInfoKey(key)[0])]
+        except OSError:
+            return []
+
+    network_class = (
+        r"SYSTEM\CurrentControlSet\Control\Network\{4D36E972-E325-11CE-BFC1-08002BE10318}"
+    )
+    friendly: dict[str, str] = {}
+    for guid in subkeys(network_class):
+        try:
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE, rf"{network_class}\{guid}\Connection"
+            ) as key:
+                friendly[guid.lower()] = str(winreg.QueryValueEx(key, "Name")[0])
+        except OSError:
+            continue
+    up = {name for name, stats in psutil.net_if_stats().items() if stats.isup}
+    gateways: list[Any] = []
+    dns: list[Any] = []
+    for service in ("Tcpip", "Tcpip6"):
+        base = rf"SYSTEM\CurrentControlSet\Services\{service}\Parameters\Interfaces"
+        for guid in subkeys(base):
+            if friendly.get(guid.lower()) not in up:
+                continue
+            try:
+                with winreg.OpenKey(winreg.HKEY_LOCAL_MACHINE, rf"{base}\{guid}") as key:
+                    gateways.append(values(key, "DefaultGateway", "DhcpDefaultGateway"))
+                    dns.append(values(key, "NameServer", "DhcpNameServer"))
+            except OSError:
+                continue
+    return {"gateways": ip_list(gateways), "dns_servers": ip_list(dns)}
+
+
+def collect_network() -> dict[str, Any] | None:
+    if sys.platform == "win32":
+        return _windows_network()
+    try:
+        route = Path("/proc/net/route").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        route = ""
+    try:
+        resolv = Path("/etc/resolv.conf").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        resolv = ""
+    return {"gateways": parse_proc_route(route), "dns_servers": parse_resolv_conf(resolv)}
+
+
+SECTIONS: dict[str, Callable[[], Any]] = {
     "interfaces": collect_interfaces,
     "disks": collect_disks,
     "users": collect_users,
@@ -244,7 +674,11 @@ SECTIONS: dict[str, Callable[[], list[dict[str, Any]]]] = {
     "services": collect_services,
     "software": collect_software,
     "connections": collect_connections,
+    "accounts": collect_accounts,
+    "network": collect_network,
 }
+# What a failed section is reported as: empty list, or no summary at all.
+_EMPTY: dict[str, Any] = {"network": None}
 
 
 def collect_inventory() -> dict[str, Any]:
@@ -254,5 +688,5 @@ def collect_inventory() -> dict[str, Any]:
             snapshot[section] = collector()
         except Exception:
             logger.warning("inventory section failed", extra={"section": section}, exc_info=True)
-            snapshot[section] = []
+            snapshot[section] = _EMPTY.get(section, [])
     return snapshot

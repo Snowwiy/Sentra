@@ -9,7 +9,7 @@ import pytest
 from sentra_agent.collectors import collect_host_info, collect_metrics
 from sentra_agent.config import load_config
 from sentra_agent.identity import IdentityStore
-from sentra_agent.inventory import collect_inventory
+from sentra_agent.inventory import _clip, collect_inventory
 
 
 def test_config_precedence_file_env_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,3 +98,17 @@ def test_real_disks_and_connections_are_reported() -> None:
             ipaddress.ip_address(conn["local_address"])
     statuses = [c["status"] for c in snapshot["connections"]]
     assert statuses == sorted(statuses, key=lambda s: s != "listen"), "listeners first"
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Contoso App\x00", "Contoso App"),  # embedded/trailing NUL from a raw OS string
+        ("\x00\x00", None),  # nothing left: reported as missing, not as an empty name
+        ("  spaced  ", "spaced"),
+        (None, None),
+        (12345, "123"),  # non-strings are stringified, then clipped to the length
+    ],
+)
+def test_clip_normalizes_os_strings_for_the_api(raw: object, expected: str | None) -> None:
+    assert _clip(raw, 3 if raw == 12345 else 255) == expected

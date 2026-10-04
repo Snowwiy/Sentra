@@ -60,6 +60,9 @@ class SystemEvent(Base):
         )
     )
     message: Mapped[str] = mapped_column(Text)
+    # Host name recorded in the event itself (Windows <Computer>). Usually the asset's own
+    # name; differs for forwarded events. Null for events sent by older agents.
+    computer: Mapped[str | None] = mapped_column(String(255))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

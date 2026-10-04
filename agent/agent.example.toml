@@ -4,6 +4,7 @@
 api_url = "http://127.0.0.1:8000"
 interval_seconds = 30
 inventory_interval_seconds = 900
+processes_interval_seconds = 60
 request_timeout_seconds = 10
 max_backoff_seconds = 300
 buffer_size = 120

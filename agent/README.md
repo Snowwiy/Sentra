@@ -13,7 +13,13 @@ Python agent that reports this host to the Sentra API. Windows first, Linux-comp
 - The token is encrypted at rest with Windows DPAPI (current-user scope, via `crypt32.dll`):
   `identity.json` holds only the encrypted blob. Older plain-text identity files are migrated on
   start. Known secrets and `Bearer ...` values are redacted from every log line.
-- Every 60 s: sends new warnings/errors from the Windows Event Log (System, Application).
+- Every 60 s: sends new warnings/errors from the Windows Event Log (System, Application,
+  PowerShell/Operational without message text) and selected Security events (account, group
+  and logon-failure changes). Security needs administrator rights: as a standard user the
+  agent logs once that the channel is not readable and skips it; it never changes privileges.
+- Every `processes_interval_seconds` (default 60, 15–3600): sends a process snapshot (pid,
+  parent, name, executable, user, CPU %, memory, start time; at most 2000). The server keeps
+  only the latest one.
 - Every `interval_seconds` (default 30): collects CPU, RAM, system disk and uptime, sends a
   heartbeat and the telemetry sample.
 - API down (network, timeout, 5xx, 408/409/429): keeps up to `buffer_size` samples, mirrored to
@@ -22,9 +28,13 @@ Python agent that reports this host to the Sentra API. Windows first, Linux-comp
   samples in order once the API is back. Each sample carries a `sample_id` fixed when it is
   measured, so a resend after a lost response is not stored twice. 413/422 are never retried.
 - Sends an inventory snapshot at start-up and every 15 min: network interfaces, disks,
-  logged-in users, top 100 processes by memory, services (Windows), installed software (Windows
-  registry, read-only) and network connections (listeners + established TCP, with owning
-  process; read from the OS tables, no capture, no admin). Sections the server does not know
+  logged-in users, top 100 processes by memory, services with their pid (Windows services;
+  systemd units on Linux), installed software with install date and architecture (Windows
+  registry, read-only; dpkg or rpm on Linux), local accounts with enabled/administrator state
+  (`Get-LocalUser`/`Get-LocalGroupMember` on Windows, `/etc/passwd` + `/etc/group` on Linux;
+  never passwords or hashes), default gateways and DNS servers, and network
+  connections (listeners + established TCP, with owning
+  process; read from the OS tables, no capture, no admin). Sections or fields the server does not know
   yet are dropped automatically (422 `extra_forbidden`) so the rest still arrives.
 - JSON logs to the console and to a rotating file (5 × 1 MB).
 

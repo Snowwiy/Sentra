@@ -138,10 +138,39 @@ def test_health_and_meta() -> None:
         call("GET", "/health", headers={"X-Request-ID": "qa-123"}).headers.get("x-request-id")
         == "qa-123",
     )
+    r = call("GET", "/health", headers={"X-Request-ID": "bad id with spaces"})
+    echoed = r.headers.get("x-request-id", "")
+    check("untrusted X-Request-ID replaced", echoed != "bad id with spaces" and len(echoed) == 36)
+    check(
+        "security headers (nosniff, no-store)",
+        r.headers.get("x-content-type-options") == "nosniff"
+        and r.headers.get("cache-control") == "no-store",
+        r.headers,
+    )
     r = call("GET", "/does-not-exist")
     check("unknown route 404 envelope", r.status == 404 and is_error_envelope(r), r.body)
     r = call("DELETE", "/assets")
     check("wrong method 405 envelope", r.status == 405 and is_error_envelope(r), (r.status, r.body))
+
+    # The published contract documents the real error envelope (development only: production
+    # hides the OpenAPI document).
+    root = API.removesuffix("/api/v1")
+    try:
+        with urllib.request.urlopen(root + "/openapi.json", timeout=15) as response:  # noqa: S310
+            spec = json.loads(response.read())
+        documented = spec["paths"]["/api/v1/telemetry"]["post"]["responses"]
+        check(
+            "OpenAPI documents the error envelope",
+            all(
+                documented[status]["content"]["application/json"]["schema"]["$ref"].endswith(
+                    "/ErrorResponse"
+                )
+                for status in ("401", "413", "422", "503")
+            ),
+            documented,
+        )
+    except urllib.error.HTTPError as error:
+        check("OpenAPI hidden (production)", error.code == 404, error.code)
 
 
 def test_cors() -> None:
@@ -519,10 +548,17 @@ def test_hardening() -> None:
             r.status == 413 and is_error_envelope(r, "payload_too_large"),
             (r.status, r.body),
         )
-    except ConnectionResetError:
-        # The server answers 413 and closes while urllib is still uploading, so on Windows the
-        # client may only see the reset. That still proves the body was rejected early.
-        check("oversized body rejected early (connection closed)", True)
+    except (ConnectionResetError, BrokenPipeError, urllib.error.URLError) as exc:
+        # The server answers 413 and closes while urllib is still uploading, so the client may
+        # only see the reset. That still proves the body was rejected early. Windows raises the
+        # bare ConnectionResetError; on Linux urllib wraps it in URLError(reason=...), which
+        # must not be confused with a genuinely unreachable API (that would fail elsewhere).
+        reason = exc.reason if isinstance(exc, urllib.error.URLError) else exc
+        check(
+            "oversized body rejected early (connection closed)",
+            isinstance(reason, ConnectionResetError | BrokenPipeError),
+            repr(exc),
+        )
 
     agent_id, token, asset_id = enroll("qa-idempotency")
     other_id, other_token, _ = enroll("qa-idempotency-2")
@@ -554,6 +590,144 @@ def test_hardening() -> None:
     check(
         "invalid sample_id -> 422",
         call("POST", "/telemetry", sample(agent_id, sample_id="abc"), bearer(token)).status == 422,
+    )
+
+    # PostgreSQL cannot store U+0000 in text/JSONB. It must be a final 422: a 500 makes agents
+    # back off and resend the same payload forever.
+    nul_requests = [
+        (
+            "NUL in hostname -> 422 (not 500)",
+            "/agents/register",
+            {**host(str(uuid.uuid4())), "hostname": "nul\u0000host"},
+            {"X-Enrollment-Key": KEY},
+        ),
+        (
+            "NUL in event message -> 422 (not 500)",
+            "/events",
+            {"agent_id": agent_id, "events": [event(1, message="bad\u0000message")]},
+            bearer(token),
+        ),
+        (
+            "NUL in inventory string (JSONB) -> 422 (not 500)",
+            "/inventory",
+            {"agent_id": agent_id, "collected_at": now_iso(), "software": [{"name": "a\u0000"}]},
+            bearer(token),
+        ),
+    ]
+    for name, path, body, headers in nul_requests:
+        r = call("POST", path, body, headers)
+        rejected = r.status == 422 and is_error_envelope(r, "validation_error")
+        check(name, rejected, (r.status, r.body))
+
+
+def test_operational() -> None:
+    """Process snapshots, inventory changes, inventory/event-based alerts and list filters."""
+    agent_id, token, asset_id = enroll("qa-operational")
+    auth = bearer(token)
+
+    process = {"pid": 4, "ppid": None, "name": "System", "memory_bytes": 1, "cpu_percent": 2.5}
+    r = call(
+        "POST",
+        "/processes",
+        {"agent_id": agent_id, "collected_at": now_iso(), "processes": [process]},
+        auth,
+    )
+    check("process snapshot -> 201", r.status == 201 and r.body.get("stored") is True, r.body)
+    late = call(
+        "POST",
+        "/processes",
+        {"agent_id": agent_id, "collected_at": now_iso(timedelta(minutes=-5)), "processes": []},
+        auth,
+    )
+    check("older process snapshot not stored", late.body.get("stored") is False, late.body)
+    r = call("GET", f"/assets/{asset_id}/processes")
+    check(
+        "latest process snapshot readable",
+        r.status == 200 and [p["pid"] for p in r.body["processes"]] == [4],
+        r.body,
+    )
+    r = call(
+        "POST",
+        "/processes",
+        {
+            "agent_id": agent_id,
+            "collected_at": now_iso(),
+            "processes": [{**process, "cpu_percent": 900}],
+        },
+        auth,
+    )
+    check("process cpu over 100 -> 422", r.status == 422 and is_error_envelope(r), r.body)
+
+    def inventory(at: timedelta, **sections: Any) -> Response:
+        return call(
+            "POST",
+            "/inventory",
+            {"agent_id": agent_id, "collected_at": now_iso(at), **sections},
+            auth,
+        )
+
+    def service(status: str) -> list[dict[str, Any]]:
+        return [{"name": "WinDefend", "status": status, "start_type": "automatic"}]
+
+    inventory(timedelta(minutes=-3), services=service("running"), software=[{"name": "A"}])
+    inventory(timedelta(minutes=-2), services=service("stopped"), software=[{"name": "B"}])
+    changes = call("GET", f"/assets/{asset_id}/changes").body
+    kinds = sorted((c["category"], c["kind"]) for c in changes.get("items", []))
+    check(
+        "inventory changes detected",
+        kinds == [("service", "stopped"), ("software", "added"), ("software", "removed")],
+        changes,
+    )
+    r = call("GET", f"/alerts?asset_id={asset_id}&rule=service_stopped&active=true")
+    check(
+        "watched service stopped -> one active alert",
+        r.status == 200 and r.body["total"] == 1 and r.body["items"][0]["status"] == "open",
+        r.body,
+    )
+    inventory(timedelta(minutes=-1), services=service("running"), software=[{"name": "B"}])
+    r = call("GET", f"/alerts?asset_id={asset_id}&rule=service_stopped")
+    check("service back -> alert resolved", r.body["items"][0]["status"] == "resolved", r.body)
+
+    shutdown = event(70, provider="EventLog", event_code=6008, message="Unexpected shutdown")
+    call("POST", "/events", {"agent_id": agent_id, "events": [shutdown]}, auth)
+    call("POST", "/events", {"agent_id": agent_id, "events": [shutdown]}, auth)  # resend
+    r = call("GET", f"/alerts?asset_id={asset_id}&rule=critical_event")
+    alert = (r.body.get("items") or [{}])[0]
+    check(
+        "critical event -> alert linked to the event, resend not counted",
+        alert.get("occurrences") == 1 and alert.get("event_id") is not None,
+        r.body,
+    )
+    r = call("GET", f"/alerts/{alert.get('alert_id')}")
+    check("alert detail", r.status == 200 and r.body.get("rule") == "critical_event", r.body)
+    check("unknown alert -> 404", call("GET", f"/alerts/{uuid.uuid4()}").status == 404)
+    r = call("GET", f"/alerts?asset_id={asset_id}&q=WINDEFEND")
+    check("alert search is case-insensitive", r.body.get("total") == 1, r.body)
+    r = call("GET", "/alerts?severity=bogus")
+    check("bad severity -> 422", r.status == 422 and is_error_envelope(r), r.body)
+    for path in ("/alerts?q=a%00b", "/events?q=a%00b", "/events?channel=a%00b"):
+        r = call("GET", path)
+        name = path.split("?")[1].split("=")[0]
+        check(f"NUL in {path[:7]} {name} -> 422", r.status == 422 and is_error_envelope(r), r.body)
+    r = call(
+        "POST",
+        "/inventory",
+        {
+            "agent_id": agent_id,
+            "collected_at": now_iso(),
+            "accounts": [{"name": "ana", "password": "x"}],
+        },
+        auth,
+    )
+    check("account with a password field -> 422", r.status == 422 and is_error_envelope(r), r.body)
+
+    r = call("GET", f"/events?asset_id={asset_id}&event_code=6008&limit=1")
+    check(
+        "event filters + has_more",
+        r.status == 200
+        and [e["event_code"] for e in r.body["items"]] == [6008]
+        and r.body["has_more"] is False,
+        r.body,
     )
 
 
@@ -670,6 +844,7 @@ def main() -> int:
         test_assets_read,
         test_alerts,
         test_hardening,
+        test_operational,
     ]
     if args.offline:
         groups.append(test_offline)

@@ -43,7 +43,7 @@ export function DashboardPage() {
     config.refreshIntervalMs,
   );
   const fetchOpenAlerts = useCallback(
-    (signal: AbortSignal) => sentraApi.listAlerts({ status: "open", limit: 5 }, signal),
+    (signal: AbortSignal) => sentraApi.listAlerts({ active: true, limit: 5 }, signal),
     [],
   );
   const openAlerts = usePolling(fetchOpenAlerts, config.refreshIntervalMs);

@@ -104,6 +104,11 @@ class SentraClient:
     ) -> dict[str, Any]:
         return self._post("/events", {"agent_id": str(agent_id), "events": events}, _bearer(token))
 
+    def send_processes(
+        self, agent_id: UUID, token: str, snapshot: dict[str, Any]
+    ) -> dict[str, Any]:
+        return self._post("/processes", {"agent_id": str(agent_id), **snapshot}, _bearer(token))
+
     def send_telemetry(self, agent_id: UUID, token: str, sample: dict[str, Any]) -> dict[str, Any]:
         return self._post("/telemetry", {"agent_id": str(agent_id), **sample}, _bearer(token))
 

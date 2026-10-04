@@ -12,6 +12,7 @@ from collections.abc import Callable
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.retention_service import RetentionPolicy, RetentionService
 
 logger = logging.getLogger(__name__)
 
@@ -42,8 +43,29 @@ class PeriodicJob:
 
 
 def sweep_offline_assets() -> None:
+    """Periodic alert maintenance: offline detection and quiet event-based alerts."""
     thresholds = AlertThresholds.from_settings(get_settings())
     with get_sessionmaker()() as session:
-        opened = AlertService(session, thresholds).sweep_offline()
+        alerts = AlertService(session, thresholds)
+        opened = alerts.sweep_offline()
+        resolved = alerts.resolve_quiet_event_alerts()
     if opened:
         logger.info("offline alerts opened", extra={"count": opened})
+    if resolved:
+        logger.info("quiet event alerts resolved", extra={"count": resolved})
+
+
+def purge_old_data() -> None:
+    policy = RetentionPolicy.from_settings(get_settings())
+    with get_sessionmaker()() as session:
+        result = RetentionService(session, policy).purge()
+    if result.total:
+        logger.info(
+            "old data purged",
+            extra={
+                "telemetry_samples": result.telemetry_samples,
+                "system_events": result.system_events,
+                "asset_changes": result.asset_changes,
+                "alerts": result.alerts,
+            },
+        )

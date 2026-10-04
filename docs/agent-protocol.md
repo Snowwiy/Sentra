@@ -30,6 +30,7 @@ start ─► POST /agents/register      (only when the agent has no token)
 every 30 s ─► POST /agents/heartbeat
            └► POST /telemetry       (buffered samples first, oldest first)
 every 60 s ─► POST /events          (new Windows Event Log warnings/errors)
+          └► POST /processes       (processes_interval_seconds, default 60)
 every 15 min ─► POST /inventory
 any 401 ─► enroll again with the same agent_id, retry once
 403 / enrollment 401 ─► stop, log reason, retry at max backoff (300 s)
@@ -37,7 +38,10 @@ any 401 ─► enroll again with the same agent_id, retry once
 ```
 
 The server reports an asset `offline` after `HEARTBEAT_TIMEOUT_SECONDS` (default 90) without
-contact.
+contact. Every authenticated agent call counts as contact (heartbeat, telemetry, events,
+inventory, processes): it sets the asset `online` and resolves its offline alert. `last_seen_at`
+never moves backwards, so a delayed or out-of-order request cannot make a live asset look
+older than it is.
 
 ## POST /agents/register
 
@@ -92,22 +96,81 @@ agent once per sample) makes retries idempotent: resending the same id answers 2
 
 `{"agent_id": "...", "events": [...]}` with 1–500 events:
 `source` (`windows_eventlog`), `channel`, `record_id`, `event_code`, `provider`,
-`level` (`info|warning|error|critical`), `message` (≤ 4000 chars), `occurred_at`.
+`level` (`info|warning|error|critical`), `message` (≤ 4000 chars), `occurred_at`, and
+optionally `computer` (the `<Computer>` name recorded in the event, ≤ 255 chars).
 Idempotent per (`asset`, `channel`, `record_id`): resending a batch stores nothing twice; the
-response reports `received` and `stored`. 201, 401, 422.
+response reports `received` and `stored`. 201, 401, 422. Only newly stored events feed the
+event-based alerts (critical events, error bursts), so a resend never counts twice.
+
+Channels read by the Windows agent: `System` and `Application` (warning and above, plus
+System 104 "log cleared" and 7045 "service installed"), `Security` (a fixed list of account,
+group, logon-failure and audit events; needs administrator rights, otherwise reported once in
+the agent log as unavailable and skipped) and `Microsoft-Windows-PowerShell/Operational`
+(warning and above, **without the message text**, which can contain script code).
 
 ## POST /inventory
 
 Body: `agent_id`, `collected_at` and the lists `interfaces`, `users`, `processes`, `services`,
-`software` (fields and limits in `backend/app/schemas/inventory.py`). Agents ≥ this version
-also collect `disks` and `connections`; until the server accepts them the agent drops those
-sections when a 422 reports them as `extra_forbidden`. The newest snapshot per
-asset wins; an older `collected_at` never overwrites a newer one. 201, 401, 422.
+`software`, `disks`, `connections`, `accounts`, plus the object `network` (fields and limits in
+`backend/app/schemas/inventory.py`). The newest snapshot per asset wins; an older
+`collected_at` never overwrites a newer one. 201, 401, 422.
+
+- `services[]`: `name`, `display_name`, `status`, `start_type`, `pid` (optional).
+- `software[]`: `name`, `version`, `publisher`, `install_date` (`YYYY-MM-DD`, optional),
+  `architecture` (≤ 16 chars, optional).
+- `accounts[]`: local accounts with `name`, `enabled`, `is_admin`, `last_logon` (all but `name`
+  nullable when the host does not tell). **Never passwords, hashes, tokens or other secrets.**
+- `network`: `{"gateways": [...], "dns_servers": [...]}` (IPv4/IPv6 addresses, ≤ 16 each).
+
+When a snapshot replaces an older one, the server records the differences in
+`GET /assets/{id}/changes`: services added/removed/started/stopped/start type changed,
+software added/removed/version changed, accounts added/removed/enabled/disabled/admin
+granted/revoked. An empty or missing section is not compared (a failed collector is not
+"everything removed"); start/stop is only recorded for automatic services and not during the
+first 10 minutes after boot. A watched service that is not running opens a `service_stopped`
+alert; an administrator change opens `admin_changed`.
+
+## POST /processes
+
+```json
+{
+  "agent_id": "3f6c1c1e-6b1a-4c55-9e0e-2a7f1c9d8b10",
+  "collected_at": "2026-10-04T01:30:00+00:00",
+  "processes": [
+    {"pid": 4242, "ppid": 812, "name": "chrome.exe", "exe": "C:\\Program Files\\...\\chrome.exe",
+     "username": "PC\\ana", "cpu_percent": 3.1, "memory_bytes": 104857600,
+     "started_at": "2026-10-04T00:10:00+00:00", "status": "running"}
+  ]
+}
+```
+
+At most 2000 processes. `cpu_percent` is 0–100 of the whole machine (null on the first
+sample of a process). Only the latest snapshot per asset is kept (no history): 201 with
+`"stored": false` when a newer one is already stored. 201, 401, 422.
+
+## Compatibility between agent and server versions
+
+Upgrade the **server first**. An agent newer than its server still works: when a 422 consists
+only of `extra_forbidden` errors, the agent drops those fields (top-level sections or nested
+item fields) and retries once, remembering them for the rest of the run; a 404 on
+`/processes` disables process snapshots until the agent restarts.
 
 ## Limits
 
 Request bodies above `MAX_REQUEST_BYTES` (default 4 MiB) are refused with 413
 `payload_too_large`, before authentication.
+
+Strings must not contain NUL (U+0000): PostgreSQL cannot store it, so any field carrying it is
+refused with 422 `validation_error` (pointing at the field). The agent removes NUL from the OS
+strings it reports (inventory) so one malformed value does not cost the whole snapshot.
+
+## Request ids and response headers
+
+`X-Request-ID` is echoed back and logged when it is 1–128 characters of `A-Z a-z 0-9 . _ : -`;
+any other value is replaced by a server-generated UUID. Responses carry
+`Cache-Control: no-store` (enrollment answers with the agent token) and
+`X-Content-Type-Options: nosniff` (an unhandled 500 is answered before that layer and may lack
+them).
 
 ## Errors
 

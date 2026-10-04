@@ -1,9 +1,13 @@
+import json
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import Engine, text
 
 
 def inventory_payload(agent_id: str, **overrides: Any) -> dict[str, Any]:
@@ -177,3 +181,46 @@ def test_invalid_disks_or_connections_are_rejected(
     payload = inventory_payload(registered_agent["payload"]["agent_id"], **overrides)
 
     assert client.post("/api/v1/inventory", json=payload).status_code == 422
+
+
+def test_concurrent_snapshots_neither_fail_nor_let_the_older_one_win(
+    client: TestClient, registered_agent: dict[str, Any], engine: Engine
+) -> None:
+    # Two snapshots for one asset in flight at once (e.g. two hosts sharing a cloned agent
+    # identity). Another transaction holds an uncommitted, newer snapshot while the API
+    # receives an older one: the API must wait, then keep the newer one. A read-then-write
+    # used to see "no row" here and fail on the primary key with a 500.
+    agent_id = registered_agent["payload"]["agent_id"]
+    asset_id = registered_agent["response"]["asset_id"]
+    now = datetime.now(UTC)
+    result: dict[str, Any] = {}
+
+    def send_older_snapshot() -> None:
+        older = inventory_payload(agent_id, collected_at=(now - timedelta(minutes=5)).isoformat())
+        result["response"] = client.post("/api/v1/inventory", json=older)
+
+    with engine.connect() as other:
+        transaction = other.begin()
+        internal_id = other.execute(
+            text("SELECT id FROM assets WHERE public_id = :public_id"), {"public_id": asset_id}
+        ).scalar_one()
+        other.execute(
+            text(
+                "INSERT INTO asset_inventories (asset_id, collected_at, data)"
+                " VALUES (:asset_id, :collected_at, CAST(:data AS jsonb))"
+            ),
+            {
+                "asset_id": internal_id,
+                "collected_at": now,
+                "data": json.dumps({"software": [{"name": "Newer"}]}),
+            },
+        )
+        request = threading.Thread(target=send_older_snapshot)
+        request.start()
+        time.sleep(0.5)  # the request now waits on the uncommitted row
+        transaction.commit()
+        request.join(timeout=10)
+
+    assert result["response"].status_code == 201
+    body = client.get(f"/api/v1/assets/{asset_id}/inventory").json()
+    assert [item["name"] for item in body["software"]] == ["Newer"]

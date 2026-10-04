@@ -14,7 +14,8 @@ from app.core.logging import configure_logging
 from app.core.middleware import request_logging_middleware
 from app.db.migrations import expected_heads, is_up_to_date
 from app.db.session import get_engine, get_sessionmaker
-from app.services.background import PeriodicJob, sweep_offline_assets
+from app.services.background import PeriodicJob, purge_old_data, sweep_offline_assets
+from app.services.retention_service import RetentionPolicy
 
 logger = logging.getLogger(__name__)
 
@@ -44,6 +45,11 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
                 "offline-sweeper", settings.offline_sweep_interval_seconds, sweep_offline_assets
             )
         )
+        # Only when a retention period is configured: by default nothing is ever deleted.
+        if RetentionPolicy.from_settings(settings).enabled:
+            jobs.append(
+                PeriodicJob("retention", settings.retention_sweep_interval_seconds, purge_old_data)
+            )
     for job in jobs:
         job.start()
     yield

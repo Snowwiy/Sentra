@@ -13,10 +13,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.config import get_settings
+from app.core.exceptions import ConflictError, NotFoundError
 from app.db.session import get_sessionmaker
 from app.models.asset import Asset
 from app.services.agent_service import reinstate_agent, revoke_agent
+from app.services.alert_service import AlertService, AlertThresholds
+from app.services.retention_service import RetentionPolicy, RetentionService
 
 
 def _list_agents(session: Session) -> None:
@@ -28,22 +31,74 @@ def _list_agents(session: Session) -> None:
         print(f"{asset.public_id!s:36}  {asset.hostname[:24]:24}  {token:8}  {revoked}")
 
 
+def _purge_old_data(session: Session) -> int:
+    # Same policy as the in-process retention job; useful for a first purge of a large backlog
+    # or to run retention from a scheduled task instead of the API process.
+    policy = RetentionPolicy.from_settings(get_settings())
+    if not policy.enabled:
+        print(
+            "no retention configured: set TELEMETRY_RETENTION_DAYS, EVENT_RETENTION_DAYS,"
+            " CHANGE_RETENTION_DAYS or ALERT_RETENTION_DAYS",
+            file=sys.stderr,
+        )
+        return 1
+    result = RetentionService(session, policy).purge()
+    print(
+        f"deleted {result.telemetry_samples} telemetry samples, {result.system_events} events,"
+        f" {result.asset_changes} inventory changes and {result.alerts} resolved alerts"
+    )
+    return 0
+
+
+def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
+    # Acknowledge/resolve live here, not in the HTTP API, for the same reason as revocation:
+    # without dashboard authentication anyone reaching the API could silence alerts.
+    service = AlertService(session, AlertThresholds.from_settings(get_settings()))
+    try:
+        if command == "ack-alert":
+            alert = service.acknowledge(alert_id)
+        else:
+            alert = service.resolve(alert_id)
+    except NotFoundError:
+        print(f"alert {alert_id} not found", file=sys.stderr)
+        return 1
+    except ConflictError as exc:
+        print(f"alert {alert_id}: {exc.message}", file=sys.stderr)
+        return 1
+    print(f"alert {alert.public_id} ({alert.rule.value}) is {alert.status.value}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Sentra operator tools")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list-agents", help="list agents and their credential state")
+    commands.add_parser(
+        "purge-old-data",
+        help="delete telemetry/events older than the configured retention (see README)",
+    )
     for name, text in (
         ("revoke-agent", "invalidate an agent's token and block its re-enrollment"),
         ("reinstate-agent", "allow a revoked agent to enroll again"),
     ):
         command = commands.add_parser(name, help=text)
         command.add_argument("asset_id", type=UUID, help="public asset id (as shown in the UI)")
+    for name, text in (
+        ("ack-alert", "acknowledge an active alert (it stays active until resolved)"),
+        ("resolve-alert", "resolve an alert by hand"),
+    ):
+        command = commands.add_parser(name, help=text)
+        command.add_argument("alert_id", type=UUID, help="public alert id")
     args = parser.parse_args(argv)
 
     with get_sessionmaker()() as session:
         if args.command == "list-agents":
             _list_agents(session)
             return 0
+        if args.command == "purge-old-data":
+            return _purge_old_data(session)
+        if args.command in ("ack-alert", "resolve-alert"):
+            return _alert_action(session, args.command, args.alert_id)
         action = revoke_agent if args.command == "revoke-agent" else reinstate_agent
         try:
             asset = action(session, args.asset_id)

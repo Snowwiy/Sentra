@@ -24,8 +24,13 @@ interface Result<T> {
  * Runs `fetcher` now and every `intervalMs` while the tab is visible.
  * The last good data is kept when a later refresh fails, so callers can show it as stale.
  * `fetcher` must be memoized (useCallback); changing it restarts polling.
+ * `enabled: false` stops polling (and cancels a request in flight) until it is true again.
  */
-export function usePolling<T>(fetcher: Fetcher<T>, intervalMs: number): PollingState<T> {
+export function usePolling<T>(
+  fetcher: Fetcher<T>,
+  intervalMs: number,
+  enabled = true,
+): PollingState<T> {
   const [result, setResult] = useState<Result<T>>();
   const [refreshing, setRefreshing] = useState(false);
   const controllerRef = useRef<AbortController | null>(null);
@@ -50,6 +55,7 @@ export function usePolling<T>(fetcher: Fetcher<T>, intervalMs: number): PollingS
   }, [fetcher]);
 
   useEffect(() => {
+    if (!enabled) return;
     // Background tabs skip polling to avoid hammering the API, but the first load
     // always runs so a page opened in a background tab is not stuck on "loading".
     const tick = () => {
@@ -66,7 +72,7 @@ export function usePolling<T>(fetcher: Fetcher<T>, intervalMs: number): PollingS
       document.removeEventListener("visibilitychange", tick);
       controllerRef.current?.abort();
     };
-  }, [load, intervalMs]);
+  }, [load, intervalMs, enabled]);
 
   const refresh = useCallback(() => void load(), [load]);
   const current = result?.source === fetcher ? result : undefined;
@@ -75,7 +81,8 @@ export function usePolling<T>(fetcher: Fetcher<T>, intervalMs: number): PollingS
     data: current?.data,
     error: current?.error,
     loading: current === undefined,
-    refreshing,
+    // A request cancelled by disabling never reaches its `finally`; do not report it.
+    refreshing: enabled && refreshing,
     updatedAt: current?.updatedAt,
     refresh,
   };

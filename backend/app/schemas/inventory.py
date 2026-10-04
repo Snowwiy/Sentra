@@ -1,10 +1,10 @@
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Literal
 from uuid import UUID
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress, field_validator
+from pydantic import AwareDatetime, BaseModel, Field, IPvAnyAddress, field_validator
 
-from app.schemas.common import RequestModel, ResponseModel
+from app.schemas.common import BIGINT_MAX, RequestModel, ResponseModel
 from app.schemas.telemetry import MAX_FUTURE_SKEW
 
 # Upper bounds keep one request from storing an unbounded document; they sit well above what
@@ -16,11 +16,15 @@ MAX_SERVICES = 2000
 MAX_SOFTWARE = 5000
 MAX_DISKS = 64
 MAX_CONNECTIONS = 1000
+MAX_ACCOUNTS = 1000
+MAX_PATH = 1024
 
 
-class _Item(BaseModel):
-    # Items are both accepted from agents and returned to clients, so they share one model.
-    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+class _Item(RequestModel):
+    """Items are both accepted from agents and returned to clients, so they share one model.
+
+    The inbound rules (unknown fields, no NUL characters) also hold for what was stored.
+    """
 
 
 class NetworkInterface(_Item):
@@ -39,10 +43,16 @@ class LoggedInUser(_Item):
 
 
 class ProcessInfo(_Item):
-    pid: int = Field(ge=0)
+    pid: int = Field(ge=0, le=BIGINT_MAX)
     name: str = Field(min_length=1, max_length=255)
     username: str | None = Field(default=None, max_length=255)
-    memory_bytes: int = Field(ge=0)
+    memory_bytes: int = Field(ge=0, le=BIGINT_MAX)
+    # Optional (newer agents). CPU is a share of the whole machine (0-100, all cores), the
+    # same scale as the asset's CPU metric.
+    exe: str | None = Field(default=None, max_length=MAX_PATH)
+    ppid: int | None = Field(default=None, ge=0, le=BIGINT_MAX)
+    cpu_percent: float | None = Field(default=None, ge=0, le=100, allow_inf_nan=False)
+    started_at: AwareDatetime | None = None
 
 
 class ServiceInfo(_Item):
@@ -50,21 +60,27 @@ class ServiceInfo(_Item):
     display_name: str | None = Field(default=None, max_length=512)
     status: str = Field(min_length=1, max_length=32)
     start_type: str | None = Field(default=None, max_length=32)
+    # Process id while running (Windows services; newer agents).
+    pid: int | None = Field(default=None, ge=0, le=BIGINT_MAX)
 
 
 class SoftwareInfo(_Item):
     name: str = Field(min_length=1, max_length=512)
     version: str | None = Field(default=None, max_length=128)
     publisher: str | None = Field(default=None, max_length=512)
+    # When the host records them (newer agents): install date, and the package/registry
+    # architecture (e.g. x64, x86, amd64).
+    install_date: date | None = None
+    architecture: str | None = Field(default=None, max_length=16)
 
 
 class DiskInfo(_Item):
     device: str = Field(min_length=1, max_length=255)
     mountpoint: str = Field(min_length=1, max_length=255)
     fstype: str | None = Field(default=None, max_length=32)
-    total_bytes: int = Field(ge=0)
-    used_bytes: int = Field(ge=0)
-    free_bytes: int = Field(ge=0)
+    total_bytes: int = Field(ge=0, le=BIGINT_MAX)
+    used_bytes: int = Field(ge=0, le=BIGINT_MAX)
+    free_bytes: int = Field(ge=0, le=BIGINT_MAX)
     percent: float = Field(ge=0, le=100, allow_inf_nan=False)
 
 
@@ -77,8 +93,26 @@ class NetworkConnection(_Item):
     remote_address: IPvAnyAddress | None = None
     remote_port: int | None = Field(default=None, ge=0, le=65535)
     status: Literal["listen", "established"]
-    pid: int | None = Field(default=None, ge=0)
+    pid: int | None = Field(default=None, ge=0, le=BIGINT_MAX)
     process_name: str | None = Field(default=None, max_length=255)
+
+
+class AccountInfo(_Item):
+    """A local account. Only identity and state: never passwords, hashes or other secrets."""
+
+    name: str = Field(min_length=1, max_length=255)
+    # Null when the host does not tell (e.g. Linux without access to the shadow file).
+    enabled: bool | None = None
+    # Member of the local Administrators group (Windows) or of sudo/wheel/admin (Linux).
+    is_admin: bool | None = None
+    last_logon: AwareDatetime | None = None
+
+
+class NetworkSummary(_Item):
+    """Host-wide network configuration (not per interface)."""
+
+    gateways: list[IPvAnyAddress] = Field(default_factory=list, max_length=16)
+    dns_servers: list[IPvAnyAddress] = Field(default_factory=list, max_length=16)
 
 
 class InventorySections(BaseModel):
@@ -89,6 +123,10 @@ class InventorySections(BaseModel):
     software: list[SoftwareInfo] = Field(default_factory=list, max_length=MAX_SOFTWARE)
     disks: list[DiskInfo] = Field(default_factory=list, max_length=MAX_DISKS)
     connections: list[NetworkConnection] = Field(default_factory=list, max_length=MAX_CONNECTIONS)
+    # Newer agents: local accounts (as opposed to `users`, the logged-in sessions) and the
+    # host's gateways/DNS servers.
+    accounts: list[AccountInfo] = Field(default_factory=list, max_length=MAX_ACCOUNTS)
+    network: NetworkSummary | None = None
 
 
 class InventoryCreate(InventorySections, RequestModel):

@@ -21,7 +21,7 @@ from sentra_agent.credentials import (
 )
 from sentra_agent.identity import Identity, IdentityStore
 from sentra_agent.logs import JsonFormatter, redact, register_secret
-from sentra_agent.runner import CredentialsRejectedError
+from sentra_agent.runner import CredentialsRejectedError, _unknown_fields
 from tests.conftest import FakeApiState
 from tests.test_runner import build_agent, sample
 
@@ -460,3 +460,76 @@ def test_oversized_payload_is_not_retried_in_a_loop(
 
     assert state.paths().count("/inventory") == 1  # rejected once, next try at next interval
     assert len(state.telemetry) == 3
+
+
+# --- Unexpected failures -----------------------------------------------------------------
+
+
+class _NoWaitEvent(threading.Event):
+    """Stop event whose wait returns at once, so loop tests do not sleep between cycles."""
+
+    def wait(self, timeout: float | None = None) -> bool:
+        return self.is_set()
+
+
+def test_unexpected_error_is_logged_and_the_loop_keeps_running(
+    fake_api: tuple[str, FakeApiState], make_config: Any, caplog: pytest.LogCaptureFixture
+) -> None:
+    url, state = fake_api
+    agent = build_agent(make_config(url))
+    agent.stop_event = _NoWaitEvent()
+    calls: list[int] = []
+
+    def flaky_metrics() -> dict[str, Any]:
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("sensor failed in a new way")
+        agent.stop_event.set()  # second cycle reports normally, then run() returns
+        return sample()
+
+    agent.metrics = flaky_metrics
+    with caplog.at_level(logging.ERROR, logger="sentra_agent"):
+        agent.run()  # must not raise: an unsupervised agent that crashes stays down
+
+    assert len(calls) == 2
+    assert len(state.telemetry) == 1
+    assert "agent cycle failed unexpectedly" in caplog.text
+
+
+@pytest.mark.parametrize(
+    "details",
+    [["not-a-dict"], [None], [{"loc": "body", "type": "extra_forbidden"}]],
+)
+def test_malformed_validation_details_are_not_unknown_sections(details: list[Any]) -> None:
+    error = ApiError(422, {"error": {"code": "validation_error", "details": details}})
+
+    # Shape checked before use: no AttributeError, and nothing is dropped from the payload.
+    assert _unknown_fields(error) == set()
+
+
+@pytest.mark.parametrize("content", ["[]", '{"agent_id": 5}', '"just a string"'])
+def test_identity_with_wrong_json_shape_is_backed_up_and_replaced(
+    tmp_path: Path, content: str
+) -> None:
+    (tmp_path / "identity.json").write_text(content)
+
+    identity = IdentityStore(tmp_path).load_or_create()
+
+    assert identity.agent_id
+    assert len(list(tmp_path.glob("identity.json.corrupt-*"))) == 1
+
+
+def test_single_diagnostic_cycle_still_fails_loudly(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, _ = fake_api
+    agent = build_agent(make_config(url))
+
+    def broken_metrics() -> dict[str, Any]:
+        raise RuntimeError("sensor failed in a new way")
+
+    agent.metrics = broken_metrics
+
+    # --once has no next cycle to recover in: the error propagates (non-zero exit code).
+    with pytest.raises(RuntimeError):
+        agent.run(once=True)

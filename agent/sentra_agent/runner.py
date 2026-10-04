@@ -17,11 +17,13 @@ from sentra_agent.events import EventCollector
 from sentra_agent.identity import Identity, IdentityStore
 from sentra_agent.inventory import collect_inventory
 from sentra_agent.logs import register_secret
+from sentra_agent.processes import ProcessSampler
 
 logger = logging.getLogger("sentra_agent")
 
 HTTP_UNAUTHORIZED = 401
 HTTP_FORBIDDEN = 403
+HTTP_NOT_FOUND = 404
 HTTP_PAYLOAD_TOO_LARGE = 413
 HTTP_UNPROCESSABLE = 422
 # Rejections that will repeat identically for the same payload: retrying them would loop
@@ -75,6 +77,7 @@ class Agent:
         inventory: Callable[[], dict[str, Any]] = collect_inventory,
         events: EventSource | None = None,
         stop_event: threading.Event | None = None,
+        processes: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.config = config
         self.client = client
@@ -83,13 +86,19 @@ class Agent:
         self.metrics = metrics
         self.inventory = inventory
         self.events: EventSource = events or EventCollector(config.state_dir)
+        self.processes = processes or ProcessSampler().snapshot
         self._events_sent_at: float | None = None
         # Monotonic clock: wall-clock jumps (NTP sync, DST, manual changes) must not
         # suppress or flood inventory uploads.
         self._inventory_sent_at: float | None = None
-        # Inventory sections this server rejected as unknown (older backend than agent). They
-        # are left out for the rest of this run so the known sections still get through.
-        self._unsupported_sections: set[str] = set()
+        self._processes_sent_at: float | None = None
+        # False once the server answered 404 to /processes (older backend): not retried in
+        # this run, so an old server never sees a request per cycle it cannot serve.
+        self._processes_supported = True
+        # Fields each endpoint's server rejected as unknown (older backend than agent), as
+        # paths without list indexes, e.g. ("disks",) or ("services", "pid"). They are left
+        # out for the rest of this run so everything the server knows still gets through.
+        self._unsupported: dict[str, set[tuple[str, ...]]] = {}
         self.stop_event = stop_event or threading.Event()
         # Samples survive outages (and agent restarts during an outage) up to buffer_size;
         # each sample carries its own timestamp, so late delivery lands at the right point in
@@ -150,6 +159,19 @@ class Agent:
                 # The server rejected us for a reason retrying will not fix (e.g. a contract
                 # mismatch after an upgrade). Keep the normal pace instead of a tight loop.
                 logger.error("API rejected request", extra={"status": exc.status, "body": exc.body})
+            except Exception:
+                # Last line of defense: an unexpected error (a collector failing in a new way,
+                # a proxy answering 200 with a body that is not ours, a corrupt state file)
+                # must not kill the agent. Nothing supervises it yet (no Windows service), so a
+                # crash would leave the host silently "offline" until someone restarts it.
+                # Keep the normal pace: earlier steps of the cycle (heartbeat, telemetry) may
+                # still be working, and backing off would only slow them down. The traceback
+                # goes to the (secret-redacting) log for diagnosis.
+                logger.exception("agent cycle failed unexpectedly")
+                if once:
+                    # A single diagnostic cycle (--once) still fails loudly, with a non-zero
+                    # exit code, as before: there is no next cycle to recover in.
+                    raise
             finally:
                 self.buffer.persist()
             if once:
@@ -169,6 +191,7 @@ class Agent:
         self._authenticated(self._heartbeat)
         self._authenticated(self._flush_buffer)
         self._authenticated(self._maybe_send_inventory)
+        self._authenticated(self._maybe_send_processes)
         self._authenticated(self._maybe_send_events)
 
     def _maybe_send_events(self, token: str) -> None:
@@ -181,7 +204,13 @@ class Agent:
         events, cursor = self.events.pending()
         if events:
             try:
-                self.client.send_events(self.identity.agent_id, token, events)
+                self._send_adapting(
+                    "events",
+                    lambda body: self.client.send_events(
+                        self.identity.agent_id, token, body["events"]
+                    ),
+                    {"events": events},
+                )
             except ApiError as exc:
                 if exc.status not in PERMANENT_REJECTIONS:
                     raise
@@ -296,23 +325,61 @@ class Agent:
         self._inventory_sent_at = now
 
     def _send_inventory(self, token: str, snapshot: dict[str, Any]) -> None:
-        payload = {k: v for k, v in snapshot.items() if k not in self._unsupported_sections}
+        self._send_adapting(
+            "inventory",
+            lambda body: self.client.send_inventory(self.identity.agent_id, token, body),
+            snapshot,
+        )
+
+    def _maybe_send_processes(self, token: str) -> None:
+        now = time.monotonic()
+        due = (
+            self._processes_sent_at is None
+            or now - self._processes_sent_at >= self.config.processes_interval_seconds
+        )
+        if not self._processes_supported or not due:
+            return
+        snapshot = self.processes()
         try:
-            self.client.send_inventory(self.identity.agent_id, token, payload)
+            self._send_adapting(
+                "processes",
+                lambda body: self.client.send_processes(self.identity.agent_id, token, body),
+                snapshot,
+            )
+        except ApiError as exc:
+            if exc.status == HTTP_NOT_FOUND:
+                logger.info("server does not accept process snapshots yet; disabled for this run")
+                self._processes_supported = False
+            elif exc.status not in PERMANENT_REJECTIONS:
+                raise
+            else:
+                logger.warning("process snapshot rejected", extra={"body": exc.body})
+        self._processes_sent_at = now
+
+    def _send_adapting(
+        self, endpoint: str, send: Callable[[dict[str, Any]], Any], payload: dict[str, Any]
+    ) -> None:
+        """Send a payload, leaving out fields this server rejected as unknown.
+
+        The API refuses unknown fields; an agent newer than its server would otherwise lose
+        a whole inventory (or event batch) over one new field. On a 422 made only of
+        `extra_forbidden` errors, those fields are dropped (for the rest of the run) and the
+        request is retried once. Any other validation error is a real problem and is raised.
+        """
+        dropped = self._unsupported.setdefault(endpoint, set())
+        try:
+            send(_drop_fields(payload, dropped))
             return
         except ApiError as exc:
-            unknown = _unknown_top_level_fields(exc) if exc.status == HTTP_UNPROCESSABLE else set()
+            unknown = _unknown_fields(exc) if exc.status == HTTP_UNPROCESSABLE else set()
             if not unknown:
                 raise
-        # The API rejects unknown fields; an agent newer than its server would otherwise lose
-        # the whole inventory over one new section. Drop those sections and retry once.
         logger.info(
-            "server does not accept some inventory sections yet",
-            extra={"sections": sorted(unknown)},
+            "server does not accept some fields yet",
+            extra={"endpoint": endpoint, "fields": sorted(".".join(path) for path in unknown)},
         )
-        self._unsupported_sections |= unknown
-        payload = {k: v for k, v in payload.items() if k not in unknown}
-        self.client.send_inventory(self.identity.agent_id, token, payload)
+        dropped |= unknown
+        send(_drop_fields(payload, dropped))
 
     def _remember_asset(self, asset_id: str) -> None:
         if self.identity.asset_id is None or str(self.identity.asset_id) != asset_id:
@@ -325,28 +392,53 @@ def _raise_if_forbidden(exc: ApiError) -> None:
         raise CredentialsRejectedError(exc.code or "forbidden", exc.status) from exc
 
 
-def _unknown_top_level_fields(exc: ApiError) -> set[str]:
-    """Top-level body fields a 422 rejected as unknown (`extra_forbidden`).
+def _unknown_fields(exc: ApiError) -> set[tuple[str, ...]]:
+    """Body fields a 422 rejected as unknown (`extra_forbidden`), as paths without indexes.
 
-    Error envelope: {"error": {"details": [{"loc": ["body", "<field>"], "type": ...}]}}.
-    Only errors that are *all* about unknown top-level fields count; any other validation
-    error means the payload itself is wrong and must not be "fixed" by dropping data.
+    Error envelope: {"error": {"details": [{"loc": ["body", "services", 3, "pid"], ...}]}}
+    gives ("services", "pid"). Only errors that are *all* about unknown fields count; any
+    other validation error means the payload itself is wrong and must not be "fixed" by
+    dropping data. The identity fields are never dropped.
     """
     error = exc.body.get("error")
     details = error.get("details") if isinstance(error, dict) else None
     if not isinstance(details, list) or not details:
         return set()
-    fields: set[str] = set()
+    fields: set[tuple[str, ...]] = set()
     for detail in details:
-        loc = detail.get("loc") if isinstance(detail, dict) else None
+        # The body comes from the network: check the shape before calling dict methods, or a
+        # malformed error (e.g. from a proxy) would raise AttributeError instead of "unknown".
+        if not isinstance(detail, dict):
+            return set()
+        loc = detail.get("loc")
+        if detail.get("type") != "extra_forbidden" or not isinstance(loc, list):
+            return set()
+        path = tuple(part for part in loc[1:] if not isinstance(part, int))
         if (
-            detail.get("type") != "extra_forbidden"
-            or not isinstance(loc, list)
-            or len(loc) != 2
+            len(loc) < 2
             or loc[0] != "body"
-            or not isinstance(loc[1], str)
-            or loc[1] in ("agent_id", "collected_at")
+            or not path
+            or not all(isinstance(part, str) for part in path)
+            or path in (("agent_id",), ("collected_at",))
         ):
             return set()
-        fields.add(loc[1])
+        fields.add(path)
     return fields
+
+
+def _drop_fields(payload: Any, paths: set[tuple[str, ...]]) -> Any:
+    for path in paths:
+        payload = _drop(payload, path)
+    return payload
+
+
+def _drop(value: Any, path: tuple[str, ...]) -> Any:
+    """Copy of `value` without the field at `path`; lists apply it to every item."""
+    if isinstance(value, list):
+        return [_drop(item, path) for item in value]
+    if not isinstance(value, dict) or not path:
+        return value
+    head, rest = path[0], path[1:]
+    if not rest:
+        return {key: item for key, item in value.items() if key != head}
+    return {key: (_drop(item, rest) if key == head else item) for key, item in value.items()}

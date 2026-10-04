@@ -13,6 +13,7 @@ from app.services.asset_service import AssetService
 from app.services.event_service import EventService
 from app.services.health_service import HealthService
 from app.services.inventory_service import InventoryService
+from app.services.process_service import ProcessService
 from app.services.telemetry_service import TelemetryService
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -26,11 +27,9 @@ def get_alert_thresholds(settings: AppSettings) -> AlertThresholds:
 Thresholds = Annotated[AlertThresholds, Depends(get_alert_thresholds)]
 
 
-def get_agent_service(
-    session: DbSession, thresholds: Thresholds, settings: AppSettings
-) -> AgentService:
+def get_agent_service(session: DbSession, settings: AppSettings) -> AgentService:
     key = settings.agent_enrollment_key
-    return AgentService(session, thresholds, key.get_secret_value() if key else None)
+    return AgentService(session, key.get_secret_value() if key else None)
 
 
 # auto_error=False: a missing header must reach the service, which answers with the same
@@ -64,9 +63,13 @@ def get_health_service(session: DbSession) -> HealthService:
     return HealthService(session)
 
 
-def get_inventory_service(session: DbSession) -> InventoryService:
-    return InventoryService(session)
+def get_inventory_service(session: DbSession, thresholds: Thresholds) -> InventoryService:
+    return InventoryService(session, thresholds)
 
 
-def get_event_service(session: DbSession) -> EventService:
-    return EventService(session)
+def get_event_service(session: DbSession, thresholds: Thresholds) -> EventService:
+    return EventService(session, thresholds)
+
+
+def get_process_service(session: DbSession) -> ProcessService:
+    return ProcessService(session)
