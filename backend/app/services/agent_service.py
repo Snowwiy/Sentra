@@ -1,0 +1,178 @@
+from datetime import UTC, datetime
+from uuid import UUID
+
+from sqlalchemy.exc import IntegrityError
+from sqlalchemy.orm import Session
+
+from app.core.exceptions import (
+    AgentRevokedError,
+    ConflictError,
+    ForbiddenError,
+    NotFoundError,
+    UnauthorizedError,
+)
+from app.core.security import (
+    enrollment_key_matches,
+    generate_agent_token,
+    hash_token,
+    token_matches,
+)
+from app.models.asset import Asset, AssetStatus
+from app.repositories.asset_repository import AssetRepository
+from app.schemas.agent import (
+    AgentRegisterRequest,
+    AgentRegisterResponse,
+    HeartbeatRequest,
+    HeartbeatResponse,
+    HostInfo,
+)
+from app.services.alert_service import AlertService, AlertThresholds
+
+
+def mark_seen(asset: Asset, now: datetime) -> None:
+    """Record proof of life. `now` must be server time so agents cannot fake liveness."""
+    asset.last_seen_at = now
+    asset.status = AssetStatus.ONLINE
+
+
+def apply_host_info(asset: Asset, host: HostInfo) -> None:
+    # Plain attribute assignment: SQLAlchemy only issues an UPDATE (and bumps updated_at)
+    # for values that actually changed.
+    asset.hostname = host.hostname
+    asset.os_name = host.os_name
+    asset.os_version = host.os_version
+    asset.architecture = host.architecture
+    asset.primary_ip = str(host.primary_ip)
+    asset.agent_version = host.agent_version
+
+
+def authenticate_agent(assets: AssetRepository, agent_id: UUID, token: str | None) -> Asset:
+    """Return the asset of an agent whose bearer token is valid, or raise 401.
+
+    Unknown agent, missing token and wrong token all produce the same error so a caller
+    cannot probe which agent_ids exist. Agents react to 401 by enrolling again.
+    """
+    asset = assets.get_by_agent_id(agent_id)
+    if (
+        asset is None
+        or token is None
+        # Revocation also clears the hash; checking the flag too keeps a revoked agent out even
+        # if a hash were ever restored by hand or by a buggy migration.
+        or asset.agent_token_revoked_at is not None
+        or not token_matches(token, asset.agent_token_hash)
+    ):
+        raise UnauthorizedError("Invalid or missing agent credentials")
+    return asset
+
+
+def revoke_agent(session: Session, asset_public_id: UUID) -> Asset:
+    """Invalidate an agent's token now and block its re-enrollment until reinstated.
+
+    Revocation is per agent: other agents and the shared enrollment key keep working. The
+    agent's next call gets 401, it tries to enroll again and receives 403 agent_revoked, after
+    which it backs off to its maximum retry interval. Its history is kept.
+    """
+    asset = AssetRepository(session).get_by_public_id(asset_public_id)
+    if asset is None:
+        raise NotFoundError("Asset not found")
+    asset.agent_token_hash = None
+    asset.agent_token_issued_at = None
+    if asset.agent_token_revoked_at is None:
+        asset.agent_token_revoked_at = datetime.now(UTC)
+    session.commit()
+    return asset
+
+
+def reinstate_agent(session: Session, asset_public_id: UUID) -> Asset:
+    """Allow a revoked agent to enroll again (it still needs the enrollment key).
+
+    No token is issued here: the agent obtains a fresh one through normal enrollment, so a
+    token never has to be handed over out of band.
+    """
+    asset = AssetRepository(session).get_by_public_id(asset_public_id)
+    if asset is None:
+        raise NotFoundError("Asset not found")
+    asset.agent_token_revoked_at = None
+    session.commit()
+    return asset
+
+
+class AgentService:
+    def __init__(
+        self, session: Session, thresholds: AlertThresholds, enrollment_key: str | None
+    ) -> None:
+        self._session = session
+        self._assets = AssetRepository(session)
+        self._alerts = AlertService(session, thresholds)
+        self._enrollment_key = enrollment_key
+
+    def register(
+        self, data: AgentRegisterRequest, provided_key: str | None
+    ) -> tuple[AgentRegisterResponse, bool]:
+        """Enroll an agent and issue a fresh token. Returns (response, created).
+
+        A valid enrollment key is required. Enrolling an agent_id that already exists is
+        allowed and rotates its token: this is how an agent that lost its token (reinstall,
+        deleted state) recovers. It is safe because only enrollment-key holders can do it;
+        the previous token stops working immediately.
+        """
+        if self._enrollment_key is None:
+            raise ForbiddenError("Agent enrollment is disabled on this server")
+        if not enrollment_key_matches(provided_key, self._enrollment_key):
+            raise UnauthorizedError("Invalid enrollment key")
+
+        asset = self._assets.get_by_agent_id(data.agent_id)
+        # Checked only after the enrollment key, so revocation status is never revealed to
+        # callers without the key.
+        if asset is not None and asset.agent_token_revoked_at is not None:
+            raise AgentRevokedError("This agent has been revoked by an operator")
+
+        token = generate_agent_token()
+        created = asset is None
+        if asset is None:
+            asset = self._assets.add(
+                Asset(
+                    agent_id=data.agent_id,
+                    hostname=data.hostname,
+                    os_name=data.os_name,
+                    os_version=data.os_version,
+                    architecture=data.architecture,
+                    primary_ip=str(data.primary_ip),
+                    agent_version=data.agent_version,
+                    # Registration alone does not prove the agent keeps running; it becomes
+                    # online with its first heartbeat or telemetry sample.
+                    status=AssetStatus.UNKNOWN,
+                    first_seen_at=datetime.now(UTC),
+                )
+            )
+        else:
+            apply_host_info(asset, data)
+        asset.agent_token_hash = hash_token(token)
+        asset.agent_token_issued_at = datetime.now(UTC)
+
+        try:
+            self._session.commit()
+        except IntegrityError as exc:
+            # A concurrent first registration with the same agent_id won the race; the agent
+            # retries and then takes the re-enrollment path.
+            self._session.rollback()
+            raise ConflictError("Agent registration in progress, retry") from exc
+
+        response = AgentRegisterResponse(
+            asset_id=asset.public_id,
+            agent_id=asset.agent_id,
+            status=asset.status,
+            first_seen_at=asset.first_seen_at,
+            agent_token=token,
+        )
+        return response, created
+
+    def heartbeat(self, data: HeartbeatRequest, token: str | None) -> HeartbeatResponse:
+        asset = authenticate_agent(self._assets, data.agent_id, token)
+        now = datetime.now(UTC)
+        mark_seen(asset, now)
+        if data.host is not None:
+            apply_host_info(asset, data.host)
+        self._alerts.asset_seen(asset, now)
+        self._session.commit()
+        return HeartbeatResponse(asset_id=asset.public_id, status=asset.status, last_seen_at=now)

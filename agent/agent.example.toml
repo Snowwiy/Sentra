@@ -1,0 +1,12 @@
+# Sentra agent configuration. All keys are optional.
+# Precedence: defaults < this file < SENTRA_AGENT_* environment variables < CLI flags.
+
+api_url = "http://127.0.0.1:8000"
+interval_seconds = 30
+inventory_interval_seconds = 900
+request_timeout_seconds = 10
+max_backoff_seconds = 300
+buffer_size = 120
+log_level = "INFO"
+# state_dir defaults to %LOCALAPPDATA%\Sentra\Agent (Windows) or ~/.local/state/sentra-agent
+# state_dir = "C:/Sentra/agent-state"

@@ -1,0 +1,209 @@
+import { useCallback, useMemo, useState } from "react";
+import { Link, useNavigate } from "react-router-dom";
+import { sentraApi } from "../api/sentra";
+import type { Asset, AssetStatus } from "../api/types";
+import { AlertTable } from "../components/AlertTable";
+import { EventTable } from "../components/EventTable";
+import { MetricBar } from "../components/MetricBar";
+import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { StatusBadge } from "../components/StatusBadge";
+import { config } from "../config";
+import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { usePolling } from "../lib/usePolling";
+
+type Filter = AssetStatus | "all";
+
+const STAT_CARDS: { key: Filter; label: string }[] = [
+  { key: "all", label: "Total Assets" },
+  { key: "online", label: "Online" },
+  { key: "offline", label: "Offline" },
+  { key: "unknown", label: "Unknown" },
+];
+
+// Counts are derived from the full list because GET /assets is not paginated yet.
+// If pagination is added, these must come from a backend summary endpoint instead.
+function countByStatus(assets: Asset[]): Record<Filter, number> {
+  const counts: Record<Filter, number> = { all: assets.length, online: 0, offline: 0, unknown: 0 };
+  for (const asset of assets) counts[asset.status] += 1;
+  return counts;
+}
+
+function matches(asset: Asset, query: string): boolean {
+  if (!query) return true;
+  const q = query.toLowerCase();
+  return [asset.hostname, asset.primary_ip, asset.os_name].some((field) =>
+    field.toLowerCase().includes(q),
+  );
+}
+
+export function DashboardPage() {
+  const fetchAssets = useCallback((signal: AbortSignal) => sentraApi.listAssets(signal), []);
+  const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
+    fetchAssets,
+    config.refreshIntervalMs,
+  );
+  const fetchOpenAlerts = useCallback(
+    (signal: AbortSignal) => sentraApi.listAlerts({ status: "open", limit: 5 }, signal),
+    [],
+  );
+  const openAlerts = usePolling(fetchOpenAlerts, config.refreshIntervalMs);
+  const fetchActivity = useCallback(
+    (signal: AbortSignal) => sentraApi.listEvents({ minLevel: "warning", limit: 10 }, signal),
+    [],
+  );
+  const activity = usePolling(fetchActivity, config.refreshIntervalMs);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+  const navigate = useNavigate();
+
+  const assets = useMemo(
+    () => [...(data?.items ?? [])].sort((a, b) => a.hostname.localeCompare(b.hostname)),
+    [data],
+  );
+  const counts = useMemo(() => countByStatus(assets), [assets]);
+  const visible = assets.filter(
+    (asset) => (filter === "all" || asset.status === filter) && matches(asset, query.trim()),
+  );
+
+  if (loading) return <LoadingState label="Cargando activos…" />;
+  if (!data && error) return <ErrorState message={errorMessage(error)} onRetry={refresh} />;
+
+  return (
+    <div className="page">
+      <div className="page__header">
+        <div>
+          <h1>Activos</h1>
+          <p className="muted small">
+            {updatedAt && `Actualizado ${formatRelative(updatedAt.toISOString())} · `}
+            refresco cada {config.refreshIntervalMs / 1000} s
+          </p>
+        </div>
+        <button type="button" className="button" onClick={refresh} disabled={refreshing}>
+          {refreshing ? "Actualizando…" : "Actualizar"}
+        </button>
+      </div>
+
+      {error && (
+        <div className="banner banner--warn" role="alert">
+          Fallo al actualizar: {errorMessage(error)}. Se muestran los últimos datos recibidos.
+        </div>
+      )}
+
+      <section className="stats" aria-label="Resumen de estado">
+        {STAT_CARDS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            className={`stat stat--${key}${filter === key ? " stat--active" : ""}`}
+            aria-pressed={filter === key}
+            onClick={() => setFilter(filter === key ? "all" : key)}
+          >
+            <span className="stat__label">{label}</span>
+            <span className="stat__value">{counts[key]}</span>
+          </button>
+        ))}
+      </section>
+
+      {openAlerts.data && openAlerts.data.items.length > 0 && (
+        <section className="panel panel--alerts" aria-label="Alertas abiertas">
+          <div className="panel__toolbar">
+            <h2>Alertas abiertas</h2>
+            <Link to="/alerts" className="small">
+              Ver todas
+            </Link>
+          </div>
+          <AlertTable alerts={openAlerts.data.items} />
+        </section>
+      )}
+
+      <section className="panel">
+        <div className="panel__toolbar">
+          <h2>
+            {filter === "all" ? "Todos los activos" : `Activos ${filter}`}
+            <span className="muted"> ({visible.length})</span>
+          </h2>
+          <input
+            type="search"
+            className="input"
+            placeholder="Buscar hostname, IP u OS"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+            aria-label="Buscar activos"
+          />
+        </div>
+
+        {assets.length === 0 ? (
+          <EmptyState title="No hay activos registrados">
+            Los activos aparecerán aquí cuando un agente se registre en la API.
+          </EmptyState>
+        ) : visible.length === 0 ? (
+          <EmptyState title="Ningún activo coincide con el filtro" />
+        ) : (
+          <div className="table-wrap">
+            <table className="table">
+              <thead>
+                <tr>
+                  <th>Hostname</th>
+                  <th>Estado</th>
+                  <th>OS</th>
+                  <th>IP</th>
+                  <th>CPU</th>
+                  <th>RAM</th>
+                  <th>Disco</th>
+                  <th>Last Seen</th>
+                </tr>
+              </thead>
+              <tbody>
+                {visible.map((asset) => {
+                  const t = asset.latest_telemetry;
+                  return (
+                    <tr
+                      key={asset.asset_id}
+                      className="table__row--link"
+                      onClick={() => navigate(`/assets/${asset.asset_id}`)}
+                    >
+                      <td>
+                        <Link to={`/assets/${asset.asset_id}`} className="strong">
+                          {asset.hostname}
+                        </Link>
+                      </td>
+                      <td>
+                        <StatusBadge status={asset.status} />
+                      </td>
+                      <td>
+                        {asset.os_name} <span className="muted">{asset.os_version}</span>
+                      </td>
+                      <td className="mono">{asset.primary_ip}</td>
+                      <td>
+                        <MetricBar value={t?.cpu_percent} label="CPU" />
+                      </td>
+                      <td>
+                        <MetricBar value={t?.ram_percent} label="RAM" />
+                      </td>
+                      <td>
+                        <MetricBar value={t?.disk_percent} label="Disco" />
+                      </td>
+                      <td title={formatDateTime(asset.last_seen_at)}>
+                        {formatRelative(asset.last_seen_at)}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </section>
+
+      {activity.data && activity.data.items.length > 0 && (
+        <section className="panel" aria-label="Actividad reciente">
+          <div className="panel__toolbar">
+            <h2>Actividad reciente</h2>
+            <span className="muted small">advertencias y errores del sistema</span>
+          </div>
+          <EventTable events={activity.data.items} />
+        </section>
+      )}
+    </div>
+  );
+}
