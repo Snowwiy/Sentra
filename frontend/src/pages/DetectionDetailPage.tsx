@@ -11,6 +11,7 @@ import {
   DetectionStatusBadge,
 } from "../components/detections/DetectionBadges";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
+import { RelatedIncidentsPanel } from "../components/incidents/RelatedIncidentsPanel";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
@@ -261,6 +262,8 @@ export function DetectionDetailPage() {
           <p className="muted">Sin evidencias registradas.</p>
         )}
       </section>
+
+      <RelatedIncidentsPanel source="detection" id={d.detection_id} />
 
       <AIAnalyzePanel
         title="Explicación asistida por IA"

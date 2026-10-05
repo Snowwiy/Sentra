@@ -51,6 +51,7 @@ from app.core.rate_limit import RateLimiter
 from app.models.ai import AIInsight
 from app.models.asset import Asset
 from app.models.detection import Detection
+from app.models.incident import Incident
 from app.models.risk import RiskSnapshot
 from app.risk.config import RiskConfig
 from app.schemas.ai import AIProviderState, AIStatus, InsightList, InsightRead, InsightResult
@@ -60,6 +61,13 @@ from app.services.audit_service import Actor
 logger = logging.getLogger("sentra.ai")
 
 ProviderFactory = Callable[[AIConfig], AIProvider]
+
+_INCIDENT_TASKS = {
+    "summary": InsightKind.INCIDENT_SUMMARY,
+    "timeline": InsightKind.INCIDENT_TIMELINE,
+    "evidence": InsightKind.INCIDENT_EVIDENCE,
+    "next_steps": InsightKind.INCIDENT_NEXT_STEPS,
+}
 
 
 def default_provider_factory(config: AIConfig) -> AIProvider:
@@ -227,6 +235,20 @@ class AIInsightService:
             refresh=refresh,
         )
 
+    def analyze_incident(self, incident_id: UUID, task: str, refresh: bool) -> InsightRead:
+        """Fase 4K: análisis de solo lectura de un incidente.
+
+        Solo produce un insight (tabla ai_insights) y su auditoría ai_analysis_*: nunca
+        modifica el incidente (estado, owner, severidad, prioridad, resolución, merge).
+        """
+        kind = _INCIDENT_TASKS[task]
+        return self._run(
+            kind,
+            lambda b: b.incident(incident_id),
+            entity=f"incident:{incident_id}",
+            refresh=refresh,
+        )
+
     def ask(
         self,
         question: str,
@@ -317,7 +339,7 @@ class AIInsightService:
             now,
         )
         ctx = build(builder)  # 404 si la entidad no existe (antes de auditar nada).
-        version = data_version(self._session, ctx.asset_pk, ctx.detection_pk)
+        version = data_version(self._session, ctx.asset_pk, ctx.detection_pk, ctx.incident_pk)
         cache_key = self._cache_key(kind, entity, version, question)
         base = {
             "kind": kind.value,
@@ -376,6 +398,7 @@ class AIInsightService:
             scope=ctx.scope,
             asset_id=ctx.asset_pk,
             detection_id=ctx.detection_pk,
+            incident_id=ctx.incident_pk,
             risk_snapshot_id=ctx.risk_snapshot_pk,
             question=question[:500] if question else None,
             cache_key=cache_key,
@@ -498,12 +521,15 @@ class AIInsightService:
 
     # --- Lectura de insights ----------------------------------------------------------------
 
-    def _base(self) -> Select[AIInsight, Asset, UUID, UUID]:
+    def _base(self) -> Select[AIInsight, Asset, UUID, UUID, UUID]:
         stmt = (
-            select(AIInsight, Asset, Detection.public_id, RiskSnapshot.public_id)
+            select(
+                AIInsight, Asset, Detection.public_id, RiskSnapshot.public_id, Incident.public_id
+            )
             .outerjoin(Asset, Asset.id == AIInsight.asset_id)
             .outerjoin(Detection, Detection.id == AIInsight.detection_id)
             .outerjoin(RiskSnapshot, RiskSnapshot.id == AIInsight.risk_snapshot_id)
+            .outerjoin(Incident, Incident.id == AIInsight.incident_id)
         )
         # Las preguntas de Ask son privadas de quien las hizo.
         return stmt.where(
@@ -517,8 +543,11 @@ class AIInsightService:
         detection_id: UUID | None,
         limit: int,
         offset: int,
+        incident_id: UUID | None = None,
     ) -> InsightList:
         stmt = self._base()
+        if incident_id is not None:
+            stmt = stmt.where(Incident.public_id == incident_id)
         if kind:
             stmt = stmt.where(AIInsight.kind == kind)
         if asset_id is not None:
@@ -531,9 +560,9 @@ class AIInsightService:
             .limit(limit)
             .offset(offset)
         ).all()
-        versions: dict[tuple[int | None, int | None], str] = {}
+        versions: dict[tuple[int | None, int | None, int | None], str] = {}
         return InsightList(
-            items=[self._to_read(r[0], r[1], r[2], r[3], False, versions) for r in rows],
+            items=[self._to_read(r[0], r[1], r[2], r[3], r[4], False, versions) for r in rows],
             total=total,
         )
 
@@ -541,11 +570,11 @@ class AIInsightService:
         row = self._session.execute(self._base().where(AIInsight.public_id == insight_id)).first()
         if row is None:
             raise NotFoundError("Insight not found")
-        return self._to_read(row[0], row[1], row[2], row[3], False, {})
+        return self._to_read(row[0], row[1], row[2], row[3], row[4], False, {})
 
     def _read(self, insight: AIInsight, cached: bool) -> InsightRead:
         row = self._session.execute(self._base().where(AIInsight.id == insight.id)).one()
-        return self._to_read(row[0], row[1], row[2], row[3], cached, {})
+        return self._to_read(row[0], row[1], row[2], row[3], row[4], cached, {})
 
     def _to_read(
         self,
@@ -553,8 +582,9 @@ class AIInsightService:
         asset: Asset | None,
         detection_public: UUID | None,
         snapshot_public: UUID | None,
+        incident_public: UUID | None,
         cached: bool,
-        versions: dict[tuple[int | None, int | None], str],
+        versions: dict[tuple[int | None, int | None, int | None], str],
     ) -> InsightRead:
         stale_reason = self._stale_reason(insight, versions)
         return InsightRead(
@@ -564,6 +594,7 @@ class AIInsightService:
             asset_id=asset.public_id if asset else None,
             asset_name=asset.display_name if asset else None,
             detection_id=detection_public,
+            incident_id=incident_public,
             risk_snapshot_id=snapshot_public,
             question=insight.question,
             provider=insight.provider,
@@ -582,15 +613,26 @@ class AIInsightService:
         )
 
     def _stale_reason(
-        self, insight: AIInsight, versions: dict[tuple[int | None, int | None], str]
+        self,
+        insight: AIInsight,
+        versions: dict[tuple[int | None, int | None, int | None], str],
     ) -> str | None:
         if insight.scope == "asset" and insight.asset_id is None:
+            return "entity_deleted"
+        if insight.scope == "incident" and insight.incident_id is None:
             return "entity_deleted"
         if insight.scope == "detection" and insight.detection_id is None:
             return "entity_deleted"
         if insight.expires_at <= datetime.now(UTC):
             return "expired"
-        key = (insight.asset_id, insight.detection_id if insight.scope == "detection" else None)
+        if insight.scope == "incident":
+            key: tuple[int | None, int | None, int | None] = (None, None, insight.incident_id)
+        else:
+            key = (
+                insight.asset_id,
+                insight.detection_id if insight.scope == "detection" else None,
+                None,
+            )
         if key not in versions:
-            versions[key] = data_version(self._session, key[0], key[1])
+            versions[key] = data_version(self._session, key[0], key[1], key[2])
         return "data_changed" if versions[key] != insight.data_version else None

@@ -41,6 +41,7 @@ function insight(overrides: Partial<Insight> = {}): Insight {
     asset_id: ASSET,
     asset_name: "pc-demo",
     detection_id: null,
+    incident_id: null,
     risk_snapshot_id: null,
     question: "¿Por qué pc-demo tiene riesgo alto?",
     provider: "openai_compatible",

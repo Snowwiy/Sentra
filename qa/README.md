@@ -84,6 +84,15 @@ resuelve al salir de crítico), además del historial con subida y bajada. Arran
 también con `$env:RISK_EVAL_INTERVAL_SECONDS = "2"`. El decay por horas no se espera aquí: lo
 cubren los tests de backend con reloj simulado.
 
+Fase 4K (`test_incidents`): crea un analyst y un viewer temporales y cubre tres escenarios:
+(1) detección → incidente (y 409 al promoverla dos veces) → triage → asignación → nota →
+investigación → contención → resolución (422 sin categoría) → cierre por admin (403 para el
+analyst), caso cerrado congelado, auditoría `incident_*` completa y timeline con caso, nota y
+detección (la nota como texto plano); (2) una segunda detección del mismo activo sugiere el
+incidente abierto, se adjunta y no se crea otro; (3) dos sesiones escriben sobre la misma
+`version`: la primera gana y la segunda recibe 409 `incident_conflict` con la versión actual,
+sin sobrescritura silenciosa. Necesita `DETECTION_EVAL_INTERVAL_SECONDS=2`.
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell
@@ -111,6 +120,20 @@ pasada de decay (activos/s y sentencias SQL por activo), y después el resumen, 
 el detalle, la tendencia y las contribuciones con un historial grande. Borra lo que crea.
 Ejecútalo con la API QA parada. Resultados de referencia en
 [docs/risk-engine.md](../docs/risk-engine.md).
+
+### Rendimiento de incidentes
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_incidents.py   # --incidents 10000 --activity-per-incident 10
+```
+
+Con datos sintéticos (10 000 incidentes, 50 000 relaciones, 100 000 elementos de actividad y
+10 000 notas) mide overview, listados con filtros y orden, búsqueda (INC, hostname, IP,
+título de detección), detalle, timeline por cursor, evidencia, notas y sugerencias de
+relacionados, con sentencias SQL por petición. Borra lo que crea. Resultados de referencia en
+[docs/incident-management.md](../docs/incident-management.md).
 
 ## 5. Real agent and dashboard against the QA API
 

@@ -21,6 +21,7 @@ from app.schemas.ai import (
     AIStatus,
     AnalyzeRequest,
     AskRequest,
+    IncidentAnalyzeRequest,
     InsightKindName,
     InsightList,
     InsightRead,
@@ -115,6 +116,23 @@ def analyze_risk(
     return service.analyze_risk(asset_id, bool(body and body.refresh))
 
 
+@router.post(
+    "/incidents/{incident_id}/analyze",
+    response_model=InsightRead,
+    responses=_ANALYSIS_ERRORS,
+    dependencies=[Depends(require_permission(Permission.INCIDENTS_READ))],
+)
+def analyze_incident(
+    incident_id: UUID, service: Service, body: IncidentAnalyzeRequest | None = None
+) -> InsightRead:
+    """Fase 4K: resumir, explicar timeline/evidencia o sugerir pasos defensivos.
+
+    Solo lectura: genera un insight y nunca cambia el incidente.
+    """
+    request = body or IncidentAnalyzeRequest()
+    return service.analyze_incident(incident_id, request.task, request.refresh)
+
+
 @router.post("/soc/analyze", response_model=InsightRead, responses=_ANALYSIS_ERRORS)
 def soc_summary(service: Service, body: SocSummaryRequest | None = None) -> InsightRead:
     """Resumen SOC: detecciones graves, activos con más riesgo y cambios recientes."""
@@ -128,11 +146,12 @@ def list_insights(
     kind: InsightKindName | None = None,
     asset_id: UUID | None = None,
     detection_id: UUID | None = None,
+    incident_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ) -> InsightList:
     """Historial de análisis (más recientes primero) con su estado stale actual."""
-    return service.list(kind, asset_id, detection_id, limit, offset)
+    return service.list(kind, asset_id, detection_id, limit, offset, incident_id)
 
 
 @router.get("/insights/{insight_id}", response_model=InsightRead, responses=error_responses(404))

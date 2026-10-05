@@ -168,6 +168,10 @@ cd backend
 | GET/POST/PATCH | `/api/v1/ai/local/hardware`, `/runtime`, `/models`, `/recommendations`, `/settings`, `/models/{id}/select\|benchmark\|unregister`… | Gestor de modelos locales (Fase 4J.2): hardware, runtime, modelos GGUF, recomendaciones y benchmark (lectura `ai:use`, cambios solo admin `ai:manage`): [docs/local-model-manager.md](docs/local-model-manager.md) |
 | POST | `/api/v1/ai/assets/{asset_id}/analyze`, `/ai/detections/{detection_id}/analyze`, `/ai/risk/assets/{asset_id}/analyze`, `/ai/soc/analyze`, `/ai/ask` | Análisis de IA bajo demanda, grounded en datos de Sentra (`ai:use` + `monitoring:read`; rate limited) |
 | GET | `/api/v1/ai/insights?kind=&asset_id=&detection_id=`, `/ai/insights/{insight_id}` | Historial de análisis con estado actual/desactualizado |
+| GET | `/api/v1/incidents?status=&active=&severity=&priority=&owner=&asset_id=&since=&until=&q=&sort=&order=&limit=&offset=`, `/incidents/overview`, `/incidents/{id}`, `/{id}/timeline?cursor=`, `/{id}/evidence`, `/{id}/notes`, `/{id}/audit` | Gestión de incidentes (Fase 4K, `incidents:read`): listado, vista SOC, detalle, timeline unificado por cursor, evidencia agrupada y auditoría del caso: [docs/incident-management.md](docs/incident-management.md) |
+| POST/PATCH | `/api/v1/incidents`, `/detections/{id}/incident`, `/alerts/{id}/incident`, `PATCH /incidents/{id}`, `/{id}/assign\|unassign\|notes\|resolve`, `/{id}/detections/{did}`, `/{id}/alerts/{aid}`, `/{id}/assets/{asset_id}` | Crear, promover, trabajar y resolver incidentes (`incidents:manage`, analyst y admin; `version` obligatoria, 409 `incident_conflict` si otro operador lo cambió) |
+| POST | `/api/v1/incidents/{id}/close`, `/reopen`, `/merge` | Cerrar, reabrir y fusionar (solo admin, `incidents:admin`) |
+| POST | `/api/v1/ai/incidents/{incident_id}/analyze` | IA de solo lectura sobre un incidente (`summary`, `timeline`, `evidence`, `next_steps`); nunca cambia el caso |
 | PATCH | `/api/v1/assets/{asset_id}/criticality` | Criticidad del activo (solo admin, `assets:manage`; auditado) |
 | POST | `/api/v1/auth/login`, `/auth/logout`; GET `/auth/me` | Sesión del dashboard (cookie HttpOnly + `X-CSRF-Token` en mutaciones). Todos los GET del dashboard requieren sesión; usuarios, auditoría y acciones por rol: [docs/authentication.md](docs/authentication.md) |
 
@@ -236,6 +240,13 @@ hardware, habla con el runtime local (llama.cpp, Ollama, vLLM), registra modelos
 estima su memoria, recomienda de forma determinista el más adecuado para Sentra, los activa
 con health check y mide su rendimiento con un benchmark local; sin descargas ni fallback
 cloud ([docs/local-model-manager.md](docs/local-model-manager.md)).
+**Incidentes** (Fase 4K): página Incidentes y vista SOC del dashboard. Un incidente
+(INC-000001) agrupa por referencia detecciones, correlaciones, alertas y activos, con
+state machine explícita (open → triage → investigating → contained → resolved → closed),
+severidad y prioridad separadas, responsable, notas append-only, timeline unificado,
+resolución con categoría obligatoria, duplicados y fusión (admin), sugerencia de incidentes
+relacionados sin deduplicación automática, snapshot de riesgo de 4I y concurrencia optimista
+(409). La IA solo lee ([docs/incident-management.md](docs/incident-management.md)).
 Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap

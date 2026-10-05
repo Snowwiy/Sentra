@@ -39,6 +39,19 @@ describe("apiGet", () => {
     expect(error.message).toBe("Asset not found");
   });
 
+  it("keeps the envelope details and translates incident errors", async () => {
+    const details = [{ incident_id: "i1", current_version: 4, updated_by: "luis" }];
+    respond(409, JSON.stringify({ error: { code: "incident_conflict", message: "changed", details } }));
+
+    const error = await failure(apiGet("/incidents/i1"));
+    expect(error.code).toBe("incident_conflict");
+    expect(error.details).toEqual(details);
+    expect(error.message).toMatch(/Otro operador ha modificado este incidente/);
+
+    respond(422, JSON.stringify({ error: { code: "incident_invalid_reference", message: "Asset not found: x" } }));
+    expect((await failure(apiGet("/incidents"))).message).toBe("Referencia no válida: Asset not found: x");
+  });
+
   it("reports a gateway error without envelope as the API being unreachable", async () => {
     respond(502, "<html>Bad Gateway</html>", "text/html");
 

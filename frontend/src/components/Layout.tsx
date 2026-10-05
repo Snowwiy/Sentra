@@ -27,6 +27,7 @@ export function Layout() {
           <Link to="/network">Red</Link>
           <Link to="/risk">Riesgo</Link>
           <Link to="/detections">Detecciones</Link>
+          {auth.can("incidents:read") && <Link to="/incidents">Incidentes</Link>}
           <Link to="/alerts">Alertas</Link>
           {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
           {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}

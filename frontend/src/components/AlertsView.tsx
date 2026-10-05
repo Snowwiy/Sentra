@@ -10,6 +10,7 @@ import { usePolling } from "../lib/usePolling";
 import { RULE_LABELS, SeverityBadge } from "./AlertTable";
 import { FilterSelect, Pager, SearchInput, Toolbar } from "./ListControls";
 import { EmptyState, ErrorState, LoadingState } from "./StateViews";
+import { RelatedIncidentsPanel } from "./incidents/RelatedIncidentsPanel";
 
 const PAGE_SIZE = 50;
 
@@ -120,6 +121,7 @@ function AlertDetail({ alert, onChanged }: { alert: Alert; onChanged: () => void
       </dl>
       {alert.details && <pre className="details-json">{JSON.stringify(alert.details, null, 2)}</pre>}
       <AlertActions alert={alert} onChanged={onChanged} />
+      <RelatedIncidentsPanel source="alert" id={alert.alert_id} />
     </div>
   );
 }

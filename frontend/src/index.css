@@ -1857,3 +1857,137 @@ td > .badge:first-child {
   border-bottom: 1px solid var(--border);
   overflow-wrap: anywhere;
 }
+
+/* Gestión de incidentes (Fase 4K) */
+
+.stats--6 {
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+}
+
+@media (max-width: 1100px) {
+  .stats--6 {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .stats--6 {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+.stat--crit {
+  border-left-color: var(--crit);
+}
+
+.stat--idle {
+  border-left-color: var(--idle);
+}
+
+.ipriority {
+  display: inline-block;
+  padding: 0 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.ipriority--critical {
+  color: var(--crit);
+  border-color: var(--crit);
+}
+
+.ipriority--high {
+  color: #f97316;
+  border-color: #f97316;
+}
+
+.ipriority--medium {
+  color: var(--warn);
+  border-color: var(--warn);
+}
+
+.ipriority--low {
+  color: var(--text-muted);
+}
+
+.istatus {
+  font-weight: 600;
+}
+
+.istatus--open {
+  color: var(--warn);
+}
+
+.istatus--triage,
+.istatus--investigating {
+  color: var(--accent);
+}
+
+.istatus--contained {
+  color: var(--ok);
+}
+
+.istatus--resolved,
+.istatus--closed,
+.istatus--merged {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.incident-key {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.incident-form {
+  display: grid;
+  gap: 10px;
+}
+
+.incident-form label {
+  display: grid;
+  gap: 4px;
+}
+
+.incident-form textarea,
+.incident-note textarea {
+  width: 100%;
+  min-height: 70px;
+  resize: vertical;
+}
+
+.incident-form .input {
+  width: 100%;
+}
+
+.incident-note {
+  display: grid;
+  gap: 6px;
+  margin-bottom: 12px;
+}
+
+.note-body {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.related-list {
+  display: grid;
+  gap: 8px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.related-list li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}

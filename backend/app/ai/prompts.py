@@ -26,6 +26,11 @@ class InsightKind(StrEnum):
     RISK_EXPLANATION = "risk_explanation"
     SOC_SUMMARY = "soc_summary"
     ASK = "ask"
+    # Fase 4K: asistencia de solo lectura sobre un incidente (cuatro tareas).
+    INCIDENT_SUMMARY = "incident_summary"
+    INCIDENT_TIMELINE = "incident_timeline"
+    INCIDENT_EVIDENCE = "incident_evidence"
+    INCIDENT_NEXT_STEPS = "incident_next_steps"
 
 
 # Versión de la política común: forma parte de la versión efectiva de cada plantilla.
@@ -123,5 +128,35 @@ TEMPLATES: dict[InsightKind, PromptTemplate] = {
         1,
         "Responde a la pregunta del analista usando solo los datos aportados. Si los datos "
         "no bastan para responder, dilo con claridad y explica qué faltaría.",
+    ),
+    # Incidentes (4K). La IA solo analiza: no cambia estado, owner, severidad, prioridad
+    # ni resolución; la política común ya prohíbe proponer comandos o acciones ofensivas.
+    InsightKind.INCIDENT_SUMMARY: PromptTemplate(
+        InsightKind.INCIDENT_SUMMARY,
+        1,
+        "Resume el incidente para el analista: qué se sabe, qué activos y detecciones lo "
+        "componen, su gravedad y el riesgo de los activos. Distingue lo observado de lo "
+        "hipotético. No afirmes un compromiso si la evidencia no lo respalda.",
+    ),
+    InsightKind.INCIDENT_TIMELINE: PromptTemplate(
+        InsightKind.INCIDENT_TIMELINE,
+        1,
+        "Explica la cronología del incidente usando solo las fechas de los datos (evidencias, "
+        "detecciones, alertas, cambios de riesgo y actividad del caso). No inventes horas ni "
+        "rellenes huecos: señala los periodos sin datos.",
+    ),
+    InsightKind.INCIDENT_EVIDENCE: PromptTemplate(
+        InsightKind.INCIDENT_EVIDENCE,
+        1,
+        "Explica la evidencia del incidente: qué respalda cada detección o alerta, qué "
+        "evidencias se refuerzan entre sí y qué es débil o requiere validación. Si la "
+        "evidencia no basta para una conclusión, dilo.",
+    ),
+    InsightKind.INCIDENT_NEXT_STEPS: PromptTemplate(
+        InsightKind.INCIDENT_NEXT_STEPS,
+        1,
+        "Sugiere los siguientes pasos DEFENSIVOS de investigación (qué revisar, qué validar, "
+        "a quién preguntar) basados en la evidencia citada. No propongas comandos, cambios "
+        "en equipos ni acciones automáticas; la decisión es del analista.",
     ),
 }

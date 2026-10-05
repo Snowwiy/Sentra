@@ -1,5 +1,5 @@
 import logging
-from typing import cast
+from typing import Any, cast
 
 from fastapi import FastAPI, Request, status
 from fastapi.encoders import jsonable_encoder
@@ -18,9 +18,12 @@ class SentraError(Exception):
     status_code = status.HTTP_500_INTERNAL_SERVER_ERROR
     code = "internal_error"
 
-    def __init__(self, message: str) -> None:
+    def __init__(self, message: str, details: list[dict[str, Any]] | None = None) -> None:
         super().__init__(message)
         self.message = message
+        # Contexto opcional y seguro para el cliente (p. ej. la versión actual en un 409 de
+        # concurrencia, para que la UI pueda refrescar). Nunca datos internos ni secretos.
+        self.details = details
 
 
 class NotFoundError(SentraError):
@@ -100,6 +103,32 @@ class DiscoveryDisabledError(ConflictError):
     code = "discovery_disabled"
 
 
+class IncidentConflictError(ConflictError):
+    # Fase 4K: el incidente cambió desde que el cliente lo leyó (token `version` obsoleto).
+    # `details` lleva la versión y el estado actuales para que la UI refresque y el operador
+    # decida; nunca se sobrescribe en silencio el cambio de otro.
+    code = "incident_conflict"
+
+
+class IncidentStateError(ConflictError):
+    # Transición no permitida por la state machine, o caso cerrado/fusionado que no admite
+    # cambios. 409: el estado actual del caso es el que lo impide, no la forma de la petición.
+    code = "incident_invalid_state"
+
+
+class IncidentRelationError(SentraError):
+    # Owner, activo, detección, alerta o incidente de merge que no existe o no es válido
+    # para esta operación (usuario inactivo, viewer como owner, merge consigo mismo...).
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "incident_invalid_reference"
+
+
+class IncidentAlreadyLinkedError(ConflictError):
+    # La detección/alerta ya pertenece a un incidente activo: se ofrece adjuntar o abrir
+    # ese caso en lugar de crear un duplicado (anti incident-flood).
+    code = "incident_already_linked"
+
+
 class DiscoveryTargetError(SentraError):
     # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
     # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.
@@ -116,7 +145,7 @@ def _error(status_code: int, code: str, message: str, details: object = None) ->
 
 async def _sentra_error_handler(_: Request, exc: Exception) -> JSONResponse:
     error = cast(SentraError, exc)
-    response = _error(error.status_code, error.code, error.message)
+    response = _error(error.status_code, error.code, error.message, jsonable_encoder(error.details))
     if isinstance(error, UnauthorizedError):
         response.headers["WWW-Authenticate"] = "Bearer"
     if isinstance(error, RateLimitedError):

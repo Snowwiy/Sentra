@@ -110,7 +110,12 @@ def _resolve(refs: list[str], ctx: AIContext, dropped: list[str]) -> list[str]:
 
 
 def _has_strong_evidence(ctx: AIContext) -> bool:
-    for section in ("active_detections", "detection", "detections_in_window"):
+    for section in (
+        "active_detections",
+        "detection",
+        "detections_in_window",
+        "incident_detections",
+    ):
         value = ctx.data.get(section)
         items: list[Any]
         if isinstance(value, dict) and "items" in value:

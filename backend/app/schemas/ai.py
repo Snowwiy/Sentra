@@ -13,13 +13,28 @@ from pydantic import Field
 from app.schemas.common import RequestModel, ResponseModel
 
 InsightKindName = Literal[
-    "asset_summary", "detection_analysis", "risk_explanation", "soc_summary", "ask"
+    "asset_summary",
+    "detection_analysis",
+    "risk_explanation",
+    "soc_summary",
+    "ask",
+    "incident_summary",
+    "incident_timeline",
+    "incident_evidence",
+    "incident_next_steps",
 ]
+# Fase 4K: tareas de asistencia sobre un incidente (todas de solo lectura).
+IncidentTask = Literal["summary", "timeline", "evidence", "next_steps"]
 Certainty = Literal["observed", "detected", "correlated", "possible", "requires_validation"]
 
 
 class AnalyzeRequest(RequestModel):
     # true = ignorar la caché y generar un análisis nuevo (cuenta para el rate limit).
+    refresh: bool = False
+
+
+class IncidentAnalyzeRequest(RequestModel):
+    task: IncidentTask = "summary"
     refresh: bool = False
 
 
@@ -40,7 +55,7 @@ class EvidenceRefRead(ResponseModel):
     # Identificador corto que citó el modelo (D1, C2...), válido solo dentro del insight.
     ref: str
     # asset, detection, event, evidence, exposure, risk_contribution, risk_snapshot, alert,
-    # change.
+    # change, incident, note.
     type: str
     # Id público de Sentra (UUID) o compuesto ("<activo>:tcp/3389", "<activo>#0").
     id: str
@@ -77,10 +92,11 @@ class InsightResult(ResponseModel):
 class InsightRead(ResponseModel):
     insight_id: UUID
     kind: InsightKindName
-    scope: Literal["asset", "detection", "fleet"]
+    scope: Literal["asset", "detection", "incident", "fleet"]
     asset_id: UUID | None
     asset_name: str | None
     detection_id: UUID | None
+    incident_id: UUID | None
     risk_snapshot_id: UUID | None
     question: str | None
     provider: str

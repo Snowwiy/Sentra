@@ -184,6 +184,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
     assert body["user"]["username"] == "ana" and body["user"]["role"] == "analyst"
     assert set(body["permissions"]) == {
         "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
+        "incidents:read", "incidents:manage",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -450,14 +451,19 @@ def test_last_admin_guard_in_the_service(db: Session) -> None:
 
 
 def test_role_permissions_are_least_privilege() -> None:
-    # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer.
-    writes = set(Permission) - {Permission.MONITORING_READ, Permission.AI_USE}
-    assert ROLE_PERMISSIONS[Role.VIEWER] == {Permission.MONITORING_READ, Permission.AI_USE}
+    # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer;
+    # incidents:read (Fase 4K) solo lectura de casos.
+    reads = {Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ}
+    writes = set(Permission) - reads
+    assert ROLE_PERMISSIONS[Role.VIEWER] == reads
     assert not writes & ROLE_PERMISSIONS[Role.VIEWER]
     assert ROLE_PERMISSIONS[Role.ANALYST] == {
         Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DETECTIONS_MANAGE,
-        Permission.DISCOVERY_RUN, Permission.AI_USE,
+        Permission.DISCOVERY_RUN, Permission.AI_USE, Permission.INCIDENTS_READ,
+        Permission.INCIDENTS_MANAGE,
     }  # fmt: skip
+    # Cerrar, reabrir, fusionar y asignar a otros (incidents:admin) es solo de admin.
+    assert Permission.INCIDENTS_ADMIN not in ROLE_PERMISSIONS[Role.ANALYST]
     assert ROLE_PERMISSIONS[Role.ADMIN] == set(Permission)
     # Un rol desconocido (BD manipulada) o con otra capitalización no hereda nada.
     for role in ("ADMIN", "Admin", "root", "", "admin "):
@@ -557,7 +563,7 @@ def _api_routes(client: TestClient) -> list[tuple[str, str]]:
 def _concrete(path: str) -> str:
     for name in (
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
-        "model_id", "benchmark_id",
+        "model_id", "benchmark_id", "incident_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     assert "{" not in path, path
@@ -589,6 +595,8 @@ AI_ANALYSIS = {
     ("POST", "/api/v1/ai/detections/{detection_id}/analyze"),
     ("POST", "/api/v1/ai/risk/assets/{asset_id}/analyze"),
     ("POST", "/api/v1/ai/soc/analyze"),
+    # Fase 4K: análisis de solo lectura de un incidente (nunca lo modifica).
+    ("POST", "/api/v1/ai/incidents/{incident_id}/analyze"),
 }
 
 

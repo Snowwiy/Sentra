@@ -1263,6 +1263,136 @@ def test_ai() -> None:
     check("dashboard unaffected by ai", call("GET", f"/risk/assets/{asset_id}").status == 200)
 
 
+def test_incidents() -> None:
+    """Fase 4K: flujo SOC completo, sugerencia de relacionados y concurrencia (409).
+
+    Necesita el job del motor de detección con intervalo corto
+    (DETECTION_EVAL_INTERVAL_SECONDS=2). Crea un analyst y un viewer temporales.
+    """
+    security = {"channel": "Security", "provider": "Microsoft-Windows-Security-Auditing"}
+    users: dict[str, dict[str, str]] = {}
+    for role in ("analyst", "viewer"):
+        name = f"qa-{role}-" + uuid.uuid4().hex[:6]
+        password = f"qa {role} password " + uuid.uuid4().hex[:8]
+        r = call("POST", "/users", {"username": name, "password": password, "role": role})
+        check(f"admin creates an incident {role}", r.status == 201, (r.status, r.body))
+        users[role] = login(name, password)[1]
+    analyst, viewer = users["analyst"], users["viewer"]
+
+    def detection_on(hostname: str, record: int) -> tuple[str, str, str]:
+        agent_id, token, asset_id = enroll(hostname)
+        call("POST", "/events", {"agent_id": agent_id, "events": [
+            event(record, event_code=1102, level="critical", message="QA log cleared",
+                  data={"SubjectUserName": "qa-user"}, **security)]}, bearer(token))  # fmt: skip
+        found = wait_for(
+            lambda: call("GET", f"/detections?asset_id={asset_id}&rule_id=DEF-001").body,
+            lambda body: isinstance(body, dict) and body.get("total", 0) > 0,
+        )
+        items = found.get("items", []) if isinstance(found, dict) else []
+        return agent_id, token, (items[0]["detection_id"] if items else "")
+
+    # 1. Detección -> incidente -> triage -> investigación -> contención -> resuelto -> cerrado.
+    _, _, detection_id = detection_on("qa-incident-flow", 9301)
+    check("incident flow: detection available", bool(detection_id))
+    if not detection_id:
+        return
+    r = call("POST", f"/detections/{detection_id}/incident", {}, session=analyst)
+    check("analyst promotes detection -> 201", r.status == 201, (r.status, r.body))
+    incident = r.body if r.status == 201 else {}
+    iid = incident.get("incident_id", "")
+    check("incident number INC-xxxxxx", str(incident.get("key", "")).startswith("INC-"), incident)
+    r = call("POST", f"/detections/{detection_id}/incident", {}, session=analyst)
+    check("promote twice -> 409 already linked", r.status == 409
+          and is_error_envelope(r, "incident_already_linked"), (r.status, r.body))  # fmt: skip
+    r = call("PATCH", f"/incidents/{iid}", {"version": incident.get("version", 1),
+             "status": "triage"}, session=viewer)  # fmt: skip
+    check("viewer cannot change incidents -> 403", r.status == 403, r.status)
+    r = call("GET", f"/incidents/{iid}", session=viewer)
+    check("viewer reads the incident", r.status == 200, r.status)
+
+    def step(method: str, path: str, payload: dict[str, Any], name: str) -> None:
+        nonlocal incident
+        body = {"version": incident.get("version", 1), **payload}
+        res = call(method, path, body, session=analyst)
+        check(name, res.status == 200, (res.status, res.body))
+        if res.status == 200:
+            incident = res.body
+
+    step("PATCH", f"/incidents/{iid}", {"status": "triage"}, "analyst moves to triage")
+    step("POST", f"/incidents/{iid}/assign", {}, "analyst assigns self")
+    note = {"body": "<script>QA</script> nota"}
+    r = call("POST", f"/incidents/{iid}/notes", note, session=analyst)
+    check("analyst adds a note -> 201", r.status == 201, (r.status, r.body))
+    step("PATCH", f"/incidents/{iid}", {"status": "investigating"}, "analyst investigates")
+    step("PATCH", f"/incidents/{iid}", {"status": "contained"}, "analyst contains")
+    r = call("POST", f"/incidents/{iid}/resolve", {"version": incident.get("version", 1)},
+             session=analyst)  # fmt: skip
+    check("resolve without category -> 422", r.status == 422, r.status)
+    step("POST", f"/incidents/{iid}/resolve", {"category": "true_positive"}, "analyst resolves")
+    r = call("POST", f"/incidents/{iid}/close", {"version": incident.get("version", 1)},
+             session=analyst)  # fmt: skip
+    check("analyst cannot close -> 403", r.status == 403, r.status)
+    r = call("POST", f"/incidents/{iid}/close", {"version": incident.get("version", 1)})
+    check("admin closes", r.status == 200 and r.body["status"] == "closed", (r.status, r.body))
+    r = call("POST", f"/incidents/{iid}/notes", {"body": "tarde"}, session=analyst)
+    check("closed incident is frozen -> 409", r.status == 409, (r.status, r.body))
+    audit = call("GET", f"/incidents/{iid}/audit?limit=50").body.get("items", [])
+    actions = {a["action"] for a in audit if a["result"] == "success"}
+    expected = {"incident_created", "incident_status_changed", "incident_assigned",
+                "incident_note_added", "incident_resolved", "incident_closed"}  # fmt: skip
+    check("incident audit trail complete", expected <= actions, sorted(actions))
+    timeline = call("GET", f"/incidents/{iid}/timeline?limit=200").body.get("items", [])
+    sources = {item["source_type"] for item in timeline}
+    check("timeline unifies case, note and detection", {"incident", "note", "detection"} <= sources,
+          sorted(sources))  # fmt: skip
+    check("note text stays plain text", any(i["summary"] == "<script>QA</script> nota"
+          for i in timeline), [i["summary"] for i in timeline][:5])  # fmt: skip
+
+    # 2. Detección relacionada: se sugiere el incidente abierto y se adjunta sin duplicar.
+    agent_id, token, first = detection_on("qa-incident-related", 9401)
+    r = call("POST", f"/detections/{first}/incident", {}, session=analyst)
+    check("related: first incident created", r.status == 201, (r.status, r.body))
+    open_id = r.body.get("incident_id", "") if r.status == 201 else ""
+    user = {"TargetUserName": "qa-related", "TargetUserSid": "S-1-5-21-90-91-92-2002"}
+    call("POST", "/events", {"agent_id": agent_id, "events": [
+        event(9500 + i, event_code=4625, level="warning", message="QA logon failure",
+              occurred_at=now_iso(timedelta(minutes=-2, seconds=i)),
+              data={**user, "IpAddress": "10.66.0.19", "LogonType": "3"}, **security)
+        for i in range(6)]}, bearer(token))  # fmt: skip
+    found = wait_for(
+        lambda: call("GET", "/detections?rule_id=AUTH-001&active=true&q=qa-incident-related").body,
+        lambda body: isinstance(body, dict) and body.get("total", 0) > 0,
+    )
+    items = found.get("items") if isinstance(found, dict) else None
+    burst = (items or [{}])[0].get("detection_id", "")
+    check("related: second detection on the same asset", bool(burst), found)
+    if burst and open_id:
+        related = call("GET", f"/detections/{burst}/related-incidents", session=analyst).body
+        ids = [item["incident"]["incident_id"] for item in related.get("items", [])]
+        check("open incident suggested as related", open_id in ids, related)
+        r = call("POST", f"/incidents/{open_id}/detections/{burst}", session=analyst)
+        check("analyst attaches the related detection", r.status == 200
+              and r.body["detections_total"] == 2, (r.status, r.body))  # fmt: skip
+        listed = call("GET", "/incidents?q=qa-incident-related&limit=50").body
+        check("no duplicate incident created", listed.get("total") == 1, listed)
+
+    # 3. Dos sesiones a la vez sobre la misma versión: una gana, la otra recibe 409.
+    if open_id:
+        current = call("GET", f"/incidents/{open_id}").body
+        version = current.get("version", 1)
+        a = call("PATCH", f"/incidents/{open_id}", {"version": version, "priority": "critical"})
+        b = call("PATCH", f"/incidents/{open_id}", {"version": version, "priority": "low"},
+                 session=analyst)  # fmt: skip
+        check("first writer wins", a.status == 200, (a.status, a.body))
+        check("second writer -> 409 incident_conflict", b.status == 409
+              and is_error_envelope(b, "incident_conflict"), (b.status, b.body))  # fmt: skip
+        details = (b.body.get("error", {}).get("details") or [{}])[0] if b.status == 409 else {}
+        check("conflict reports the current version", details.get("current_version") == version + 1,
+              details)  # fmt: skip
+        after = call("GET", f"/incidents/{open_id}").body
+        check("no silent overwrite", after.get("priority") == "critical", after.get("priority"))
+
+
 def test_auth() -> None:
     """Fase 4G: login, sesión, CSRF, permisos y separación de credenciales sobre HTTP real."""
     for path in ("/assets", "/alerts", "/events", "/agents", "/discovery/jobs", "/users"):
@@ -1357,6 +1487,7 @@ def main() -> int:
         test_detections,
         test_risk,
         test_ai,
+        test_incidents,
         test_auth,
     ]
     if args.offline:

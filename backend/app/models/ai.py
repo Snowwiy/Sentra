@@ -45,6 +45,12 @@ class AIInsight(Base):
             postgresql_where=text("risk_snapshot_id IS NOT NULL"),
         ),
         Index(
+            "ix_ai_insights_incident",
+            "incident_id",
+            "generated_at",
+            postgresql_where=text("incident_id IS NOT NULL"),
+        ),
+        Index(
             "ix_ai_insights_user",
             "requested_by_user_id",
             postgresql_where=text("requested_by_user_id IS NOT NULL"),
@@ -55,7 +61,7 @@ class AIInsight(Base):
     public_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, default=uuid.uuid4)
     # asset_summary, detection_analysis, risk_explanation, soc_summary o ask.
     kind: Mapped[str] = mapped_column(String(32))
-    # asset, detection o fleet: sobre qué datos se construyó el contexto.
+    # asset, detection, incident o fleet: sobre qué datos se construyó el contexto.
     scope: Mapped[str] = mapped_column(String(16))
     # Entidades analizadas. SET NULL: borrar un activo no borra el historial de análisis
     # (queda marcado stale por datos inexistentes).
@@ -67,6 +73,8 @@ class AIInsight(Base):
     risk_snapshot_id: Mapped[int | None] = mapped_column(
         ForeignKey("risk_snapshots.id", ondelete="SET NULL")
     )
+    # Incidente analizado (Fase 4K): asistencia de IA de solo lectura sobre un caso.
+    incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id", ondelete="SET NULL"))
     # Pregunta del analista (solo Ask); acotada y sin datos del contexto.
     question: Mapped[str | None] = mapped_column(String(500))
 

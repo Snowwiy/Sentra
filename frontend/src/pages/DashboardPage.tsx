@@ -4,6 +4,7 @@ import { sentraApi } from "../api/sentra";
 import type { Asset, AssetStatus } from "../api/types";
 import { AlertTable } from "../components/AlertTable";
 import { EventTable } from "../components/EventTable";
+import { IncidentsOverviewPanel } from "../components/incidents/IncidentsOverviewPanel";
 import { AssetName } from "../components/DeviceIdentity";
 import { MethodBadge } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
@@ -112,6 +113,8 @@ export function DashboardPage() {
           </button>
         ))}
       </section>
+
+      <IncidentsOverviewPanel />
 
       {openAlerts.data && openAlerts.data.items.length > 0 && (
         <section className="panel panel--alerts" aria-label="Alertas abiertas">

@@ -46,10 +46,19 @@ class Permission(enum.StrEnum):
     # cambiar el runtime y refrescar el perfil de hardware. Solo admin: cambiar el modelo
     # cambia lo que responde la IA a todos los usuarios.
     AI_MANAGE = "ai:manage"
+    # Gestión de incidentes (Fase 4K). Leer casos, timeline, evidencia y notas.
+    INCIDENTS_READ = "incidents:read"
+    # Trabajar casos: crear, triage/investigación/contención, notas, adjuntar detecciones y
+    # alertas, asignarse a sí mismo y resolver.
+    INCIDENTS_MANAGE = "incidents:manage"
+    # Acciones administrativas sobre casos: reasignar a otros, cerrar, reabrir y fusionar.
+    INCIDENTS_ADMIN = "incidents:admin"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
-    Role.VIEWER: frozenset({Permission.MONITORING_READ, Permission.AI_USE}),
+    Role.VIEWER: frozenset(
+        {Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ}
+    ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
     # pero no gestiona credenciales (agentes, tokens de enrollment) ni usuarios.
     Role.ANALYST: frozenset(
@@ -59,6 +68,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.DETECTIONS_MANAGE,
             Permission.DISCOVERY_RUN,
             Permission.AI_USE,
+            Permission.INCIDENTS_READ,
+            Permission.INCIDENTS_MANAGE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

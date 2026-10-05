@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
@@ -15,6 +16,14 @@ import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RiskPage } from "./pages/RiskPage";
 import { UsersPage } from "./pages/UsersPage";
+import { LoadingState } from "./components/StateViews";
+
+// Incidentes (Fase 4K) en su propio chunk: el bundle principal no crece para quien no los usa.
+const IncidentsPage = lazy(() => import("./pages/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
+const IncidentDetailPage = lazy(() =>
+  import("./pages/IncidentDetailPage").then((m) => ({ default: m.IncidentDetailPage })),
+);
+const incidentsFallback = <LoadingState label="Cargando incidentes…" />;
 
 export function AppRoutes() {
   return (
@@ -37,6 +46,26 @@ export function AppRoutes() {
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="detections" element={<DetectionsPage />} />
           <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
+          <Route
+            path="incidents"
+            element={
+              <RequirePermission permission="incidents:read">
+                <Suspense fallback={incidentsFallback}>
+                  <IncidentsPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="incidents/:incidentId"
+            element={
+              <RequirePermission permission="incidents:read">
+                <Suspense fallback={incidentsFallback}>
+                  <IncidentDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
           <Route
             path="ai"
             element={

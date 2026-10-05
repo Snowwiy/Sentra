@@ -7,6 +7,10 @@ export const KIND_LABELS: Record<InsightKind, string> = {
   risk_explanation: "Explicación de riesgo",
   soc_summary: "Resumen SOC",
   ask: "Ask Sentra AI",
+  incident_summary: "Resumen de incidente",
+  incident_timeline: "Timeline de incidente",
+  incident_evidence: "Evidencia de incidente",
+  incident_next_steps: "Siguientes pasos de incidente",
 };
 
 // El lenguaje refleja la certeza: "posible" nunca se pinta igual que "detectado".
@@ -28,6 +32,8 @@ export const REF_TYPE_LABELS: Record<string, string> = {
   risk_snapshot: "Historial de riesgo",
   alert: "Alerta",
   change: "Cambio",
+  incident: "Incidente",
+  note: "Nota del analista",
 };
 
 export const STALE_LABELS: Record<NonNullable<Insight["stale_reason"]>, string> = {
@@ -44,6 +50,8 @@ export function refLink(ref: EvidenceRef): string | null {
       return `/detections/${encodeURIComponent(ref.id)}`;
     case "asset":
       return `/assets/${encodeURIComponent(ref.id)}`;
+    case "incident":
+      return `/incidents/${encodeURIComponent(ref.id)}`;
     case "risk_contribution":
     case "risk_snapshot":
       return asset ? `/assets/${asset}?tab=risk` : null;

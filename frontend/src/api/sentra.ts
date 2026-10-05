@@ -63,6 +63,22 @@ import type {
   TelemetryHistory,
   User,
   UserList,
+  AssignableUserList,
+  IncidentAuditList,
+  IncidentConfidence,
+  IncidentDetail,
+  IncidentEvidence,
+  IncidentLevel,
+  IncidentList,
+  IncidentNote,
+  IncidentNoteList,
+  IncidentOverview,
+  IncidentSort,
+  IncidentStatus,
+  IncidentTask,
+  IncidentTimeline,
+  RelatedIncidentList,
+  ResolutionCategory,
 } from "./types";
 
 export interface AlertQuery {
@@ -348,8 +364,17 @@ export const aiApi = {
   analyzeRisk: (assetId: string, refresh = false) =>
     apiPost<Insight>(`/ai/risk/assets/${encodeURIComponent(assetId)}/analyze`, { refresh }),
   socSummary: (window: AIWindow, refresh = false) => apiPost<Insight>("/ai/soc/analyze", { window, refresh }),
+  analyzeIncident: (incidentId: string, task: IncidentTask, refresh = false) =>
+    apiPost<Insight>(`/ai/incidents/${encodeURIComponent(incidentId)}/analyze`, { task, refresh }),
   list: (
-    query: { kind?: InsightKind; assetId?: string; detectionId?: string; limit?: number; offset?: number },
+    query: {
+      kind?: InsightKind;
+      assetId?: string;
+      detectionId?: string;
+      incidentId?: string;
+      limit?: number;
+      offset?: number;
+    },
     signal?: AbortSignal,
   ) =>
     apiGet<InsightList>(
@@ -357,6 +382,7 @@ export const aiApi = {
         kind: query.kind,
         asset_id: query.assetId,
         detection_id: query.detectionId,
+        incident_id: query.incidentId,
         limit: query.limit,
         offset: query.offset,
       })}`,
@@ -407,4 +433,118 @@ export const localAiApi = {
       })}`,
       { signal },
     ),
+};
+
+export interface IncidentQuery {
+  status?: IncidentStatus;
+  /** Solo casos vivos (open, triage, investigating, contained); se ignora con `status`. */
+  active?: boolean;
+  severity?: IncidentLevel;
+  priority?: IncidentLevel;
+  /** "me", "unassigned" o el id de un usuario. */
+  owner?: string;
+  assetId?: string;
+  /** INC-000123, título, hostname, IP o título de detección. */
+  q?: string;
+  sort?: IncidentSort;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface IncidentCreateInput {
+  title: string;
+  description?: string | null;
+  severity: IncidentLevel;
+  priority: IncidentLevel;
+  confidence?: IncidentConfidence | null;
+  asset_ids?: string[];
+}
+
+export interface IncidentChanges {
+  title?: string;
+  description?: string | null;
+  severity?: IncidentLevel;
+  priority?: IncidentLevel;
+  confidence?: IncidentConfidence | null;
+  status?: IncidentStatus;
+}
+
+const inc = (incidentId: string) => `/incidents/${encodeURIComponent(incidentId)}`;
+
+/**
+ * Gestión de incidentes (Fase 4K). Toda la lógica vive en el servidor: el navegador solo
+ * envía referencias, texto del analista y la `version` que leyó (concurrencia optimista: si
+ * otro operador cambió el caso, la API responde 409 incident_conflict).
+ */
+export const incidentsApi = {
+  list: (query: IncidentQuery, signal?: AbortSignal) =>
+    apiGet<IncidentList>(
+      `/incidents${queryString({
+        status: query.status,
+        active: query.active,
+        severity: query.severity,
+        priority: query.priority,
+        owner: query.owner,
+        asset_id: query.assetId,
+        q: query.q,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  overview: (signal?: AbortSignal) => apiGet<IncidentOverview>("/incidents/overview", { signal }),
+  assignees: (signal?: AbortSignal) => apiGet<AssignableUserList>("/incidents/assignees", { signal }),
+  get: (incidentId: string, signal?: AbortSignal) => apiGet<IncidentDetail>(inc(incidentId), { signal }),
+  timeline: (incidentId: string, cursor?: string, signal?: AbortSignal) =>
+    apiGet<IncidentTimeline>(`${inc(incidentId)}/timeline${queryString({ limit: 50, cursor })}`, { signal }),
+  evidence: (incidentId: string, signal?: AbortSignal) =>
+    apiGet<IncidentEvidence>(`${inc(incidentId)}/evidence`, { signal }),
+  notes: (incidentId: string, offset = 0, signal?: AbortSignal) =>
+    apiGet<IncidentNoteList>(`${inc(incidentId)}/notes${queryString({ limit: 50, offset })}`, { signal }),
+  audit: (incidentId: string, offset = 0, signal?: AbortSignal) =>
+    apiGet<IncidentAuditList>(`${inc(incidentId)}/audit${queryString({ limit: 50, offset })}`, { signal }),
+  relatedToDetection: (detectionId: string, signal?: AbortSignal) =>
+    apiGet<RelatedIncidentList>(`/detections/${encodeURIComponent(detectionId)}/related-incidents`, { signal }),
+  relatedToAlert: (alertId: string, signal?: AbortSignal) =>
+    apiGet<RelatedIncidentList>(`/alerts/${encodeURIComponent(alertId)}/related-incidents`, { signal }),
+  create: (input: IncidentCreateInput) => apiPost<IncidentDetail>("/incidents", input),
+  fromDetection: (detectionId: string, input: { title?: string; priority?: IncidentLevel } = {}) =>
+    apiPost<IncidentDetail>(`/detections/${encodeURIComponent(detectionId)}/incident`, input),
+  fromAlert: (alertId: string, input: { title?: string; priority?: IncidentLevel } = {}) =>
+    apiPost<IncidentDetail>(`/alerts/${encodeURIComponent(alertId)}/incident`, input),
+  update: (incidentId: string, version: number, changes: IncidentChanges) =>
+    apiPatch<IncidentDetail>(inc(incidentId), { version, ...changes }),
+  /** Sin `userId`: asignarse a uno mismo. */
+  assign: (incidentId: string, version: number, userId?: string) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/assign`, { version, user_id: userId ?? null }),
+  unassign: (incidentId: string, version: number) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/unassign`, { version }),
+  addNote: (incidentId: string, body: string) => apiPost<IncidentNote>(`${inc(incidentId)}/notes`, { body }),
+  resolve: (
+    incidentId: string,
+    version: number,
+    input: { category: ResolutionCategory; summary?: string; duplicateOf?: string },
+  ) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/resolve`, {
+      version,
+      category: input.category,
+      summary: input.summary || null,
+      duplicate_of: input.duplicateOf ?? null,
+    }),
+  close: (incidentId: string, version: number) => apiPost<IncidentDetail>(`${inc(incidentId)}/close`, { version }),
+  reopen: (incidentId: string, version: number) => apiPost<IncidentDetail>(`${inc(incidentId)}/reopen`, { version }),
+  /** Fusiona `incidentId` EN `targetId` (admin). */
+  merge: (incidentId: string, version: number, targetId: string, targetVersion: number) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/merge`, {
+      version,
+      target_id: targetId,
+      target_version: targetVersion,
+    }),
+  attachDetection: (incidentId: string, detectionId: string) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/detections/${encodeURIComponent(detectionId)}`),
+  attachAlert: (incidentId: string, alertId: string) =>
+    apiPost<IncidentDetail>(`${inc(incidentId)}/alerts/${encodeURIComponent(alertId)}`),
 };

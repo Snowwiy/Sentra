@@ -1,4 +1,4 @@
-// Botón "Analizar con IA" reutilizable (Asset Detail, Detection Detail, Riesgo).
+// Botón "Analizar con IA" reutilizable (Asset Detail, Detection Detail, Riesgo, Incidentes).
 //
 // El análisis solo se pide al pulsar (nunca al cargar la página ni en el sondeo): cada
 // llamada al modelo cuesta y está limitada por usuario en el servidor. Al abrir se muestra
@@ -78,10 +78,12 @@ interface Props {
   kind: InsightKind;
   assetId?: string;
   detectionId?: string;
+  /** Fase 4K: análisis de un incidente (solo lectura; nunca cambia el caso). */
+  incidentId?: string;
   run: (refresh: boolean) => Promise<Insight>;
 }
 
-export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId, run }: Props) {
+export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId, incidentId, run }: Props) {
   const auth = useAuth();
   const { status, error: statusError } = useAIStatus();
   const [insight, setInsight] = useState<Insight>();
@@ -94,13 +96,16 @@ export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId,
     if (!allowed) return;
     const controller = new AbortController();
     aiApi
-      .list({ kind, assetId: kind === "detection_analysis" ? undefined : assetId, detectionId, limit: 1 }, controller.signal)
+      .list(
+        { kind, assetId: kind === "detection_analysis" ? undefined : assetId, detectionId, incidentId, limit: 1 },
+        controller.signal,
+      )
       .then((list) => {
         if (list.items[0]) setInsight((current) => current ?? list.items[0]);
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [allowed, kind, assetId, detectionId]);
+  }, [allowed, kind, assetId, detectionId, incidentId]);
 
   const analyze = useCallback(
     async (refresh: boolean) => {

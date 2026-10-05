@@ -582,7 +582,10 @@ export type Permission =
   | "users:manage"
   | "audit:read"
   | "ai:use"
-  | "ai:manage";
+  | "ai:manage"
+  | "incidents:read"
+  | "incidents:manage"
+  | "incidents:admin";
 
 export interface CurrentUser {
   user_id: string;
@@ -879,8 +882,17 @@ export interface RiskContributionList {
 
 // --- Fase 4J: AI Security Insights ----------------------------------------------------------
 
-export type InsightKind = "asset_summary" | "detection_analysis" | "risk_explanation" | "soc_summary" | "ask";
-export type InsightScope = "asset" | "detection" | "fleet";
+export type InsightKind =
+  | "asset_summary"
+  | "detection_analysis"
+  | "risk_explanation"
+  | "soc_summary"
+  | "ask"
+  | "incident_summary"
+  | "incident_timeline"
+  | "incident_evidence"
+  | "incident_next_steps";
+export type InsightScope = "asset" | "detection" | "incident" | "fleet";
 /** Vocabulario de certeza que exige el backend a cada hallazgo. */
 export type Certainty = "observed" | "detected" | "correlated" | "possible" | "requires_validation";
 export type AIWindow = "24h" | "7d" | "30d";
@@ -925,6 +937,7 @@ export interface Insight {
   asset_id: string | null;
   asset_name: string | null;
   detection_id: string | null;
+  incident_id: string | null;
   risk_snapshot_id: string | null;
   question: string | null;
   provider: string;
@@ -1200,4 +1213,292 @@ export interface LocalModelDetail {
   evaluation: ModelRecommendation;
   benchmarks: LocalBenchmark[];
   runtime_notes: string[];
+}
+
+// --- Incident Management (Fase 4K) -------------------------------------------------------
+
+export type IncidentStatus = "open" | "triage" | "investigating" | "contained" | "resolved" | "closed" | "merged";
+export type IncidentLevel = "low" | "medium" | "high" | "critical";
+export type IncidentConfidence = "low" | "medium" | "high";
+export type ResolutionCategory =
+  | "true_positive"
+  | "false_positive"
+  | "benign_activity"
+  | "duplicate"
+  | "accepted_risk"
+  | "other";
+export type IncidentSort = "last_activity" | "created_at" | "severity" | "priority" | "status" | "number";
+export type IncidentTask = "summary" | "timeline" | "evidence" | "next_steps";
+export type TimelineSource =
+  | "incident"
+  | "note"
+  | "event"
+  | "detection"
+  | "correlation"
+  | "alert"
+  | "risk"
+  | "ai_insight";
+
+export interface IncidentUserRef {
+  user_id: string;
+  username: string;
+  role: string;
+  /** False si la cuenta se desactivó después: se muestra como owner histórico. */
+  active: boolean;
+}
+
+export interface IncidentLink {
+  incident_id: string;
+  key: string;
+  title: string;
+  status: IncidentStatus;
+}
+
+export interface IncidentAssetRef {
+  asset_id: string;
+  name: string;
+  /** False si el activo ya no existe (se conserva el nombre copiado). */
+  exists: boolean;
+  primary_ip: string | null;
+  source: string;
+  added_at: string;
+}
+
+export interface IncidentSummary {
+  incident_id: string;
+  number: number;
+  /** INC-000001 */
+  key: string;
+  title: string;
+  severity: IncidentLevel;
+  priority: IncidentLevel;
+  status: IncidentStatus;
+  confidence: IncidentConfidence | null;
+  owner: IncidentUserRef | null;
+  assets: string[];
+  asset_count: number;
+  last_activity_at: string;
+  created_at: string;
+  updated_at: string;
+  /** Token de concurrencia: toda mutación lo envía y el servidor responde 409 si cambió. */
+  version: number;
+}
+
+export interface IncidentList {
+  items: IncidentSummary[];
+  total: number;
+}
+
+export interface IncidentDetectionRef {
+  detection_id: string;
+  rule_id: string;
+  kind: string;
+  title: string;
+  severity: string;
+  status: string | null;
+  confidence: string | null;
+  /** False si la retención ya purgó la detección (queda su referencia mínima). */
+  available: boolean;
+  asset_id: string | null;
+  hostname: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  source: string;
+  attached_at: string;
+}
+
+export interface IncidentAlertRef {
+  alert_id: string;
+  rule: string;
+  severity: string;
+  status: string | null;
+  message: string;
+  available: boolean;
+  asset_id: string | null;
+  hostname: string | null;
+  opened_at: string | null;
+  source: string;
+  attached_at: string;
+}
+
+export interface IncidentRiskAsset {
+  asset_id: string;
+  name: string;
+  evaluated: boolean;
+  score: number | null;
+  level: string | null;
+  confidence: string | null;
+  calculated_at: string | null;
+  changed_at: string | null;
+  top_contributors: RiskContribution[];
+}
+
+export interface IncidentRiskSnapshot {
+  score: number | null;
+  level: string | null;
+  confidence: string | null;
+  taken_at: string | null;
+}
+
+export interface IncidentRiskContext {
+  snapshot: IncidentRiskSnapshot;
+  assets: IncidentRiskAsset[];
+}
+
+/** Tiempos observados (no SLA), en segundos. */
+export interface IncidentMetrics {
+  age_seconds: number;
+  time_to_triage_seconds: number | null;
+  time_to_resolve_seconds: number | null;
+}
+
+export interface IncidentDetail extends IncidentSummary {
+  description: string | null;
+  first_seen_at: string | null;
+  last_seen_at: string | null;
+  triaged_at: string | null;
+  resolved_at: string | null;
+  closed_at: string | null;
+  resolution_category: ResolutionCategory | null;
+  resolution_summary: string | null;
+  duplicate_of: IncidentLink | null;
+  merged_into: IncidentLink | null;
+  merged_at: string | null;
+  merged_from: IncidentLink[];
+  created_by: IncidentUserRef | null;
+  assigned_by: IncidentUserRef | null;
+  assigned_at: string | null;
+  updated_by: IncidentUserRef | null;
+  resolved_by: IncidentUserRef | null;
+  risk: IncidentRiskContext;
+  asset_refs: IncidentAssetRef[];
+  detections: IncidentDetectionRef[];
+  detections_total: number;
+  alerts: IncidentAlertRef[];
+  alerts_total: number;
+  notes_total: number;
+  metrics: IncidentMetrics;
+  allowed_transitions: IncidentStatus[];
+}
+
+export interface IncidentNote {
+  note_id: string;
+  author: string;
+  body: string;
+  created_at: string;
+  incident_key: string;
+}
+
+export interface IncidentNoteList {
+  items: IncidentNote[];
+  total: number;
+}
+
+export interface TimelineItem {
+  item_id: string;
+  occurred_at: string;
+  source_type: TimelineSource;
+  action: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  actor: string | null;
+  /** Texto plano (generado por Sentra o escrito por un analista). */
+  summary: string;
+  incident_key: string;
+}
+
+export interface IncidentTimeline {
+  items: TimelineItem[];
+  next_cursor: string | null;
+}
+
+export interface EvidenceEvent {
+  detection_id: string;
+  signal_kind: string;
+  source_type: string;
+  source_id: string | null;
+  occurred_at: string;
+  summary: string;
+}
+
+export interface EvidenceExposure {
+  asset_id: string;
+  asset_name: string;
+  protocol: string;
+  port: number;
+  service_hint: string | null;
+  opened_at: string;
+}
+
+export interface EvidenceRisk {
+  asset_id: string;
+  asset_name: string;
+  contributions: RiskContribution[];
+}
+
+export interface IncidentEvidence {
+  detections: IncidentDetectionRef[];
+  correlations: IncidentDetectionRef[];
+  events: EvidenceEvent[];
+  events_total: number;
+  exposure: EvidenceExposure[];
+  alerts: IncidentAlertRef[];
+  risk_contributions: EvidenceRisk[];
+}
+
+export interface RelatedIncident {
+  incident: IncidentSummary;
+  reasons: string[];
+  score: number;
+}
+
+export interface RelatedIncidentList {
+  items: RelatedIncident[];
+  suggested_priority: IncidentLevel;
+  suggested_severity: IncidentLevel;
+}
+
+export interface IncidentActivity {
+  incident_id: string;
+  incident_key: string;
+  incident_title: string;
+  occurred_at: string;
+  action: string;
+  actor: string;
+  summary: string;
+}
+
+export interface IncidentOverview {
+  open: number;
+  triage: number;
+  investigating: number;
+  contained: number;
+  critical: number;
+  unassigned: number;
+  assigned_to_me: number;
+  mean_age_seconds: number | null;
+  recent_activity: IncidentActivity[];
+}
+
+export interface AssignableUser {
+  user_id: string;
+  username: string;
+  role: string;
+}
+
+export interface AssignableUserList {
+  items: AssignableUser[];
+}
+
+export interface IncidentAuditEvent {
+  created_at: string;
+  actor: string;
+  action: string;
+  result: string;
+  details: Record<string, unknown> | null;
+}
+
+export interface IncidentAuditList {
+  items: IncidentAuditEvent[];
+  total: number;
 }

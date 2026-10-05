@@ -17,6 +17,15 @@ from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrig
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.incident import (
+    Incident,
+    IncidentActivity,
+    IncidentAlert,
+    IncidentAsset,
+    IncidentDetection,
+    IncidentFeedback,
+    IncidentNote,
+)
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
 from app.models.risk import (
@@ -62,6 +71,13 @@ __all__ = [
     "DiscoveryTrigger",
     "EnrollmentTokenState",
     "EventLevel",
+    "Incident",
+    "IncidentActivity",
+    "IncidentAlert",
+    "IncidentAsset",
+    "IncidentDetection",
+    "IncidentFeedback",
+    "IncidentNote",
     "MonitoringMethod",
     "PortStateValue",
     "RiskConfidence",

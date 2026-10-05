@@ -4,12 +4,15 @@ import type { ApiErrorBody } from "./types";
 export class ApiError extends Error {
   readonly status: number;
   readonly code: string;
+  /** `details` del sobre de error (p. ej. la versión actual en un 409 incident_conflict). */
+  readonly details: unknown;
 
-  constructor(status: number, code: string, message: string) {
+  constructor(status: number, code: string, message: string, details?: unknown) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.code = code;
+    this.details = details;
   }
 }
 
@@ -49,6 +52,14 @@ const AI_MESSAGES: Record<string, string> = {
   local_model_unavailable: "El modelo no está disponible en el runtime ni en disco.",
 };
 
+// Gestión de incidentes (Fase 4K). incident_conflict: otro operador cambió el caso; la UI
+// recarga antes de reintentar (nunca se sobrescribe en silencio).
+const INCIDENT_MESSAGES: Record<string, string> = {
+  incident_conflict: "Otro operador ha modificado este incidente. Recarga para ver los cambios antes de volver a intentarlo.",
+  incident_invalid_state: "Esa acción no está permitida en el estado actual del incidente.",
+  incident_already_linked: "Ya está vinculado a un incidente abierto.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -76,6 +87,9 @@ function translate(code: string, message: string): string {
   // ai_not_configured trae el motivo concreto del servidor (ya en español).
   if (code === "ai_not_configured") return message || "IA no configurada en el servidor.";
   if (AI_MESSAGES[code]) return AI_MESSAGES[code];
+  if (INCIDENT_MESSAGES[code]) return INCIDENT_MESSAGES[code];
+  // El motivo (inglés) dice qué referencia falla; se conserva tras un prefijo en español.
+  if (code === "incident_invalid_reference") return `Referencia no válida: ${message}`;
   if (AI_DETAIL_PREFIXES[code]) return `${AI_DETAIL_PREFIXES[code]}: ${message}`;
   for (const [pattern, spanish] of POLICY_MESSAGES) {
     if (pattern.test(message)) return message.replace(pattern, spanish).replace(/^(.*?\.).*$/, "$1");
@@ -88,7 +102,7 @@ async function parseError(response: Response): Promise<ApiError> {
     const body: unknown = await response.json();
     if (isErrorEnvelope(body)) {
       const message = translate(body.error.code, body.error.message);
-      return new ApiError(response.status, body.error.code, message);
+      return new ApiError(response.status, body.error.code, message, body.error.details);
     }
   } catch {
     // Body is not JSON (e.g. a proxy error page); fall through to a generic error.

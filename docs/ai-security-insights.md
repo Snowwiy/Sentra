@@ -72,15 +72,18 @@ inferencia por heartbeat, telemetría, evento o detección. Solo bajo demanda de
 | `risk_explanation` | `POST /ai/risk/assets/{id}/analyze` | Explicación determinista 4I, contribuciones, cambios recientes, menos detecciones |
 | `soc_summary` | `POST /ai/soc/analyze` (`window`: 24h/7d/30d) | Detecciones altas/críticas de la ventana, activos con más riesgo, transiciones de nivel, factores principales, alertas activas |
 | `ask` | `POST /ai/ask` | El que decida `resolve_scope` (activo, detección o flota) |
+| `incident_summary`, `incident_timeline`, `incident_evidence`, `incident_next_steps` | `POST /ai/incidents/{id}/analyze` (`task`: summary/timeline/evidence/next_steps; Fase 4K) | Incidente, activos, detecciones (y evidencias de las dos principales), alertas, riesgo del activo principal, notas del analista (como datos) y actividad del caso. Solo lectura: nunca cambia el incidente ([incident-management.md](incident-management.md)) |
 
-Lecturas: `GET /ai/status`, `GET /ai/insights` (filtros `kind`, `asset_id`, `detection_id`) y
+Lecturas: `GET /ai/status`, `GET /ai/insights` (filtros `kind`, `asset_id`, `detection_id`,
+`incident_id`) y
 `GET /ai/insights/{id}`.
 
 ## Grounding y referencias de evidencia
 
 - El context builder asigna a cada elemento citable un identificador corto: `A` activo,
   `D` detección, `E` evento, `V` evidencia (evento ya purgado), `X` exposición (puerto),
-  `C` contribución de riesgo, `S` punto del historial de riesgo, `L` alerta, `H` cambio.
+  `C` contribución de riesgo, `S` punto del historial de riesgo, `L` alerta, `H` cambio,
+  `I` incidente y `N` nota del analista (Fase 4K).
 - El modelo solo puede citar esos identificadores. El servidor los traduce a referencias
   reales (`type`, `id` público de Sentra, etiqueta y activo) y **descarta cualquier otra**:
   un ID inventado, un UUID escrito por el modelo o un número suelto nunca llegan a la UI.

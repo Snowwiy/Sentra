@@ -22,6 +22,7 @@ from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
 from app.models.detection import Detection, DetectionEvidence, DetectionStatus
 from app.models.exposure import AssetPort
+from app.models.incident import Incident, IncidentDetection, IncidentNote
 from app.models.risk import AssetRisk, RiskSnapshot
 
 
@@ -101,8 +102,47 @@ def fleet_version(session: Session) -> str:
     return _digest(["fleet", list(detections), snapshots, assets, list(alerts)])
 
 
-def data_version(session: Session, asset_pk: int | None, detection_pk: int | None) -> str:
-    """Huella según el alcance del insight: detección, activo o flota."""
+def incident_version(session: Session, incident_pk: int) -> str:
+    """Fase 4K: cambia con cualquier actividad del caso (estado, notas, adjuntos, merge)
+    y con los cambios de sus detecciones; no con el heartbeat de sus activos."""
+    incident = session.get(Incident, incident_pk)
+    if incident is None:
+        return _digest(["incident", "deleted"])
+    detections = session.execute(
+        select(func.count(), func.max(Detection.updated_at)).where(
+            Detection.id.in_(
+                select(IncidentDetection.detection_id).where(
+                    IncidentDetection.incident_id == incident_pk
+                )
+            )
+        )
+    ).one()
+    notes = session.scalar(
+        select(func.count())
+        .select_from(IncidentNote)
+        .where(IncidentNote.incident_id == incident_pk)
+    )
+    return _digest(
+        [
+            "incident",
+            incident.version,
+            incident.last_activity_at,
+            incident.status.value,
+            list(detections),
+            notes,
+        ]
+    )
+
+
+def data_version(
+    session: Session,
+    asset_pk: int | None,
+    detection_pk: int | None,
+    incident_pk: int | None = None,
+) -> str:
+    """Huella según el alcance del insight: incidente, detección, activo o flota."""
+    if incident_pk is not None:
+        return incident_version(session, incident_pk)
     if detection_pk is not None:
         return detection_version(session, detection_pk)
     if asset_pk is not None:

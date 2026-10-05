@@ -16,6 +16,7 @@ from app.api.v1.routes import (
     enrollment_tokens,
     events,
     health,
+    incidents,
     inventory,
     processes,
     risk,
@@ -41,6 +42,7 @@ api_router.include_router(telemetry.router, responses=_COMMON)
 api_router.include_router(alerts.router, responses=_COMMON)
 api_router.include_router(detections.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
+api_router.include_router(incidents.router, responses=_COMMON)
 api_router.include_router(ai.router, responses=_COMMON)
 api_router.include_router(ai_local.router, responses=_COMMON)
 api_router.include_router(inventory.router, responses=_COMMON)

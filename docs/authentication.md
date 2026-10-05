@@ -51,6 +51,9 @@ un permiso (`require_permission`), nunca un rol concreto.
 | `audit:read` | | | ✓ | Ver la auditoría |
 | `ai:use` | ✓ | ✓ | ✓ | Usar AI Security Insights y ver el estado de la IA local (Fase 4J) |
 | `ai:manage` | | | ✓ | Gestor de modelos locales: runtime, registrar, seleccionar, benchmark (Fase 4J.2) |
+| `incidents:read` | ✓ | ✓ | ✓ | Ver incidentes, timeline, evidencia y notas (Fase 4K) |
+| `incidents:manage` | | ✓ | ✓ | Crear y trabajar incidentes: estados, notas, adjuntar, asignarse, resolver (Fase 4K) |
+| `incidents:admin` | | | ✓ | Reasignar a otros, cerrar, reabrir y fusionar incidentes (Fase 4K) |
 
 Un cambio de rol se aplica en la siguiente petición (el permiso se calcula en cada una). Un
 admin no puede quitarse su propio rol ni desactivarse; y nunca puede quedar el sistema sin

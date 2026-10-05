@@ -34,7 +34,8 @@ class ResponseModel(BaseModel):
 class ErrorBody(BaseModel):
     code: str = Field(examples=["validation_error"])
     message: str
-    # Only on validation errors: one entry per failing field (`loc`, `msg`, `type`).
+    # Validation errors: one entry per failing field (`loc`, `msg`, `type`). Incident
+    # conflicts (Fase 4K): the current version/status so the client can refresh.
     details: list[dict[str, Any]] | None = None
 
 

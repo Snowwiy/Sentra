@@ -30,6 +30,7 @@ from app.ai.redaction import Redactor
 from app.core.exceptions import NotFoundError
 from app.detection.rules import RULES_BY_ID
 from app.detection.text import clean
+from app.incidents.workflow import incident_key
 from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
 from app.models.change import AssetChange
@@ -42,9 +43,18 @@ from app.models.detection import (
 )
 from app.models.event import SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.incident import (
+    Incident,
+    IncidentActivity,
+    IncidentAlert,
+    IncidentAsset,
+    IncidentDetection,
+    IncidentNote,
+)
 from app.models.risk import RiskSnapshot
 from app.risk.config import RiskConfig
 from app.services.asset_service import effective_status
+from app.services.incident_service import family_ids
 from app.services.risk_service import RiskService
 
 RefType = Literal[
@@ -57,6 +67,8 @@ RefType = Literal[
     "risk_snapshot",
     "alert",
     "change",
+    "incident",
+    "note",
 ]
 
 # Prefijo del identificador corto de cada tipo (lo que ve el modelo).
@@ -70,6 +82,9 @@ _PREFIX: dict[str, str] = {
     "risk_snapshot": "S",
     "alert": "L",
     "change": "H",
+    # Fase 4K: el incidente y sus notas (texto del analista, no confiable).
+    "incident": "I",
+    "note": "N",
 }
 
 # Claves de diccionarios no confiables que se seudonimizan como campo estructurado.
@@ -137,6 +152,7 @@ class AIContext:
     asset_pk: int | None = None
     detection_pk: int | None = None
     risk_snapshot_pk: int | None = None
+    incident_pk: int | None = None
     # Hay datos sustantivos sobre los que razonar (si no, no se llama al modelo).
     has_data: bool = True
     omitted: dict[str, int] = field(default_factory=dict)
@@ -198,6 +214,7 @@ class ContextBuilder:
         asset_pk: int | None = None,
         detection_pk: int | None = None,
         risk_snapshot_pk: int | None = None,
+        incident_pk: int | None = None,
     ) -> AIContext:
         if self._omitted:
             # El modelo debe saber que hay más datos de los que ve (y decirlo).
@@ -214,6 +231,7 @@ class ContextBuilder:
             asset_pk=asset_pk,
             detection_pk=detection_pk,
             risk_snapshot_pk=risk_snapshot_pk,
+            incident_pk=incident_pk,
         )
 
     # --- Saneado de datos no confiables ------------------------------------------------------
@@ -608,6 +626,145 @@ class ContextBuilder:
         self._omit("evidence", total - len(items))
         return items
 
+    def incident(self, public_id: UUID) -> AIContext:
+        """Incidente (Fase 4K): el caso, sus detecciones, evidencia, alertas, riesgo y notas.
+
+        Mismas garantías que el resto de lecturas: solo datos ya relacionados con el caso por
+        el servidor, acotados y seudonimizados. El título, la descripción y las notas son
+        texto de analistas (no confiable): viajan como datos, nunca como instrucciones.
+        """
+        incident = self._session.scalar(select(Incident).where(Incident.public_id == public_id))
+        if incident is None:
+            raise NotFoundError("Incident not found")
+        family = family_ids(self._session, incident.id)
+        data: dict[str, Any] = {"generated_for": "incident", "now": self._now}
+        key = incident_key(incident.number)
+        data["incident"] = {
+            "ref": self._ref("incident", str(incident.public_id), key, None),
+            "key": key,
+            "title": self._text(incident.title, 200),
+            "description": self._text(incident.description, 600),
+            "status": incident.status.value,
+            "severity": incident.severity.value,
+            "priority": incident.priority.value,
+            "confidence": incident.confidence.value if incident.confidence else None,
+            "assigned": incident.owner_user_id is not None,
+            "created_at": incident.created_at,
+            "first_seen_at": incident.first_seen_at,
+            "last_seen_at": incident.last_seen_at,
+            "resolution_category": (
+                incident.resolution_category.value if incident.resolution_category else None
+            ),
+            "risk_snapshot": {
+                "score": incident.risk_score_snapshot,
+                "level": incident.risk_level_snapshot,
+                "taken_at": incident.risk_snapshot_at,
+            },
+        }
+        assets = list(
+            self._session.scalars(
+                select(Asset)
+                .join(IncidentAsset, IncidentAsset.asset_id == Asset.id)
+                .where(IncidentAsset.incident_id == incident.id)
+                .order_by(IncidentAsset.id)
+                .limit(5)
+            )
+        )
+        data["assets"] = [self._asset_item(a) for a in assets]
+        # Detecciones del caso: correlaciones y graves primero (prioridad dentro del límite).
+        linked = select(IncidentDetection.detection_id).where(
+            IncidentDetection.incident_id.in_(family)
+        )
+        rows = self._session.execute(
+            select(Detection, Asset)
+            .join(Asset, Asset.id == Detection.asset_id)
+            .where(Detection.id.in_(linked))
+            .order_by(
+                (Detection.kind == "correlation").desc(),
+                Detection.severity.desc(),
+                Detection.last_seen_at.desc(),
+            )
+            .limit(12)
+        ).all()
+        total = (
+            self._session.scalar(
+                select(func.count()).select_from(Detection).where(Detection.id.in_(linked))
+            )
+            or 0
+        )
+        data["incident_detections"] = [
+            i for d, a in rows if (i := self._detection_item(d, a)) is not None
+        ]
+        self._omit("detection", total - len(data["incident_detections"]))
+        # Evidencia de las dos detecciones principales (la del resto se resume en contadores).
+        data["evidence"] = [item for d, a in rows[:2] for item in self._evidence(d, a)]
+        alert_rows = self._session.execute(
+            select(Alert, Asset)
+            .join(Asset, Asset.id == Alert.asset_id)
+            .where(
+                Alert.id.in_(
+                    select(IncidentAlert.alert_id).where(IncidentAlert.incident_id.in_(family))
+                )
+            )
+            .order_by(Alert.opened_at.desc())
+            .limit(5)
+        ).all()
+        data["incident_alerts"] = []
+        for alert, owner in alert_rows:
+            ref = self._ref(
+                "alert",
+                str(alert.public_id),
+                f"{alert.rule}: {alert.message}",
+                str(owner.public_id),
+            )
+            if ref is None:
+                break
+            data["incident_alerts"].append(
+                {
+                    "ref": ref,
+                    "rule": alert.rule.value,
+                    "severity": alert.severity.value,
+                    "status": alert.status.value,
+                    "message": self._text(alert.message, 200),
+                    "opened_at": alert.opened_at,
+                }
+            )
+        if assets:
+            risk = self._risk_block(assets[0], contributions_limit=5)
+            data["primary_asset_risk"] = risk
+        notes = self._session.scalars(
+            select(IncidentNote)
+            .where(IncidentNote.incident_id.in_(family))
+            .order_by(IncidentNote.created_at.desc(), IncidentNote.id.desc())
+            .limit(8)
+        ).all()
+        data["analyst_notes"] = []
+        for note in reversed(notes):
+            ref = self._ref("note", str(note.public_id), _note_label(note.body), None)
+            if ref is None:
+                break
+            data["analyst_notes"].append(
+                {
+                    "ref": ref,
+                    "author": self._r.value("usernames", note.author),
+                    "at": note.created_at,
+                    "text": self._text(note.body),
+                }
+            )
+        activity = self._session.scalars(
+            select(IncidentActivity)
+            .where(IncidentActivity.incident_id.in_(family))
+            .order_by(IncidentActivity.occurred_at.desc(), IncidentActivity.id.desc())
+            .limit(15)
+        ).all()
+        # Actividad del caso como contexto cronológico (sin refs: ya la generó Sentra).
+        data["case_activity"] = [
+            {"at": a.occurred_at, "action": a.action, "summary": self._text(a.summary, 200)}
+            for a in reversed(activity)
+        ]
+        ctx = self._finish("incident", data, incident_pk=incident.id)
+        return ctx
+
     def fleet(
         self,
         window: str = "24h",
@@ -722,6 +879,10 @@ class ContextBuilder:
         # Sin activos no hay nada que analizar: se responde sin llamar al modelo.
         ctx.has_data = total_assets > 0
         return ctx
+
+
+def _note_label(body: str) -> str:
+    return "Nota: " + clean(body, 80)
 
 
 def _is_uuid(value: str) -> bool:

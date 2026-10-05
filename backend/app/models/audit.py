@@ -17,7 +17,12 @@ class AuditEvent(Base):
     """
 
     __tablename__ = "audit_events"
-    __table_args__ = (Index("ix_audit_events_created", "created_at"),)
+    __table_args__ = (
+        Index("ix_audit_events_created", "created_at"),
+        # Fase 4K: pestaña Audit de un incidente (eventos de un objetivo concreto) sin
+        # recorrer toda la tabla de auditoría.
+        Index("ix_audit_events_target", "target_type", "target_id", "created_at"),
+    )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
