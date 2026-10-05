@@ -224,6 +224,14 @@ def test_state_survives_a_backend_restart(
     restarted.dependency_overrides = client.app.dependency_overrides  # type: ignore[attr-defined]
     with AgentClient(restarted) as after:
         after.tokens = dict(client.tokens)  # type: ignore[attr-defined]
+        # Fase 4G: reiniciar no vuelve públicos los endpoints, y la sesión web (guardada en
+        # PostgreSQL) sigue valiendo tras el reinicio.
+        assert (
+            after.get(f"/api/v1/assets/{registered_agent['response']['asset_id']}").status_code
+            == 401
+        )
+        after.cookies = client.cookies
+        after.headers.update(client.headers)
         assert _status(after, registered_agent) == "offline"
         assert _sweep(engine) == 0  # the open alert is found, not duplicated
         # The agent's token was stored hashed: it keeps working across the restart.

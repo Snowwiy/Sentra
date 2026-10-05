@@ -27,18 +27,21 @@ from app.discovery.scanner import ScanConfig
 from app.discovery.targets import DiscoveryScope
 from app.models.alert import Alert, AlertRule
 from app.models.asset import Asset, AssetStatus
+from app.models.audit import AuditEvent
 from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrigger
 from app.models.exposure import AssetPort, PortStateValue
 from app.services.alert_service import AlertThresholds
 from app.services.discovery_runner import DiscoveryRunner, get_discovery_runner
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
+from tests.conftest import authenticate
 from tests.test_discovery_service import NETWORK, PORTS, Host, Lab, office
 
 OTHER = "10.20.1.0/28"
 JOBS = "/api/v1/discovery/jobs"
 START = "/api/v1/console/discovery/jobs"
 DASHBOARD_ORIGIN = "http://localhost:5173"
-LOCAL = {"X-Sentra-Console": "1", "Origin": DASHBOARD_ORIGIN}
+# Fase 4G: el dashboard (sesión de analyst) envía su Origin; ya no hay cabecera de consola.
+LOCAL = {"Origin": DASHBOARD_ORIGIN}
 FINISHED = {"completed", "failed", "cancelled"}
 
 
@@ -70,7 +73,7 @@ class Broken(Lab):
 
 
 class Web:
-    """Dashboard en el propio servidor + runner real sobre la base de pruebas."""
+    """Dashboard con sesión de analyst + runner real sobre la base de pruebas."""
 
     def __init__(self, client: TestClient, engine: Engine) -> None:
         self.client = client
@@ -144,7 +147,6 @@ class Web:
 
 def _settings(**changes: Any) -> Settings:
     base = {
-        "dashboard_admin_enabled": True,
         "cors_origins": DASHBOARD_ORIGIN,
         "discovery_allowed_networks": f"{NETWORK},{OTHER}",
     }
@@ -160,9 +162,12 @@ def web(client: TestClient, engine: Engine) -> Iterator[Web]:
     helper = Web(client, engine)
     client.app.dependency_overrides[get_settings] = _console_settings  # type: ignore[attr-defined]
     helper.start_runner()
+    # Desde otra PC de la LAN y con rol analyst: la Fase 4G permite iniciar/cancelar
+    # discovery a admin y analyst, sin depender de estar en el propio servidor.
     with TestClient(
-        client.app, base_url="http://localhost:8000", client=("127.0.0.1", 50123)
+        client.app, base_url="http://192.168.50.201:8000", client=("192.168.50.20", 50123)
     ) as local:
+        authenticate(local, engine, "analyst")
         helper.local = local
         yield helper
     # Antes del TRUNCATE de `client`: ningún hilo del runner puede seguir usando la base.
@@ -492,47 +497,64 @@ def test_cancelled_first_scan_is_not_the_baseline(web: Web, db: Session) -> None
     assert _alerts(db, AlertRule.PORT_EXPOSED) == []
 
 
-# --- control administrativo temporal ---------------------------------------------------------
+# --- RBAC y CSRF (Fase 4G) -----------------------------------------------------------------
 
 
-def test_remote_browser_gets_403_but_can_read(web: Web) -> None:
+def test_viewer_can_read_but_not_start_or_cancel(web: Web, engine: Engine, db: Session) -> None:
     job = web.finished(web.start().json()["job_id"])
-    with TestClient(
-        web.client.app, base_url="http://localhost:8000", client=("192.168.50.20", 40000)
-    ) as remote:
+    with TestClient(web.client.app) as viewer:
+        authenticate(viewer, engine, "viewer")
         for path in (START, f"{START}/{job['job_id']}/cancel"):
-            response = remote.post(path, json={"target": NETWORK}, headers=LOCAL)
+            response = viewer.post(path, json={"target": NETWORK})
             assert response.status_code == 403, path
-            assert response.json()["error"]["code"] == "console_not_local"
-        # Lectura: igual que el resto del dashboard desde la LAN.
+            assert response.json()["error"]["code"] == "permission_denied"
         for path in (
             JOBS,
             f"{JOBS}/{job['job_id']}",
             "/api/v1/discovery/scope",
             "/api/v1/discovery/schedule",
         ):
-            assert remote.get(path).status_code == 200, path
+            assert viewer.get(path).status_code == 200, path
+    db.expire_all()
+    assert len(list(db.scalars(select(DiscoveryJob)))) == 1
+    denied = db.scalars(select(AuditEvent).where(AuditEvent.action == "permission_denied")).all()
+    assert len(denied) == 2 and {d.result for d in denied} == {"denied"}
 
 
-def test_console_guard_applies_to_discovery(web: Web, db: Session) -> None:
+def test_discovery_needs_session_and_csrf(web: Web, db: Session) -> None:
     assert web.local is not None
-    # Sin la cabecera de consola (formulario HTML, petición simple cross-site).
-    response = web.local.post(START, json={"target": NETWORK}, headers={"Origin": DASHBOARD_ORIGIN})
-    assert response.json()["error"]["code"] == "console_not_local"
-    # Otro sitio abierto en el navegador del operador (CSRF).
+    with TestClient(web.client.app) as anonymous:
+        response = anonymous.post(START, json={"target": NETWORK})
+        assert response.status_code == 401
+        assert anonymous.get(JOBS).status_code == 401
+    # Sin token CSRF (formulario HTML, petición simple cross-site con la cookie).
     response = web.local.post(
-        START, json={"target": NETWORK}, headers={**LOCAL, "Origin": "http://evil.example"}
+        START, json={"target": NETWORK}, headers={"X-CSRF-Token": "", **LOCAL}
     )
     assert response.status_code == 403
-    # Consola desactivada en el servidor.
-    web.client.app.dependency_overrides[get_settings] = lambda: _settings(  # type: ignore[attr-defined]
-        dashboard_admin_enabled=False
+    assert response.json()["error"]["code"] == "csrf_failed"
+    # Otro sitio abierto en el navegador del operador, aunque tuviera el token.
+    response = web.local.post(
+        START, json={"target": NETWORK}, headers={"Origin": "http://evil.example"}
     )
-    response = web.start()
     assert response.status_code == 403
-    assert response.json()["error"]["code"] == "console_disabled"
+    assert response.json()["error"]["code"] == "csrf_failed"
     db.expire_all()
     assert list(db.scalars(select(DiscoveryJob))) == []
+
+
+def test_discovery_start_and_cancel_are_audited(web: Web, db: Session) -> None:
+    job_id = web.finished(web.start().json()["job_id"])["job_id"]
+    assert web.cancel(job_id).status_code == 409  # ya terminó
+    assert web.start("8.8.8.0/24").status_code == 422
+    db.expire_all()
+    rows = [
+        (r.action, r.result, r.target_id)
+        for r in db.scalars(select(AuditEvent).order_by(AuditEvent.id))
+    ]
+    assert ("discovery_started", "success", job_id) in rows
+    assert ("discovery_cancelled", "failure", job_id) in rows
+    assert ("discovery_started", "failure", "8.8.8.0/24") in rows
 
 
 # --- lectura: alcance y scheduler -------------------------------------------------------------

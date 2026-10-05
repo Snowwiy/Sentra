@@ -5,19 +5,20 @@ CLI. It reuses the one-time enrollment tokens (Fase 4A) and the Linux installer 
 
 ## Enabling it (once)
 
-In the root `.env` of the Sentra server, then restart the API:
+La página requiere sesión con rol **admin** (permisos `enrollment:manage` y
+`agents:manage`; analyst y viewer ven los agentes pero no los botones ni los tokens). Ver
+[authentication.md](authentication.md) para crear el primer admin. Opcional, en el `.env`
+del servidor:
 
 ```ini
-DASHBOARD_ADMIN_ENABLED=true
-# Optional: URL the agents use to reach this server (shown in the install command).
+# URL the agents use to reach this server (shown in the install command).
 # Unset: suggested from this machine's network addresses.
 # AGENT_SERVER_URL=http://192.168.50.201:8000
 ```
 
-`CORS_ORIGINS` must list the dashboard origin (the default `.env.example` lists
-`http://localhost:5173`). To let agents on other machines reach the API, it must listen on
-the network: `.\scripts\start_backend.ps1 -BindHost 0.0.0.0` (and allow the port in the
-firewall). The dashboard itself is still opened **on the server**, at `http://localhost:5173`.
+To let agents on other machines reach the API, it must listen on the network:
+`.\scripts\start_backend.ps1 -BindHost 0.0.0.0` (and allow the port in the firewall). The
+dashboard can be opened from any LAN workstation after login (`npm run dev -- --host`).
 
 ## Add a Linux agent
 
@@ -89,38 +90,20 @@ enrollment step notices it with one heartbeat and enrolls with the new token.)
 Reinstating alone lets nothing in: the host still needs a new token issued by the operator
 (or the legacy shared key, if configured). If the host is gone, leave it revoked.
 
-## Security model (temporary)
+## Security model
 
-There is no dashboard login yet. The administration API (`/api/v1/agent-enrollment-tokens`)
-stays protected by `X-Admin-Key` = `ADMIN_API_KEY` and is **not** used by the browser: the
-key is not in the frontend source, the Vite build, browser storage or any request.
+Desde la Fase 4G las rutas `/api/v1/console/*` exigen sesión de usuario, CSRF y permiso
+(`enrollment:manage` para los tokens, `agents:manage` para revocar/reactivar), y se pueden
+usar desde cualquier equipo. La consola local de la Fase 4C (`DASHBOARD_ADMIN_ENABLED`,
+peer y `Host` loopback, `X-Sentra-Console`) se eliminó. Cada operación queda en la auditoría
+(`enrollment_token_created`, `enrollment_token_revoked`, `agent_revoked`,
+`agent_reactivated`) sin el valor del token.
 
-Instead, the dashboard calls the **console** endpoints (`/api/v1/console/...`), and the API
-performs the operation itself with the same services (backend-for-frontend). They answer
-only when all of these hold (`backend/app/api/console.py`):
-
-1. `DASHBOARD_ADMIN_ENABLED=true` (off by default: `403 console_disabled`);
-2. the TCP peer is loopback (`127.0.0.1`/`::1`): the browser runs on the server. Requests
-   from the network get `403 console_not_local`, whatever headers they carry (including
-   `X-Admin-Key`). The Vite dev server, bound to localhost, forwards as loopback;
-3. the `Host` header is a loopback name (stops DNS rebinding);
-4. a browser `Origin`, if sent, is in `CORS_ORIGINS` or is the API's own origin (another
-   site open in the operator's browser cannot use it, not even another local one);
-5. the `X-Sentra-Console: 1` header is present (forms and simple cross-site requests cannot
-   set it). It is a marker, not a secret.
-
-Limits, by design of this stopgap:
-
-- Anyone with a session **on the server machine** can use the console (as they could read
-  `.env` or run the CLI there). Do not enable it on a shared multi-user server.
-- Behind a reverse proxy on the same machine, the proxy must send `X-Forwarded-For`
-  (uvicorn trusts it from 127.0.0.1), or remote users would look local.
-- Read endpoints (`GET /agents`, `GET /assets/{id}/agent`) are unauthenticated like the
-  rest of the dashboard API, and return no secrets.
-
-**To be replaced** by dashboard authentication with roles (RBAC) and sessions: the console
-routes stay, `require_local_console` becomes a role check, and the page can then be used
-from any workstation.
+La API de administración (`/api/v1/agent-enrollment-tokens`, `X-Admin-Key` =
+`ADMIN_API_KEY`) se mantiene como **legacy** para scripts en el servidor y **no** la usa el
+navegador: la clave no está en el código del frontend, el build de Vite, el almacenamiento
+del navegador ni en ninguna petición. Los `GET` de agentes requieren sesión
+(`monitoring:read`) y no devuelven secretos.
 
 ## API
 
@@ -128,7 +111,7 @@ from any workstation.
 |---|---|---|
 | GET | `/api/v1/agents` | Agents + summary (read-only, no secrets) |
 | GET | `/api/v1/assets/{asset_id}/agent` | The asset's agent (404 without agent) |
-| GET | `/api/v1/console` | Console available (200) or why not (403); TTL and suggested server URLs |
+| GET | `/api/v1/console` | Console info (admin): TTL and suggested server URLs |
 | POST | `/api/v1/console/enrollment-tokens` | Create a one-time token (the only response with the token) |
 | GET | `/api/v1/console/enrollment-tokens` | Tokens and their state (never the token) |
 | POST | `/api/v1/console/enrollment-tokens/{id}/revoke` | Revoke an unused token (409 if consumed) |

@@ -1,6 +1,7 @@
 import { Fragment, useCallback, useState } from "react";
 import { Link } from "react-router-dom";
-import { sentraApi } from "../api/sentra";
+import { alertsApi, sentraApi } from "../api/sentra";
+import { useAuth } from "../auth/AuthContext";
 import type { Alert, AlertRule, AlertSeverity, AlertStatus } from "../api/types";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
@@ -44,7 +45,54 @@ function StatusCell({ alert }: { alert: Alert }) {
   );
 }
 
-function AlertDetail({ alert }: { alert: Alert }) {
+/**
+ * Reconocer / resolver (permiso alerts:manage: admin y analyst). Para un viewer no se
+ * muestra nada; aun así el backend rechazaría la acción con 403.
+ */
+function AlertActions({ alert, onChanged }: { alert: Alert; onChanged: () => void }) {
+  const auth = useAuth();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (!auth.can("alerts:manage") || alert.status === "resolved") return null;
+
+  async function run(action: (id: string) => Promise<Alert>) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await action(alert.alert_id);
+      onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? errorMessage(err) : String(err));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="actions alert-detail__actions">
+      {alert.status === "open" && (
+        <button type="button" className="button" disabled={busy} onClick={() => void run(alertsApi.acknowledge)}>
+          Reconocer
+        </button>
+      )}
+      <button
+        type="button"
+        className="button button--primary"
+        disabled={busy}
+        onClick={() => void run(alertsApi.resolve)}
+      >
+        Resolver
+      </button>
+      {error && (
+        <span className="banner banner--warn" role="alert">
+          {error}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function AlertDetail({ alert, onChanged }: { alert: Alert; onChanged: () => void }) {
   return (
     <div className="alert-detail">
       <dl className="fields">
@@ -71,13 +119,7 @@ function AlertDetail({ alert }: { alert: Alert }) {
         </div>
       </dl>
       {alert.details && <pre className="details-json">{JSON.stringify(alert.details, null, 2)}</pre>}
-      {alert.status !== "resolved" && (
-        <p className="muted small alert-detail__hint">
-          Reconocer o resolver (desde el servidor, en <span className="mono">backend/</span>):{" "}
-          <span className="mono">python -m app.cli ack-alert {alert.alert_id}</span> ·{" "}
-          <span className="mono">resolve-alert {alert.alert_id}</span>
-        </p>
-      )}
+      <AlertActions alert={alert} onChanged={onChanged} />
     </div>
   );
 }
@@ -199,7 +241,7 @@ export function AlertsView({ assetId }: { assetId?: string }) {
                     {expanded === alert.alert_id && (
                       <tr className="table__row--detail">
                         <td colSpan={assetId ? 6 : 7}>
-                          <AlertDetail alert={alert} />
+                          <AlertDetail alert={alert} onChanged={refresh} />
                         </td>
                       </tr>
                     )}

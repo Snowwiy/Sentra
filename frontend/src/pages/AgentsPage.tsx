@@ -95,15 +95,17 @@ export function AgentsPage() {
             {agents.updatedAt && ` Actualizado ${formatRelative(agents.updatedAt.toISOString())}.`}
           </p>
         </div>
-        <button
-          type="button"
-          className="button button--primary nowrap"
-          disabled={!consoleState.available}
-          title={consoleState.reason}
-          onClick={() => setAdding(true)}
-        >
-          + Añadir agente
-        </button>
+        {consoleState.allowed && (
+          <button
+            type="button"
+            className="button button--primary nowrap"
+            disabled={!consoleState.available}
+            title={consoleState.reason}
+            onClick={() => setAdding(true)}
+          >
+            + Añadir agente
+          </button>
+        )}
       </div>
 
       {consoleState.reason && !consoleState.loading && (
@@ -218,14 +220,17 @@ export function AgentsPage() {
         )}
       </section>
 
-      <TokensPanel
-        tokens={tokens.data?.items}
-        loading={tokens.loading}
-        error={tokens.error}
-        available={consoleState.available}
-        reason={consoleState.reason}
-        onChanged={tokens.refresh}
-      />
+      {/* Los tokens de instalación son credenciales: solo los ve quien puede gestionarlos. */}
+      {consoleState.allowed && (
+        <TokensPanel
+          tokens={tokens.data?.items}
+          loading={tokens.loading}
+          error={tokens.error}
+          available={consoleState.available}
+          reason={consoleState.reason}
+          onChanged={tokens.refresh}
+        />
+      )}
 
       {adding && consoleState.info && (
         <AddAgentWizard

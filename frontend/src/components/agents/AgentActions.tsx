@@ -30,6 +30,8 @@ export function AgentActions({
     note: `Nuevo token para que ${name} vuelva a registrarse. Ejecuta de nuevo el instalador en ese equipo: conservará su identidad (mismo activo e histórico).`,
   };
   const size = compact ? " button--small" : "";
+  // Sin permiso (viewer, analyst) no se muestra ninguna acción; el backend respondería 403.
+  if (!consoleState.allowed) return null;
 
   return (
     <span className="actions" onClick={(event) => event.stopPropagation()}>

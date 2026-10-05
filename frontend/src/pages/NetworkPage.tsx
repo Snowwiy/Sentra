@@ -69,7 +69,7 @@ export function NetworkPage() {
   const scope = usePolling(fetchScope, 10 * REFRESH_MS);
   const fetchSchedule = useCallback((signal: AbortSignal) => sentraApi.discoverySchedule(signal), []);
   const schedule = usePolling(fetchSchedule, SCHEDULE_MS);
-  const consoleState = useConsole(DISCOVERY_FEATURE);
+  const consoleState = useConsole(DISCOVERY_FEATURE, "discovery:run");
   const [modal, setModal] = useState<ModalState>();
   const tableRef = useRef<HTMLElement>(null);
   const navigate = useNavigate();
@@ -185,15 +185,17 @@ export function NetworkPage() {
       </section>
 
       <div className="network-actions">
-        <button
-          type="button"
-          className="button button--primary"
-          disabled={!scopeEnabled || !consoleState.available}
-          title={startDisabledReason}
-          onClick={() => setModal({})}
-        >
-          Iniciar descubrimiento
-        </button>
+        {consoleState.allowed && (
+          <button
+            type="button"
+            className="button button--primary"
+            disabled={!scopeEnabled || !consoleState.available}
+            title={startDisabledReason}
+            onClick={() => setModal({})}
+          >
+            Iniciar descubrimiento
+          </button>
+        )}
         {activeJobs.length > 0 && (
           <span className="muted small" role="status">
             <span className="spinner spinner--inline" aria-hidden="true" /> Descubrimiento{" "}

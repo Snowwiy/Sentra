@@ -37,6 +37,7 @@ $env:HEARTBEAT_TIMEOUT_SECONDS = "20"
 $env:OFFLINE_SWEEP_INTERVAL_SECONDS = "5"
 cd backend
 .venv\Scripts\python.exe -m alembic upgrade head
+.venv\Scripts\python.exe -m app.cli create-admin --username qaadmin   # Fase 4G, una vez
 .venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8100
 ```
 
@@ -48,10 +49,12 @@ With the same variables, `python -m pytest` uses `sentra_qa_test` instead of the
 ```powershell
 $env:SENTRA_QA_API_URL = "http://127.0.0.1:8100"
 $env:SENTRA_QA_ENROLLMENT_KEY = "qa-enrollment-key-0123456789abcdef"
+$env:SENTRA_QA_ADMIN_USER = "qaadmin"
+$env:SENTRA_QA_ADMIN_PASSWORD = "<la contraseña elegida en create-admin>"
 backend\.venv\Scripts\python.exe qa\e2e_api.py --offline
 ```
 
-Covers: health and error envelope, request id and security headers, the error envelope in the
+Covers: login, sesión, CSRF y roles (Fase 4G), health and error envelope, request id and security headers, the error envelope in the
 published OpenAPI (hidden in production), CORS, enrollment (missing/wrong key, duplicate agent,
 token rotation), agent authentication on every agent endpoint, telemetry validation (negative,
 >100, NaN/Infinity, naive/future/late timestamps, BIGINT overflow), events (idempotent resend,
@@ -98,12 +101,14 @@ cd backend
 python3 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt
 .venv/bin/python -m pytest
 .venv/bin/python -m alembic upgrade head
+.venv/bin/python -m app.cli create-admin --username qaadmin   # pide la contraseña
 HEARTBEAT_TIMEOUT_SECONDS=20 OFFLINE_SWEEP_INTERVAL_SECONDS=5 \
   .venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8100 &
 cd ..
 
+read -rs -p "QA admin password: " SENTRA_QA_ADMIN_PASSWORD; export SENTRA_QA_ADMIN_PASSWORD
 SENTRA_QA_API_URL=http://127.0.0.1:8100 SENTRA_QA_ENROLLMENT_KEY=$AGENT_ENROLLMENT_KEY \
-  backend/.venv/bin/python qa/e2e_api.py --offline
+  SENTRA_QA_ADMIN_USER=qaadmin backend/.venv/bin/python qa/e2e_api.py --offline
 ```
 
 The agent runs on Linux too (`pip install -e ".[dev]"` in `agent/`, then

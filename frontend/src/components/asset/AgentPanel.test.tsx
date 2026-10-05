@@ -2,6 +2,7 @@
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
+import { WithRole } from "../../test/auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../../api/types";
 import { AgentPanel } from "./AgentPanel";
@@ -61,7 +62,9 @@ describe("AgentPanel (asset detail)", () => {
   it("shows the agent identity and credential state, without remote control", async () => {
     render(
       <MemoryRouter>
-        <AgentPanel assetId={AGENT.asset_id} />
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
       </MemoryRouter>,
     );
     const panel = await screen.findByRole("region", { name: "Agent" });
@@ -77,7 +80,9 @@ describe("AgentPanel (asset detail)", () => {
     agent = { ...AGENT, platform: "windows", os_name: "Windows", installation_method: "windows_service" };
     render(
       <MemoryRouter>
-        <AgentPanel assetId={AGENT.asset_id} />
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
       </MemoryRouter>,
     );
     const panel = await screen.findByRole("region", { name: "Agent" });
@@ -92,7 +97,9 @@ describe("AgentPanel (asset detail)", () => {
   it("revokes after confirmation and then shows the agent as revoked", async () => {
     render(
       <MemoryRouter>
-        <AgentPanel assetId={AGENT.asset_id} />
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
       </MemoryRouter>,
     );
     const panel = await screen.findByRole("region", { name: "Agent" });

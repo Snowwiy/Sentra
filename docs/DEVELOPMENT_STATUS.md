@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-04 (Fase 4D).
+Last updated: 2026-10-05 (Fase 4G).
 
 ## Current state
 
@@ -12,14 +12,15 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0014 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0017 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
-| Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (BFF, local browser only, `DASHBOARD_ADMIN_ENABLED`): temporary until dashboard login/RBAC |
+| Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
+| Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab. Fase 4D: descubrimiento desde la página Red (iniciar, progreso real, cancelar, resultado, historial, estado del scheduler) sin terminal |
-| Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 372 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, console guard and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 91 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
+| Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve desde el dashboard o la CLI), dedup, occurrences, auto-resolve |
+| Tests | Backend 481 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 137 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 170 contract checks |
 
 ## Architecture
 
@@ -68,9 +69,10 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
   `python -m app.cli create-enrollment-token` / `list-enrollment-tokens` /
   `revoke-enrollment-token`, or the admin API (`/agent-enrollment-tokens`, header
   `X-Admin-Key` = `ADMIN_API_KEY`; disabled if unset). The browser never gets the admin key.
-- Dashboard console (`/console/*`, `api/console.py`): only with `DASHBOARD_ADMIN_ENABLED`,
-  loopback peer, loopback Host, trusted Origin and `X-Sentra-Console`; temporary until
-  dashboard login/RBAC. Revoking keeps all history; reinstating requires a new one-time
+- Dashboard: todo endpoint del dashboard exige sesión y un permiso (`require_permission`);
+  las mutaciones además Origin + `X-CSRF-Token`. `DASHBOARD_ADMIN_ENABLED` y la consola
+  local se eliminaron en la Fase 4G; `ADMIN_API_KEY` queda como legacy para scripts.
+  Revoking keeps all history; reinstating requires a new one-time
   token (re-enrollment keeps the same asset).
 - Status: `unknown` until first contact; `online` while reporting; `offline` when
   `last_seen_at` is older than `HEARTBEAT_TIMEOUT_SECONDS` (computed at read time; server clock).
@@ -121,8 +123,9 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Known issues and limitations
 
-- **Dashboard read endpoints are unauthenticated** (no users/login yet). The API binds to
-  127.0.0.1 by default; do not expose it on a network until dashboard auth exists.
+- Sin HTTPS integrado: en la LAN por HTTP la contraseña y la cookie viajan en claro; en
+  producción servir detrás de un proxy HTTPS (docs/authentication.md). Los límites de login
+  son en memoria de un solo proceso. `GET /health` sigue público (sin datos).
 - Agent runs in the foreground as the current user; no Windows service/installer. The Security
   event channel needs admin rights: as a standard user it is logged once as unreadable and
   skipped (privileges are never changed).
@@ -131,7 +134,6 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Retention is opt-in (`TELEMETRY_RETENTION_DAYS`, `EVENT_RETENTION_DAYS`,
   `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` for resolved alerts; unset keeps everything)
   and deletes rows; there is no downsampling (aggregating old samples) yet.
-- Alerts cannot be acknowledged from the dashboard (no login): CLI only.
 - Free-text search over all events (no asset filter) scans the table: 0.8 s at 1M events.
   Per-asset search is 40 ms. A trigram index (pg_trgm) would fix it if it becomes a need.
 - Alert thresholds are global environment variables, not per asset.
@@ -145,18 +147,19 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Offline computed on read (+ sweeper for alerts) instead of a status-writing scheduler.
 - Token hashes with SHA-256 (tokens are 256-bit random; slow hashes add no security here).
 - Agent buffers up to 120 samples (memory + `telemetry_buffer.json`); backoff interval → 300 s with jitter.
-- Agent token at rest: DPAPI current-user scope via ctypes (no pywin32). Revocation via operator CLI (`python -m app.cli`) or the local dashboard console; no remote HTTP admin for it until dashboard auth exists.
+- Agent token at rest: DPAPI current-user scope via ctypes (no pywin32). Revocation via operator CLI (`python -m app.cli`) or the dashboard (rol admin).
 - Descubrimiento desde la web (Fase 4D): jobs en cola ejecutados por un runner en segundo
   plano en el proceso de la API (uno a la vez), progreso y cancelación a través de la base
   de datos (funciona con varios workers), latido para detectar jobs huérfanos. Iniciar y
-  cancelar reutilizan la consola local de la Fase 4C; sin worker ni cola externa (Redis).
+  cancelar requieren `discovery:run` (Fase 4G); sin worker ni cola externa (Redis).
 - Identificación de dispositivos (Fase 4E, docs/discovery.md): motor puro con evidencias y
   confianza low/medium/high, recalculado con cada dato nuevo; el agente es autoritativo; el
   OUI es un fichero local del IEEE (sin API externa) y la NIC no se confunde con el
   fabricante del dispositivo. Migración 0015.
-- Agent management in the browser without exposing ADMIN_API_KEY: backend-for-frontend
-  console restricted to the server's own browser (docs/agent-management.md), chosen over
-  typing the key into the page or a session scheme that would pre-empt the login design.
+- Autenticación (Fase 4G): sesiones de servidor (token aleatorio, solo el hash en la base de
+  datos) en vez de JWT, para poder revocarlas; Argon2id para contraseñas; política por
+  longitud sin reglas de composición; permisos en una tabla central, no comprobaciones de
+  rol; los usuarios se desactivan, no se borran; siempre queda al menos un admin activo.
 - Agent uses stdlib + psutil + built-in `wevtutil.exe` (no pywin32).
 - Inventory as JSONB snapshot; normalize a section when SQL queries over it are needed.
 - Retention opt-in and per data type (`services/retention_service.py`): batches of 5000 rows,
@@ -167,10 +170,8 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Recommended next phase
 
-1. Dashboard authentication (users, login, sessions, roles) — needs a product decision on
-   the scheme; then replace the local-only console guard with a role check.
-2. Agent as a Windows service (would allow the Security event log) — needs a decision on
-   running with elevated privileges.
-3. Alert acknowledgement from the dashboard (after 1), per-asset thresholds.
+1. HTTPS de producción documentado y probado (proxy inverso) y validación física de la
+   Fase 4F (servicio Windows).
+2. Per-asset alert thresholds.
 4. Downsampling for old telemetry (retention exists, opt-in); journald events on Linux
    (systemd services and dpkg/rpm packages are collected already).

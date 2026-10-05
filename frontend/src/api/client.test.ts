@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet, apiPost } from "./client";
+import { ApiError, apiGet, apiPost, onUnauthorized, setCsrfToken } from "./client";
 
 function respond(status: number, body: string, contentType = "application/json") {
   const fetchMock = vi.fn(async () => new Response(body, { status, headers: { "Content-Type": contentType } }));
@@ -104,29 +104,85 @@ describe("apiGet", () => {
   });
 });
 
-describe("apiPost and console calls", () => {
-  it("sends JSON, the console marker and never uses the HTTP cache", async () => {
-    const fetchMock = respond(201, JSON.stringify({ ok: true }));
+describe("apiPost, CSRF y sesión (Fase 4G)", () => {
+  afterEach(() => {
+    setCsrfToken(undefined);
+    onUnauthorized(undefined);
+  });
 
-    await expect(apiPost("/console/enrollment-tokens", { max_uses: 1 }, { console: true })).resolves.toEqual({
-      ok: true,
-    });
+  it("sends JSON with the in-memory CSRF token, the session cookie and no HTTP cache", async () => {
+    const fetchMock = respond(201, JSON.stringify({ ok: true }));
+    setCsrfToken("csrf-123");
+
+    await expect(apiPost("/console/enrollment-tokens", { max_uses: 1 })).resolves.toEqual({ ok: true });
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toMatch(/\/api\/v1\/console\/enrollment-tokens$/);
     expect(init.method).toBe("POST");
     expect(init.body).toBe(JSON.stringify({ max_uses: 1 }));
     expect(init.cache).toBe("no-store");
+    expect(init.credentials).toBe("include");
     expect(init.headers).toEqual({
       Accept: "application/json",
       "Content-Type": "application/json",
-      "X-Sentra-Console": "1",
+      "X-CSRF-Token": "csrf-123",
     });
   });
 
-  it("never sends an admin key", async () => {
+  it("does not send the CSRF token on reads", async () => {
     const fetchMock = respond(200, "{}");
-    await apiGet("/console", { console: true });
+    setCsrfToken("csrf-123");
+    await apiGet("/assets");
     const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
-    expect(JSON.stringify(init.headers).toLowerCase()).not.toContain("admin");
+    expect(init.headers).toEqual({ Accept: "application/json" });
+    expect(init.credentials).toBe("include");
+  });
+
+  it("never sends an admin key or the old console marker", async () => {
+    const fetchMock = respond(200, "{}");
+    setCsrfToken("csrf-123");
+    await apiPost("/console/agents/x/revoke");
+    const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    const headers = JSON.stringify(init.headers).toLowerCase();
+    expect(headers).not.toContain("admin");
+    expect(headers).not.toContain("x-sentra-console");
+  });
+
+  it("notifies a 401 once per call and translates auth errors", async () => {
+    const handler = vi.fn();
+    onUnauthorized(handler);
+    respond(401, JSON.stringify({ error: { code: "not_authenticated", message: "Authentication required" } }));
+    const error = await failure(apiGet("/assets"));
+    expect(error.status).toBe(401);
+    expect(error.message).toMatch(/sesión ha caducado/);
+    expect(handler).toHaveBeenCalledTimes(1);
+    // Login y /auth/me gestionan su propio 401: no disparan la salida global.
+    respond(401, JSON.stringify({ error: { code: "invalid_credentials", message: "x" } }));
+    await failure(apiPost("/auth/login", {}, { skipUnauthorized: true }));
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it("explains a 403 from the backend", async () => {
+    respond(403, JSON.stringify({ error: { code: "permission_denied", message: "Your role..." } }));
+    const error = await failure(apiPost("/alerts/x/resolve"));
+    expect(error.code).toBe("permission_denied");
+    expect(error.message).toBe("Tu rol no permite esta acción.");
+  });
+
+  it("accepts 204 No Content", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(null, { status: 204 })));
+    await expect(apiPost("/auth/logout")).resolves.toBeUndefined();
+  });
+});
+
+describe("mensajes de política", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("traduce los motivos de la política de contraseñas", async () => {
+    respond(422, JSON.stringify({ error: { code: "policy_violation", message: "Password must be at least 12 characters" } }));
+    expect((await failure(apiPost("/users", {}))).message).toBe("La contraseña debe tener al menos 12 caracteres.");
+    respond(409, JSON.stringify({ error: { code: "conflict", message: "Username already exists" } }));
+    expect((await failure(apiPost("/users", {}))).message).toBe("Ya existe un usuario con ese nombre.");
+    respond(409, JSON.stringify({ error: { code: "conflict", message: "Something else" } }));
+    expect((await failure(apiPost("/users", {}))).message).toBe("Something else");
   });
 });

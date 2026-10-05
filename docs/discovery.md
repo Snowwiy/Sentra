@@ -167,17 +167,17 @@ petición.
 
 ### Seguridad
 
-- Iniciar y cancelar usan la consola local de la Fase 4C (`require_local_console`):
-  `DASHBOARD_ADMIN_ENABLED=true`, navegador en el propio servidor (peer y `Host` loopback),
-  `Origin` permitido y cabecera `X-Sentra-Console`. Desde otra PC de la LAN: `403
-  console_not_local`; la lectura (`GET /discovery/*`) sigue disponible.
+- Iniciar y cancelar requieren sesión con permiso `discovery:run` (roles admin y analyst),
+  `Origin` permitido y `X-CSRF-Token` ([authentication.md](authentication.md)). Un viewer
+  solo ve los resultados (`GET /discovery/*`, `monitoring:read`); sin sesión, `401`.
 - `ADMIN_API_KEY` nunca llega al navegador; el frontend no guarda nada en `localStorage`,
   `sessionStorage` ni cookies.
 - El target se valida siempre en el backend (`422 discovery_target_refused`): fuera de la
   allowlist, `0.0.0.0/0`, Internet, multicast, broadcast, reservadas, demasiado grandes o
   con bits de host. Antes de escanear, el runner vuelve a validar el target del job.
 - Cada petición queda en el log (`discovery requested`, `discovery cancel requested`) con
-  red, vía y job, sin cabeceras ni credenciales.
+  red, vía y job, sin cabeceras ni credenciales, y en la auditoría (`discovery_started`,
+  `discovery_cancelled`) con el usuario.
 - Mismo motor defensivo: sin fuerza bruta, evasión, paquetes raw, credenciales ni
   fingerprinting agresivo.
 

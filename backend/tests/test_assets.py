@@ -143,6 +143,7 @@ def test_unhandled_errors_do_not_leak_details(
 
     monkeypatch.setattr(AssetService, "list_assets", explode)
     with TestClient(client.app, raise_server_exceptions=False) as raw_client:
+        raw_client.cookies = client.cookies
         response = raw_client.get("/api/v1/assets")
 
     assert response.status_code == 500

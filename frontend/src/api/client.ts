@@ -21,11 +21,45 @@ function isErrorEnvelope(value: unknown): value is { error: ApiErrorBody } {
 
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
+// Mensajes en español para los errores de autenticación y permisos; el resto conserva el
+// mensaje del backend.
+const AUTH_MESSAGES: Record<string, string> = {
+  not_authenticated: "La sesión ha caducado. Inicia sesión de nuevo.",
+  invalid_credentials: "Usuario o contraseña incorrectos.",
+  permission_denied: "Tu rol no permite esta acción.",
+  csrf_failed: "La sesión no es válida para esta acción. Recarga la página.",
+  rate_limited: "Demasiados intentos. Espera unos minutos y vuelve a intentarlo.",
+  last_admin: "Sentra debe conservar al menos un administrador activo.",
+};
+
+// Motivos de la política de usuarios/contraseñas (backend core/passwords.py), en español.
+const POLICY_MESSAGES: [RegExp, string][] = [
+  [/^Password must be at least (\d+)/, "La contraseña debe tener al menos $1 caracteres."],
+  [/^Password must be at most (\d+)/, "La contraseña puede tener como máximo $1 caracteres."],
+  [/^Password must not start or end/, "La contraseña no puede empezar ni terminar con espacios."],
+  [/^Password is too common/, "La contraseña es demasiado común o repetitiva."],
+  [/^Password must not contain the username/, "La contraseña no puede contener el nombre de usuario."],
+  [/^Current password is not correct/, "La contraseña actual no es correcta."],
+  [/^Username must be (\d+-\d+)/, "El usuario debe tener $1 caracteres."],
+  [/^Username may only contain/, "El usuario solo admite a-z, 0-9, punto, guion y guion bajo."],
+  [/^Username already exists/, "Ya existe un usuario con ese nombre."],
+  [/^You cannot remove your own admin access/, "No puedes quitarte a ti mismo el acceso de administrador."],
+];
+
+function translate(code: string, message: string): string {
+  if (AUTH_MESSAGES[code]) return AUTH_MESSAGES[code];
+  for (const [pattern, spanish] of POLICY_MESSAGES) {
+    if (pattern.test(message)) return message.replace(pattern, spanish).replace(/^(.*?\.).*$/, "$1");
+  }
+  return message;
+}
+
 async function parseError(response: Response): Promise<ApiError> {
   try {
     const body: unknown = await response.json();
     if (isErrorEnvelope(body)) {
-      return new ApiError(response.status, body.error.code, body.error.message);
+      const message = translate(body.error.code, body.error.message);
+      return new ApiError(response.status, body.error.code, message);
     }
   } catch {
     // Body is not JSON (e.g. a proxy error page); fall through to a generic error.
@@ -42,30 +76,51 @@ async function parseError(response: Response): Promise<ApiError> {
   return new ApiError(response.status, "http_error", `HTTP ${response.status}`);
 }
 
+// --- Sesión del dashboard (Fase 4G) ------------------------------------------------------
+//
+// La sesión viaja solo en una cookie HttpOnly que este código no puede leer ni escribir. Lo
+// único que el frontend guarda es el token CSRF, y SOLO en memoria (esta variable): nunca en
+// el almacenamiento del navegador ni en la URL. Al recargar la página se vuelve a pedir a
+// /auth/me, que otro sitio web no puede leer.
+
+/** Cabecera anti-CSRF que el backend exige en toda petición mutable con sesión. */
+export const CSRF_HEADER = "X-CSRF-Token";
+
+let csrfToken: string | undefined;
+let unauthorizedHandler: (() => void) | undefined;
+
+export function setCsrfToken(token: string | undefined): void {
+  csrfToken = token;
+}
+
 /**
- * Marks calls to the dashboard console (/api/v1/console): the API only answers them for a
- * browser on the Sentra server, and a custom header cannot be set by forms or simple
- * cross-site requests. This is not a secret: there is no admin key in the frontend.
+ * Se llama cuando la API responde 401 (sesión caducada, revocada o usuario desactivado).
+ * El AuthProvider lo usa para limpiar el estado y volver a /login una sola vez, en lugar
+ * de que cada panel siga reintentando.
  */
-export const CONSOLE_HEADER = "X-Sentra-Console";
+export function onUnauthorized(handler: (() => void) | undefined): void {
+  unauthorizedHandler = handler;
+}
+
+type Method = "GET" | "POST" | "PATCH";
 
 interface RequestOptions {
   signal?: AbortSignal;
   /** Non-2xx statuses whose body is still a valid `T` (e.g. 503 from /health). */
   acceptStatuses?: number[];
-  /** Send the console marker header (agent management calls). */
-  console?: boolean;
+  /** No avisar al AuthProvider en un 401 (login y /auth/me gestionan el suyo). */
+  skipUnauthorized?: boolean;
 }
 
 async function request<T>(
-  method: "GET" | "POST",
+  method: Method,
   path: string,
   body: unknown,
-  { signal, acceptStatuses = [], console: isConsole = false }: RequestOptions,
+  { signal, acceptStatuses = [], skipUnauthorized = false }: RequestOptions,
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: "application/json" };
   if (body !== undefined) headers["Content-Type"] = "application/json";
-  if (isConsole) headers[CONSOLE_HEADER] = "1";
+  if (method !== "GET" && csrfToken) headers[CSRF_HEADER] = csrfToken;
   let response: Response;
   try {
     response = await fetch(`${config.apiBaseUrl}/api/v1${path}`, {
@@ -74,13 +129,21 @@ async function request<T>(
       body: body === undefined ? undefined : JSON.stringify(body),
       // Responses may hold a one-time token: never from or into the HTTP cache.
       cache: "no-store",
+      // La cookie de sesión también cuando la API está en otro origen (VITE_API_BASE_URL);
+      // el backend solo lo acepta para los orígenes de CORS_ORIGINS.
+      credentials: "include",
       signal,
     });
   } catch (error) {
     if (error instanceof DOMException && error.name === "AbortError") throw error;
     throw new ApiError(0, "network_error", "No se pudo conectar con la API de Sentra");
   }
-  if (!response.ok && !acceptStatuses.includes(response.status)) throw await parseError(response);
+  if (!response.ok && !acceptStatuses.includes(response.status)) {
+    const error = await parseError(response);
+    if (response.status === 401 && !skipUnauthorized) unauthorizedHandler?.();
+    throw error;
+  }
+  if (response.status === 204) return undefined as T;
   try {
     return (await response.json()) as T;
   } catch {
@@ -94,4 +157,8 @@ export function apiGet<T>(path: string, options: RequestOptions = {}): Promise<T
 
 export function apiPost<T>(path: string, body?: unknown, options: RequestOptions = {}): Promise<T> {
   return request<T>("POST", path, body ?? {}, options);
+}
+
+export function apiPatch<T>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
+  return request<T>("PATCH", path, body, options);
 }

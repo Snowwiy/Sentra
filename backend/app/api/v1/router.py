@@ -5,6 +5,8 @@ from app.api.v1.routes import (
     agents,
     alerts,
     assets,
+    audit,
+    auth,
     console,
     console_discovery,
     discovery,
@@ -14,6 +16,7 @@ from app.api.v1.routes import (
     inventory,
     processes,
     telemetry,
+    users,
 )
 
 # Statuses every route with input can answer. FastAPI would otherwise document 422 with its
@@ -25,6 +28,9 @@ _COMMON = error_responses(422, 503)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
+api_router.include_router(auth.router, responses=_COMMON)
+api_router.include_router(users.router, responses=_COMMON)
+api_router.include_router(audit.router, responses=_COMMON)
 api_router.include_router(agents.router, responses=_COMMON)
 api_router.include_router(assets.router, responses=_COMMON)
 api_router.include_router(telemetry.router, responses=_COMMON)

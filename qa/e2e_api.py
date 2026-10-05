@@ -8,7 +8,12 @@ Usage (stdlib only, any Python 3.12+):
 
     set SENTRA_QA_API_URL=http://127.0.0.1:8100
     set SENTRA_QA_ENROLLMENT_KEY=<the AGENT_ENROLLMENT_KEY of that API>
+    set SENTRA_QA_ADMIN_USER=<admin created with `python -m app.cli create-admin`>
+    set SENTRA_QA_ADMIN_PASSWORD=<its password>
     python qa/e2e_api.py [--offline]
+
+Fase 4G: las lecturas y acciones del dashboard exigen sesión. El script inicia sesión como
+ese admin (cookie + token CSRF en memoria) y crea un viewer temporal para probar permisos.
 
 It creates throwaway assets with random agent_ids. Point it at a QA instance, never at
 production data: it writes telemetry that opens alerts. `--offline` also waits for the offline
@@ -29,6 +34,11 @@ from typing import Any
 
 API = os.environ.get("SENTRA_QA_API_URL", "http://127.0.0.1:8100").rstrip("/") + "/api/v1"
 KEY = os.environ.get("SENTRA_QA_ENROLLMENT_KEY", "")
+ADMIN_USER = os.environ.get("SENTRA_QA_ADMIN_USER", "")
+ADMIN_PASSWORD = os.environ.get("SENTRA_QA_ADMIN_PASSWORD", "")
+
+# Sesión del dashboard: cabeceras Cookie y X-CSRF-Token que `call` añade por defecto.
+SESSION: dict[str, str] = {}
 
 RESULTS: list[tuple[str, bool, str]] = []
 
@@ -41,10 +51,16 @@ class Response:
 
 
 def call(
-    method: str, path: str, body: Any = None, headers: dict[str, str] | None = None
+    method: str,
+    path: str,
+    body: Any = None,
+    headers: dict[str, str] | None = None,
+    session: dict[str, str] | None = None,
 ) -> Response:
+    """`session=None` usa la sesión de admin; `session={}` es un cliente anónimo."""
     data = None
     all_headers = {"Accept": "application/json"}
+    all_headers.update(SESSION if session is None else session)
     if body is not None:
         # Raw strings let us send malformed JSON on purpose.
         data = body.encode() if isinstance(body, str) else json.dumps(body).encode()
@@ -64,6 +80,15 @@ def call(
     except ValueError:
         parsed = raw.decode(errors="replace")
     return Response(status, parsed, {k.lower(): v for k, v in resp_headers.items()})
+
+
+def login(username: str, password: str) -> tuple[Response, dict[str, str]]:
+    """Inicia sesión y devuelve las cabeceras de esa sesión (cookie + CSRF)."""
+    r = call("POST", "/auth/login", {"username": username, "password": password}, session={})
+    if r.status != 200:
+        return r, {}
+    cookie = r.headers.get("set-cookie", "").split(";", 1)[0]
+    return r, {"Cookie": cookie, "X-CSRF-Token": r.body["csrf_token"]}
 
 
 def check(name: str, condition: bool, detail: Any = "") -> bool:
@@ -867,16 +892,20 @@ def test_hybrid_read() -> None:
     check("no HTTP endpoint starts a scan", r.status in (404, 405), (r.status, r.body))
     # Fase 4D: iniciar/cancelar solo por la consola local del dashboard. Sin la cabecera de
     # consola (o con la consola desactivada) siempre 403, nunca un scan.
+    # Fase 4G: iniciar/cancelar exige sesión (401 sin ella) y nunca escanea fuera de la
+    # allowlist aunque lo pida un admin.
     for path, body in (
         ("/console/discovery/jobs", {"target": "0.0.0.0/0"}),
         (f"/console/discovery/jobs/{uuid.uuid4()}/cancel", None),
     ):
-        r = call("POST", path, body)
+        r = call("POST", path, body, session={})
         check(
-            f"{path.split('/')[-1]} discovery without console -> 403",
-            r.status == 403 and r.body["error"]["code"].startswith("console_"),
+            f"{path.split('/')[-1]} discovery without session -> 401",
+            r.status == 401 and is_error_envelope(r, "not_authenticated"),
             (r.status, r.body),
         )
+    r = call("POST", "/console/discovery/jobs", {"target": "0.0.0.0/0"})
+    check("admin discovery outside allowlist refused", r.status in (409, 422), (r.status, r.body))
     r = call("GET", "/discovery/schedule")
     check("discovery schedule readable", r.status == 200 and "enabled" in r.body, r.body)
     check(
@@ -904,6 +933,68 @@ def test_enrollment_tokens() -> None:
     check("enrollment token is not an agent credential -> 401", r.status == 401, r.status)
 
 
+def test_auth() -> None:
+    """Fase 4G: login, sesión, CSRF, permisos y separación de credenciales sobre HTTP real."""
+    for path in ("/assets", "/alerts", "/events", "/agents", "/discovery/jobs", "/users"):
+        r = call("GET", path, session={})
+        check(
+            f"GET {path} without session -> 401",
+            r.status == 401 and is_error_envelope(r, "not_authenticated"),
+            r.status,
+        )
+    r = call("GET", "/health", session={})
+    check("health stays public", r.status in (200, 503), r.status)
+    wrong, _ = login(ADMIN_USER, ADMIN_PASSWORD + "-wrong")
+    unknown, _ = login("qa-nobody-" + uuid.uuid4().hex[:6], ADMIN_PASSWORD)
+    check(
+        "login errors are identical (no user enumeration)",
+        wrong.status == unknown.status == 401 and wrong.body == unknown.body,
+        (wrong.body, unknown.body),
+    )
+    r = call("GET", "/auth/me")
+    check("auth/me with session", r.status == 200 and r.body["user"]["role"] == "admin", r.body)
+    cookie = SESSION.get("Cookie", "")
+    check("session id not in /auth/me body", cookie.split("=", 1)[-1] not in json.dumps(r.body))
+    no_csrf = {"Cookie": cookie}
+    r = call("POST", "/console/enrollment-tokens", {}, session=no_csrf)
+    check("mutation without CSRF -> 403", r.status == 403 and is_error_envelope(r, "csrf_failed"))
+    r = call("POST", "/console/enrollment-tokens", {}, headers={"Origin": "http://evil.example"})
+    check("mutation from foreign Origin -> 403", r.status == 403, (r.status, r.body))
+    # Viewer temporal: puede leer, no puede mutar.
+    name = "qa-viewer-" + uuid.uuid4().hex[:6]
+    password = "qa viewer password " + uuid.uuid4().hex[:8]
+    r = call("POST", "/users", {"username": name, "password": password, "role": "viewer"})
+    check("admin creates a viewer", r.status == 201, (r.status, r.body))
+    user_id = r.body.get("user_id") if isinstance(r.body, dict) else None
+    _, viewer = login(name, password)
+    check("viewer reads assets", call("GET", "/assets", session=viewer).status == 200)
+    for method, path, body in (
+        ("POST", "/console/enrollment-tokens", {}),
+        ("POST", "/console/discovery/jobs", {"target": "0.0.0.0/0"}),
+        ("POST", f"/alerts/{uuid.uuid4()}/resolve", None),
+        ("GET", "/users", None),
+    ):
+        r = call(method, path, body, session=viewer)
+        check(
+            f"viewer {method} {path.split('/')[1]} -> 403",
+            r.status == 403 and is_error_envelope(r, "permission_denied"),
+            (r.status, r.body),
+        )
+    if user_id:
+        r = call("PATCH", f"/users/{user_id}", {"is_active": False})
+        check("admin disables the viewer", r.status == 200, (r.status, r.body))
+        r = call("GET", "/assets", session=viewer)
+        check("disabled user's session is cut at once -> 401", r.status == 401, r.status)
+    r = call("GET", "/assets", headers={"X-Admin-Key": "x" * 30}, session={})
+    check("admin key never opens the dashboard -> 401", r.status == 401, r.status)
+    # Logout con una sesión propia para no cerrar la del resto del script.
+    _, own = login(ADMIN_USER, ADMIN_PASSWORD)
+    r = call("POST", "/auth/logout", session=own)
+    check("logout -> 204", r.status == 204, (r.status, r.body))
+    r = call("GET", "/auth/me", session=own)
+    check("session after logout -> 401", r.status == 401, r.status)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="also wait for the offline sweeper")
@@ -911,6 +1002,14 @@ def main() -> int:
     if not KEY:
         print("SENTRA_QA_ENROLLMENT_KEY is required", file=sys.stderr)
         return 2
+    if not ADMIN_USER or not ADMIN_PASSWORD:
+        print("SENTRA_QA_ADMIN_USER and SENTRA_QA_ADMIN_PASSWORD are required", file=sys.stderr)
+        return 2
+    r, admin = login(ADMIN_USER, ADMIN_PASSWORD)
+    if not admin:
+        print(f"admin login failed: {r.status} {r.body}", file=sys.stderr)
+        return 2
+    SESSION.update(admin)
     groups = [
         test_health_and_meta,
         test_cors,
@@ -924,6 +1023,7 @@ def main() -> int:
         test_operational,
         test_hybrid_read,
         test_enrollment_tokens,
+        test_auth,
     ]
     if args.offline:
         groups.append(test_offline)

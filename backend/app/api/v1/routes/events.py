@@ -3,6 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, status
 
+from app.api.auth import READ
 from app.api.deps import AgentToken, get_event_service
 from app.api.params import text_query
 from app.api.responses import error_responses
@@ -24,7 +25,7 @@ def ingest_events(payload: EventBatch, service: Service, token: AgentToken) -> E
     return service.ingest(payload, token)
 
 
-@router.get("", response_model=EventList, responses=error_responses(404))
+@router.get("", response_model=EventList, responses=error_responses(404), dependencies=[READ])
 def list_events(
     service: Service,
     asset_id: UUID | None = None,

@@ -12,9 +12,10 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings, get_settings
 from app.models.asset import Asset, MonitoringMethod
+from app.models.audit import AuditEvent
 from app.services import agent_management_service
 from app.services.agent_management_service import suggested_server_urls
-from tests.conftest import TEST_ADMIN_KEY, agent_payload
+from tests.conftest import TEST_ADMIN_KEY, agent_payload, authenticate
 from tests.test_alert_rules import _event
 from tests.test_inventory import inventory_payload
 from tests.test_telemetry import telemetry_payload
@@ -22,28 +23,19 @@ from tests.test_telemetry import telemetry_payload
 CONSOLE = "/api/v1/console"
 AGENTS = "/api/v1/agents"
 REGISTER = "/api/v1/agents/register"
-DASHBOARD_ORIGIN = "http://localhost:5173"
-LOCAL = {"X-Sentra-Console": "1", "Origin": DASHBOARD_ORIGIN}
+# Fase 4G: las cabeceras de la antigua consola local ya no hacen falta (ni dan acceso); se
+# mantienen vacías para no reescribir cada llamada.
+LOCAL: dict[str, str] = {}
 
 
 def _settings(**changes: Any) -> Settings:
-    base = {"dashboard_admin_enabled": True, "cors_origins": DASHBOARD_ORIGIN}
-    return get_settings().model_copy(update={**base, **changes})
-
-
-def _console_settings() -> Settings:
-    # No parameters: FastAPI would read them as query parameters of the override.
-    return _settings()
+    return get_settings().model_copy(update=changes)
 
 
 @pytest.fixture
-def console(client: TestClient) -> Iterator[TestClient]:
-    """A browser on the Sentra server: loopback peer, loopback Host, console enabled."""
-    client.app.dependency_overrides[get_settings] = _console_settings  # type: ignore[attr-defined]
-    with TestClient(
-        client.app, base_url="http://localhost:8000", client=("127.0.0.1", 50123)
-    ) as local:
-        yield local
+def console(client: TestClient) -> TestClient:
+    """El dashboard con sesión de admin (el `client` del conftest ya la tiene)."""
+    return client
 
 
 @pytest.fixture
@@ -72,73 +64,68 @@ def _agent(client: TestClient, asset_id: str) -> dict[str, Any]:
     return found
 
 
-# --- Console guard ------------------------------------------------------------------------
+# --- Acceso a la gestión de agentes (Fase 4G: sesión + permisos) ---------------------------
 
 
-def test_console_is_off_by_default(client: TestClient) -> None:
-    with TestClient(client.app, base_url="http://localhost", client=("127.0.0.1", 1)) as local:
-        response = local.get(CONSOLE, headers=LOCAL)
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "console_disabled"
-
-
-@pytest.mark.parametrize(
-    ("peer", "base_url", "headers"),
-    [
-        # Another machine on the LAN, even with the marker and a trusted Origin.
-        ("192.168.50.20", "http://localhost:8000", LOCAL),
-        # DNS rebinding: a hostile name that resolves to 127.0.0.1.
-        ("127.0.0.1", "http://evil.example:8000", LOCAL),
-        # Another site open in the operator's browser (CSRF), also a local one.
-        ("127.0.0.1", "http://localhost:8000", {**LOCAL, "Origin": "http://evil.example"}),
-        ("127.0.0.1", "http://localhost:8000", {**LOCAL, "Origin": "http://localhost:3000"}),
-        ("127.0.0.1", "http://localhost:8000", {**LOCAL, "Origin": "null"}),
-        # Without the custom header (an HTML form or a simple request cannot set it).
-        ("127.0.0.1", "http://localhost:8000", {"Origin": DASHBOARD_ORIGIN}),
-        # The admin key is not an alternative way in from outside.
-        ("192.168.50.20", "http://localhost:8000", {**LOCAL, "X-Admin-Key": TEST_ADMIN_KEY}),
-    ],
-)
-def test_console_refuses_anything_but_the_local_dashboard(
-    client: TestClient, peer: str, base_url: str, headers: dict[str, str]
+@pytest.mark.parametrize("role", ["analyst", "viewer"])
+def test_only_admins_manage_agents_and_tokens(
+    client: TestClient, engine: Engine, role: str
 ) -> None:
-    client.app.dependency_overrides[get_settings] = _console_settings  # type: ignore[attr-defined]
-    with TestClient(client.app, base_url=base_url, client=(peer, 40000)) as remote:
+    response, _ = _enroll(client, _create_token(client)["token"])
+    asset_id = response.json()["asset_id"]
+    with TestClient(client.app) as other:
+        authenticate(other, engine, role)
         for method, path in (
             ("GET", CONSOLE),
             ("POST", f"{CONSOLE}/enrollment-tokens"),
             ("GET", f"{CONSOLE}/enrollment-tokens"),
+            ("POST", f"{CONSOLE}/agents/{asset_id}/revoke"),
+            ("POST", f"{CONSOLE}/agents/{asset_id}/reinstate"),
         ):
-            response = remote.request(method, path, headers=headers, json={})
-            assert response.status_code == 403, (method, path)
-            assert response.json()["error"]["code"] == "console_not_local"
-    assert client.get("/api/v1/agent-enrollment-tokens", headers={}).status_code == 401
+            refused = other.request(method, path, json={})
+            assert refused.status_code == 403, (method, path)
+            assert refused.json()["error"]["code"] == "permission_denied"
+        # Lectura sí: la lista de agentes y su estado (sin secretos).
+        assert other.get(AGENTS).status_code == 200
+    assert _agent(client, asset_id)["credential_status"] == "active"
 
 
-@pytest.mark.parametrize(
-    ("peer", "base_url", "headers"),
-    [
-        ("127.0.0.1", "http://localhost:8000", LOCAL),
-        ("::1", "http://[::1]:8000", {"X-Sentra-Console": "1"}),  # no Origin: curl on the server
-        ("127.0.0.1", "http://127.0.0.1:8000", {**LOCAL, "Origin": "http://127.0.0.1:8000"}),
-    ],
-)
-def test_console_answers_the_local_dashboard(
-    client: TestClient, peer: str, base_url: str, headers: dict[str, str]
+def test_console_requires_a_session_whatever_the_origin(client: TestClient) -> None:
+    # La guarda local (loopback, X-Sentra-Console) ya no da acceso: sin sesión es 401 también
+    # desde el propio servidor, y la clave de administración no sirve de cookie.
+    with TestClient(client.app, base_url="http://localhost:8000", client=("127.0.0.1", 1)) as local:
+        for headers in (
+            {"X-Sentra-Console": "1", "Origin": "http://localhost:5173"},
+            {"X-Admin-Key": TEST_ADMIN_KEY},
+        ):
+            response = local.get(CONSOLE, headers=headers)
+            assert response.status_code == 401
+            assert response.json()["error"]["code"] == "not_authenticated"
+
+
+def test_console_answers_an_admin_from_another_lan_machine(
+    client: TestClient, engine: Engine
 ) -> None:
-    client.app.dependency_overrides[get_settings] = _console_settings  # type: ignore[attr-defined]
-    with TestClient(client.app, base_url=base_url, client=(peer, 40000)) as local:
-        response = local.get(CONSOLE, headers=headers)
+    with TestClient(
+        client.app, base_url="http://192.168.50.201:8000", client=("192.168.50.20", 1)
+    ) as lan:
+        authenticate(lan, engine, "admin")
+        response = lan.get(CONSOLE, headers={"Origin": "http://192.168.50.201:8000"})
+        created = lan.post(
+            f"{CONSOLE}/enrollment-tokens",
+            json={},
+            headers={"Origin": "http://192.168.50.201:8000"},
+        )
     assert response.status_code == 200, response.text
     assert response.json()["enrollment_token_ttl_minutes"] == 15
+    assert created.status_code == 201, created.text
 
 
 def test_console_suggests_the_configured_server_url(client: TestClient) -> None:
     client.app.dependency_overrides[get_settings] = lambda: _settings(  # type: ignore[attr-defined]
         agent_server_url="http://192.168.50.201:8000"
     )
-    with TestClient(client.app, base_url="http://localhost:8000", client=("127.0.0.1", 1)) as c:
-        info = c.get(CONSOLE, headers=LOCAL).json()
+    info = client.get(CONSOLE).json()
     assert info["suggested_server_urls"] == ["http://192.168.50.201:8000"]
     assert info["server_url_configured"] is True
 
@@ -368,13 +355,22 @@ def test_revoke_needs_an_agent(console: TestClient, db: Session) -> None:
     assert discovered.agent_token_revoked_at is None
 
 
-def test_remote_browser_cannot_revoke(console: TestClient, client: TestClient) -> None:
-    response, _ = _enroll(client, _create_token(console)["token"])
+def test_agent_actions_are_audited_without_secrets(
+    console: TestClient, client: TestClient, db: Session
+) -> None:
+    created = _create_token(console)
+    response, _ = _enroll(client, created["token"])
     asset_id = response.json()["asset_id"]
-    with TestClient(client.app, base_url="http://localhost:8000", client=("10.0.0.8", 1)) as lan:
-        refused = lan.post(f"{CONSOLE}/agents/{asset_id}/revoke", headers=LOCAL)
-    assert refused.status_code == 403
-    assert _agent(client, asset_id)["credential_status"] == "active"
+    console.post(f"{CONSOLE}/agents/{asset_id}/revoke")
+    console.post(f"{CONSOLE}/agents/{asset_id}/reinstate")
+    rows = db.scalars(select(AuditEvent).order_by(AuditEvent.id)).all()
+    actions = [(r.action, r.result, r.target_id) for r in rows]
+    assert ("enrollment_token_created", "success", created["token_id"]) in actions
+    assert ("agent_revoked", "success", asset_id) in actions
+    assert ("agent_reactivated", "success", asset_id) in actions
+    dump = repr([(r.actor, r.target_id, r.details) for r in rows])
+    assert created["token"] not in dump
+    assert client.tokens[response.json()["agent_id"]] not in dump  # type: ignore[attr-defined]
 
 
 # --- Fase 4F: método de instalación y re-enrolamiento de un servicio Windows ---------------

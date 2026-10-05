@@ -2,6 +2,7 @@
 import { cleanup, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
+import { WithRole } from "../test/auth";
 import { afterEach, describe, expect, it } from "vitest";
 import type { Asset } from "../api/types";
 import { AssetName, DeviceTypeCell, IdentificationPanel } from "./DeviceIdentity";
@@ -49,7 +50,11 @@ function asset(overrides: Partial<Asset> = {}): Asset {
 }
 
 function renderIn(node: React.ReactNode) {
-  return render(<MemoryRouter>{node}</MemoryRouter>);
+  return render(
+    <MemoryRouter>
+      <WithRole role="admin">{node}</WithRole>
+    </MemoryRouter>,
+  );
 }
 
 afterEach(cleanup);

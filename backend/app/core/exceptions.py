@@ -44,19 +44,55 @@ class AgentRevokedError(ForbiddenError):
     code = "agent_revoked"
 
 
-class ConsoleDisabledError(ForbiddenError):
-    # The dashboard console (api/console.py) is off: DASHBOARD_ADMIN_ENABLED is not set.
-    code = "console_disabled"
+class NotAuthenticatedError(SentraError):
+    # Sin sesión de dashboard válida (no hay cookie, caducó, fue revocada o el usuario está
+    # desactivado). El frontend la trata igual en todos los casos: limpiar estado e ir a
+    # /login. Es una clase aparte de UnauthorizedError para no anunciar "Bearer", que es el
+    # esquema de los agentes, no el del navegador.
+    status_code = status.HTTP_401_UNAUTHORIZED
+    code = "not_authenticated"
 
 
-class ConsoleNotLocalError(ForbiddenError):
-    # The console only answers a browser on the server machine itself.
-    code = "console_not_local"
+class InvalidCredentialsError(SentraError):
+    # Login fallido. Mismo código y mensaje para usuario inexistente, contraseña incorrecta
+    # o usuario desactivado: la respuesta no revela qué usuarios existen.
+    status_code = status.HTTP_401_UNAUTHORIZED
+    code = "invalid_credentials"
+
+
+class PermissionDeniedError(ForbiddenError):
+    # Sesión válida, pero su rol no tiene el permiso que pide el endpoint.
+    code = "permission_denied"
+
+
+class CsrfError(ForbiddenError):
+    # Petición mutable sin token CSRF válido o desde un Origin no autorizado.
+    code = "csrf_failed"
+
+
+class RateLimitedError(SentraError):
+    status_code = status.HTTP_429_TOO_MANY_REQUESTS
+    code = "rate_limited"
+
+    def __init__(self, message: str, retry_after: float) -> None:
+        super().__init__(message)
+        self.retry_after = max(int(retry_after) + 1, 1)
+
+
+class PolicyError(SentraError):
+    # Usuario o contraseña que no cumple la política (core/passwords.py).
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "policy_violation"
 
 
 class ConflictError(SentraError):
     status_code = status.HTTP_409_CONFLICT
     code = "conflict"
+
+
+class LastAdminError(ConflictError):
+    # La operación dejaría Sentra sin ningún admin activo.
+    code = "last_admin"
 
 
 class DiscoveryDisabledError(ConflictError):
@@ -83,6 +119,8 @@ async def _sentra_error_handler(_: Request, exc: Exception) -> JSONResponse:
     response = _error(error.status_code, error.code, error.message)
     if isinstance(error, UnauthorizedError):
         response.headers["WWW-Authenticate"] = "Bearer"
+    if isinstance(error, RateLimitedError):
+        response.headers["Retry-After"] = str(error.retry_after)
     return response
 
 

@@ -143,6 +143,7 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
 
       <div className="modal__actions">
         {isActive(data) ? (
+          actions.canAdminister && (
           <button
             type="button"
             className="button button--danger"
@@ -152,6 +153,7 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
           >
             {data.cancel_requested || cancelling ? "Cancelando…" : "Cancelar"}
           </button>
+          )
         ) : (
           <>
             <button type="button" className="button" onClick={() => actions.onShowDevices(data.target)}>
@@ -165,15 +167,16 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
             >
               Ver cambios
             </button>
-            <button
-              type="button"
-              className="button button--primary"
-              onClick={() => actions.onRunAgain(data.target)}
-              disabled={!actions.canAdminister}
-              title={actions.adminReason}
-            >
-              Ejecutar nuevamente
-            </button>
+            {actions.canAdminister && (
+              <button
+                type="button"
+                className="button button--primary"
+                onClick={() => actions.onRunAgain(data.target)}
+                title={actions.adminReason}
+              >
+                Ejecutar nuevamente
+              </button>
+            )}
           </>
         )}
       </div>

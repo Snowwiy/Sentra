@@ -57,4 +57,45 @@ describe("frontend security", () => {
       );
     }
   });
+
+  // Fase 4G: la sesión vive solo en una cookie HttpOnly; el frontend no guarda ni registra
+  // contraseñas, IDs de sesión ni el token CSRF, y no queda rastro de la consola local.
+  it("auth code never persists, logs or reads cookies", () => {
+    const files = sources(SRC).filter((f) => /[\\/]auth[\\/]|api[\\/]client|UsersPage|AlertsView/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(6);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /localStorage|sessionStorage|indexedDB|document\.cookie|console\.(log|info|debug|warn|error)/,
+      );
+    }
+  });
+
+  it("no longer uses the temporary local console marker", () => {
+    for (const file of sources(SRC)) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(/X-Sentra-Console|DASHBOARD_ADMIN_ENABLED|console_not_local/);
+    }
+  });
+
+  it("never puts credentials in URLs", () => {
+    for (const file of sources(SRC)) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(/[?&](password|token|session|csrf)=/i);
+    }
+  });
+
+  // Si existe un build (npm run build), el bundle tampoco contiene la clave de administración.
+  it("built bundle (if present) contains no admin key", () => {
+    const dist = join(FRONTEND, "dist", "assets");
+    let files: string[];
+    try {
+      files = readdirSync(dist).filter((name) => name.endsWith(".js"));
+    } catch {
+      return;
+    }
+    for (const name of files) {
+      expect(readFileSync(join(dist, name), "utf8"), name).not.toMatch(/X-Admin-Key|ADMIN_API_KEY|X-Sentra-Console/);
+    }
+  });
 });

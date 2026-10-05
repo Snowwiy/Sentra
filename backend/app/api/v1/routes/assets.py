@@ -4,6 +4,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 from pydantic import IPvAnyNetwork
 
+from app.api.auth import READ
 from app.api.deps import (
     get_agent_management_service,
     get_asset_service,
@@ -30,7 +31,8 @@ from app.services.inventory_service import InventoryService
 from app.services.process_service import ProcessService
 from app.services.telemetry_service import TelemetryService
 
-router = APIRouter(prefix="/assets", tags=["assets"])
+# Solo lectura del dashboard: cualquier rol con monitoring:read (viewer incluido).
+router = APIRouter(prefix="/assets", tags=["assets"], dependencies=[READ])
 Service = Annotated[AssetService, Depends(get_asset_service)]
 
 

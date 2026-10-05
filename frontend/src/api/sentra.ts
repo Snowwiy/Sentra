@@ -1,4 +1,4 @@
-import { apiGet, apiPost } from "./client";
+import { apiGet, apiPatch, apiPost } from "./client";
 import type {
   Agent,
   AgentList,
@@ -10,6 +10,8 @@ import type {
   Asset,
   AssetList,
   AssetStatus,
+  AuditEventList,
+  AuthState,
   ChangeCategory,
   ChangeList,
   ConsoleInfo,
@@ -28,7 +30,10 @@ import type {
   Inventory,
   MonitoringMethod,
   ProcessSnapshot,
+  Role,
   TelemetryHistory,
+  User,
+  UserList,
 } from "./types";
 
 export interface AlertQuery {
@@ -138,38 +143,62 @@ export const sentraApi = {
 };
 
 /**
- * Agent administration through the dashboard console. The API performs these itself and
- * answers only a browser on the Sentra server (no admin key in the frontend). The token in
- * `createEnrollmentToken`'s answer exists only there: never store or log it.
+ * Gestión de agentes desde el dashboard (/console): la API exige sesión y el permiso
+ * correspondiente (enrollment:manage, agents:manage, discovery:run). No hay ninguna clave de
+ * administración en el frontend. El token de `createEnrollmentToken` solo existe en esa
+ * respuesta: nunca se guarda ni se registra.
  */
 export const consoleApi = {
-  info: (signal?: AbortSignal) => apiGet<ConsoleInfo>("/console", { signal, console: true }),
+  info: (signal?: AbortSignal) => apiGet<ConsoleInfo>("/console", { signal }),
   listEnrollmentTokens: (signal?: AbortSignal) =>
-    apiGet<EnrollmentTokenList>("/console/enrollment-tokens", { signal, console: true }),
+    apiGet<EnrollmentTokenList>("/console/enrollment-tokens", { signal }),
   createEnrollmentToken: (request: EnrollmentTokenRequest) =>
-    apiPost<EnrollmentTokenCreated>("/console/enrollment-tokens", request, { console: true }),
+    apiPost<EnrollmentTokenCreated>("/console/enrollment-tokens", request),
   revokeEnrollmentToken: (tokenId: string) =>
-    apiPost<EnrollmentToken>(
-      `/console/enrollment-tokens/${encodeURIComponent(tokenId)}/revoke`,
-      undefined,
-      { console: true },
-    ),
+    apiPost<EnrollmentToken>(`/console/enrollment-tokens/${encodeURIComponent(tokenId)}/revoke`),
   revokeAgent: (assetId: string) =>
-    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/revoke`, undefined, {
-      console: true,
-    }),
+    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/revoke`),
   reinstateAgent: (assetId: string) =>
-    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`, undefined, {
-      console: true,
-    }),
+    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`),
   // Descubrimiento de red: el backend vuelve a validar el target contra
   // DISCOVERY_ALLOWED_NETWORKS; la lista del frontend es solo una comodidad.
   startDiscovery: (target: string) =>
-    apiPost<DiscoveryJobDetail>("/console/discovery/jobs", { target }, { console: true }),
+    apiPost<DiscoveryJobDetail>("/console/discovery/jobs", { target }),
   cancelDiscovery: (jobId: string) =>
-    apiPost<DiscoveryJobDetail>(
-      `/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`,
-      undefined,
-      { console: true },
-    ),
+    apiPost<DiscoveryJobDetail>(`/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`),
+};
+
+/** Acciones sobre alertas (permiso alerts:manage). */
+export const alertsApi = {
+  acknowledge: (alertId: string) =>
+    apiPost<Alert>(`/alerts/${encodeURIComponent(alertId)}/acknowledge`),
+  resolve: (alertId: string) => apiPost<Alert>(`/alerts/${encodeURIComponent(alertId)}/resolve`),
+};
+
+/**
+ * Sesión del dashboard. La contraseña solo pasa por `login`/`changePassword` y no se guarda
+ * en ningún sitio; la cookie de sesión la gestiona el navegador.
+ */
+export const authApi = {
+  // skipUnauthorized: un 401 aquí es "credenciales incorrectas" o "sin sesión", no una
+  // sesión que caduca a mitad de uso.
+  login: (username: string, password: string) =>
+    apiPost<AuthState>("/auth/login", { username, password }, { skipUnauthorized: true }),
+  me: (signal?: AbortSignal) => apiGet<AuthState>("/auth/me", { signal, skipUnauthorized: true }),
+  logout: () => apiPost<void>("/auth/logout", undefined, { skipUnauthorized: true }),
+};
+
+/** Administración de usuarios y auditoría (users:manage, audit:read: solo admin). */
+export const usersApi = {
+  list: (signal?: AbortSignal) => apiGet<UserList>("/users", { signal }),
+  create: (username: string, password: string, role: Role) =>
+    apiPost<User>("/users", { username, password, role }),
+  update: (userId: string, change: { role?: Role; is_active?: boolean }) =>
+    apiPatch<User>(`/users/${encodeURIComponent(userId)}`, change),
+  resetPassword: (userId: string, newPassword: string) =>
+    apiPost<User>(`/users/${encodeURIComponent(userId)}/password`, { new_password: newPassword }),
+  revokeSessions: (userId: string) =>
+    apiPost<User>(`/users/${encodeURIComponent(userId)}/sessions/revoke`),
+  audit: (limit: number, signal?: AbortSignal) =>
+    apiGet<AuditEventList>(`/audit?limit=${limit}`, { signal }),
 };

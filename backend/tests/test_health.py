@@ -49,6 +49,9 @@ def test_read_endpoints_answer_503_when_database_is_unreachable() -> None:
 
     app.dependency_overrides[get_db] = broken_db
     with TestClient(app, raise_server_exceptions=False) as client:
+        # Con una cookie de sesión la API tiene que consultar la base para validarla: la
+        # caída de PostgreSQL se ve como 503, nunca como 401 ni 500.
+        client.cookies.set("sentra_session", "sentra_s_x")
         response = client.get("/api/v1/assets")
 
     assert response.status_code == 503
@@ -76,6 +79,7 @@ def test_exhausted_connection_pool_answers_503_not_500(engine: Engine) -> None:
     app.dependency_overrides[get_db] = exhausted_db
     try:
         with TestClient(app, raise_server_exceptions=False) as client:
+            client.cookies.set("sentra_session", "sentra_s_x")
             response = client.get("/api/v1/assets")
     finally:
         held.close()

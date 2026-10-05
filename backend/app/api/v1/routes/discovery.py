@@ -1,7 +1,7 @@
-"""Discovery read endpoints, abiertos como el resto del dashboard (solo lectura).
+"""Discovery read endpoints (permiso monitoring:read, como el resto de lecturas).
 
 Iniciar y cancelar un descubrimiento es una operación activa sobre la red: vive en
-routes/console_discovery.py, detrás de la guarda de consola local (api/console.py). La CLI
+routes/console_discovery.py, con el permiso discovery:run. La CLI
 (`python -m app.cli discover`) queda como herramienta administrativa/debug.
 """
 
@@ -10,6 +10,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
 
+from app.api.auth import READ
 from app.api.deps import get_exposure_service
 from app.api.responses import error_responses
 from app.schemas.discovery import (
@@ -21,7 +22,7 @@ from app.schemas.discovery import (
 from app.services.background import PeriodicJob
 from app.services.exposure_service import ExposureService
 
-router = APIRouter(prefix="/discovery", tags=["discovery"])
+router = APIRouter(prefix="/discovery", tags=["discovery"], dependencies=[READ])
 Service = Annotated[ExposureService, Depends(get_exposure_service)]
 
 

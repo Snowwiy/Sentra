@@ -3,7 +3,8 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Agent, EnrollmentToken } from "../api/types";
+import { WithRole } from "../test/auth";
+import type { Agent, EnrollmentToken, Role } from "../api/types";
 import { AgentsPage } from "./AgentsPage";
 
 // Test value only: the right shape, never issued by a server.
@@ -106,10 +107,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderPage() {
+function renderPage(role: Role = "admin") {
   return render(
     <MemoryRouter>
-      <AgentsPage />
+      <WithRole role={role}>
+        <AgentsPage />
+      </WithRole>
     </MemoryRouter>,
   );
 }
@@ -171,25 +174,34 @@ describe("AgentsPage", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("boom");
   });
 
-  it("explains why management is unavailable and disables the actions", async () => {
+  it("explains when management cannot be loaded and disables the actions (admin)", async () => {
     routes["GET /console"] = () => ({
-      status: 403,
-      body: { error: { code: "console_disabled", message: "disabled" } },
+      status: 500,
+      body: { error: { code: "internal_error", message: "boom" } },
     });
-    renderPage();
-    expect(await screen.findByText(/DASHBOARD_ADMIN_ENABLED=true/, { selector: ".banner" })).toBeInTheDocument();
+    renderPage("admin");
+    expect(await screen.findByText(/no está disponible ahora mismo: boom/, { selector: ".banner" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "+ Añadir agente" })).toBeDisabled();
     expect(screen.getAllByRole("button", { name: "Revocar" })[0]).toBeDisabled();
     expect(calls.some((c) => c.path === "/console/enrollment-tokens")).toBe(false);
   });
 
-  it("explains that only the server's own browser can manage agents", async () => {
-    routes["GET /console"] = () => ({
-      status: 403,
-      body: { error: { code: "console_not_local", message: "not local" } },
-    });
-    renderPage();
-    expect(await screen.findByText(/propio servidor Sentra/, { selector: ".banner" })).toBeInTheDocument();
+  // Fase 4G: viewer y analyst consultan los agentes pero no ven ninguna acción de gestión
+  // ni los tokens de instalación (y el backend respondería 403 de todos modos).
+  it.each(["viewer", "analyst"] as const)("%s: solo lectura, sin acciones ni tokens", async (role) => {
+    renderPage(role);
+    expect(await screen.findByText("ravenslg")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "+ Añadir agente" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Revocar" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Reactivar…" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Tokens de instalación" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.path.startsWith("/console"))).toBe(false);
+  });
+
+  it("admin: ve las acciones y los tokens", async () => {
+    renderPage("admin");
+    expect(await screen.findByRole("button", { name: "+ Añadir agente" })).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Tokens de instalación" })).toBeInTheDocument();
   });
 });
 
@@ -260,7 +272,8 @@ describe("Add agent wizard", () => {
 
     const create = calls.find((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")!;
     expect(JSON.parse(create.init.body as string)).toEqual({ expected_platform: "linux", max_uses: 1 });
-    expect(create.init.headers).toMatchObject({ "X-Sentra-Console": "1" });
+    expect(create.init.headers).not.toHaveProperty("X-Sentra-Console");
+    expect(create.init.credentials).toBe("include");
     expect(dialog).toHaveTextContent("Este token solo puede utilizarse una vez y expira en 15 minutos.");
     expect(within(dialog).getByLabelText("Token de instalación")).toHaveTextContent(TOKEN);
     expect(dialog).toHaveTextContent("Esperando a que el equipo se registre");
@@ -342,7 +355,7 @@ describe("Add agent wizard", () => {
   it("shows the API error when the token cannot be created", async () => {
     routes["POST /console/enrollment-tokens"] = () => ({
       status: 403,
-      body: { error: { code: "console_not_local", message: "Only from the server" } },
+      body: { error: { code: "forbidden", message: "Only from the server" } },
     });
     const dialog = await openWizard();
     fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
@@ -376,7 +389,7 @@ describe("Revocation", () => {
     await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
     const revoke = calls.filter((c) => c.method === "POST");
     expect(revoke.map((c) => c.path)).toEqual([`/console/agents/${RAVENSLG.asset_id}/revoke`]);
-    expect(revoke[0]!.init.headers).toMatchObject({ "X-Sentra-Console": "1" });
+    expect(revoke[0]!.init.headers).not.toHaveProperty("X-Sentra-Console");
   });
 
   it("keeps the dialog open with the error when revocation fails", async () => {

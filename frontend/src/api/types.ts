@@ -556,3 +556,63 @@ export interface ConsoleInfo {
   suggested_server_urls: string[];
   server_url_configured: boolean;
 }
+
+// --- Fase 4G: autenticación, usuarios y auditoría ---------------------------------------
+
+export type Role = "admin" | "analyst" | "viewer";
+
+/** Permisos del backend (core/permissions.py); la UI decide qué mostrar con ellos. */
+export type Permission =
+  | "monitoring:read"
+  | "alerts:manage"
+  | "discovery:run"
+  | "agents:manage"
+  | "enrollment:manage"
+  | "users:manage"
+  | "audit:read";
+
+export interface CurrentUser {
+  user_id: string;
+  username: string;
+  role: Role;
+  last_login_at: string | null;
+}
+
+/** Respuesta de login y /auth/me. El ID de sesión nunca aparece aquí (cookie HttpOnly). */
+export interface AuthState {
+  user: CurrentUser;
+  permissions: Permission[];
+  /** Solo en memoria: se envía en X-CSRF-Token en las peticiones mutables. */
+  csrf_token: string;
+  session_expires_at: string;
+}
+
+export interface User {
+  user_id: string;
+  username: string;
+  role: Role;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at: string | null;
+  active_sessions: number;
+}
+
+export interface UserList {
+  items: User[];
+}
+
+export interface AuditEvent {
+  created_at: string;
+  actor: string;
+  action: string;
+  target_type: string | null;
+  target_id: string | null;
+  result: string;
+  client_ip: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface AuditEventList {
+  items: AuditEvent[];
+}

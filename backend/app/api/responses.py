@@ -10,10 +10,17 @@ from typing import Any
 from app.schemas.common import ErrorResponse
 
 _DESCRIPTIONS = {
-    401: "Missing or invalid credentials (`unauthorized`)",
-    403: "Enrollment disabled (`forbidden`) or agent revoked by an operator (`agent_revoked`)",
+    401: (
+        "Missing or invalid credentials: agent/admin credential (`unauthorized`), no valid"
+        " dashboard session (`not_authenticated`) or failed login (`invalid_credentials`)"
+    ),
+    403: (
+        "Forbidden: enrollment disabled (`forbidden`), agent revoked (`agent_revoked`), role"
+        " without the permission (`permission_denied`) or missing CSRF token (`csrf_failed`)"
+    ),
     404: "Asset not found (`not_found`)",
     409: "Concurrent first registration of the same agent; retry (`conflict`)",
+    429: "Too many attempts; retry after `Retry-After` seconds (`rate_limited`)",
     413: "Request body larger than MAX_REQUEST_BYTES (`payload_too_large`)",
     422: "Validation error (`validation_error`, with `details` per field)",
     503: "Database unavailable; retry later (`database_unavailable`)",

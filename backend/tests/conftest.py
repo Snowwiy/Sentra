@@ -11,6 +11,7 @@ TEST_ADMIN_KEY = "test-admin-key-0123456789abcdef-xyz"
 os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 from uuid import uuid4
@@ -22,9 +23,14 @@ from fastapi.testclient import TestClient
 from sqlalchemy import Engine, text
 from sqlalchemy.orm import Session, sessionmaker
 
+from app.api.auth import CSRF_HEADER, session_cookie_name
+from app.core import passwords
 from app.core.config import get_settings
+from app.core.security import csrf_token_for
 from app.db.session import build_engine, get_db
 from app.main import create_app
+from app.models.user import User
+from app.services.auth_service import AuthService, SessionPolicy
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -81,8 +87,57 @@ class AgentClient(TestClient):
         return response
 
 
+# Contraseña de los usuarios de prueba. El hash Argon2 se calcula una sola vez por sesión
+# de pytest: con un hash por test la suite tardaría bastante más.
+TEST_PASSWORD = "correct horse battery staple"
+_TEST_HASH: list[str] = []
+
+
+def _test_password_hash() -> str:
+    if not _TEST_HASH:
+        _TEST_HASH.append(passwords.hash_password(TEST_PASSWORD))
+    return _TEST_HASH[0]
+
+
+def create_user(session: Session, username: str, role: str = "admin", active: bool = True) -> User:
+    now = datetime.now(UTC)
+    user = User(
+        username=username,
+        password_hash=_test_password_hash(),
+        role=role,
+        is_active=active,
+        created_at=now,
+        updated_at=now,
+        password_changed_at=now - timedelta(seconds=1),
+    )
+    session.add(user)
+    session.commit()
+    return user
+
+
+def authenticate(
+    test_client: TestClient, engine: Engine, role: str = "admin", username: str | None = None
+) -> User:
+    """Crea un usuario con ese rol y deja `test_client` con su sesión y su token CSRF.
+
+    Equivale a un login del dashboard sin pasar por /auth/login (que se prueba aparte), así
+    los tests de funcionalidad no dependen del rate limiting del login.
+    """
+    settings = get_settings()
+    with sessionmaker(bind=engine, expire_on_commit=False)() as session:
+        user = create_user(session, username or f"{role}-{uuid4().hex[:8]}", role)
+        token, _ = AuthService(session, SessionPolicy.from_settings(settings)).start_session(
+            user, "testclient", "pytest"
+        )
+    test_client.cookies.set(session_cookie_name(settings), token)
+    test_client.headers[CSRF_HEADER] = csrf_token_for(token)
+    return user
+
+
 @pytest.fixture
 def client(engine: Engine) -> Iterator[TestClient]:
+    """Cliente con sesión de admin (Fase 4G): las lecturas y acciones del dashboard exigen
+    login. Los tests de autenticación usan `anonymous` o limpian las cookies."""
     app = create_app()
     factory = sessionmaker(bind=engine, expire_on_commit=False)
 
@@ -93,13 +148,14 @@ def client(engine: Engine) -> Iterator[TestClient]:
     app.dependency_overrides[get_db] = override_get_db
     with AgentClient(app) as test_client:
         test_client.tokens = {}
+        authenticate(test_client, engine, "admin", "admin")
         yield test_client
 
     with engine.begin() as connection:
         connection.execute(
             text(
                 "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
-                " discovery_jobs, agent_enrollment_tokens"
+                " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users"
                 " RESTART IDENTITY CASCADE"
             )
         )

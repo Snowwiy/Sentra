@@ -86,7 +86,11 @@ def test_openapi_documents_the_real_error_envelope(client: TestClient) -> None:
 @pytest.mark.parametrize(
     ("method", "path", "expected"),
     [
-        ("post", "/agents/register", {"201", "200", "401", "403", "409", "413", "422", "503"}),
+        (
+            "post",
+            "/agents/register",
+            {"201", "200", "401", "403", "409", "413", "422", "429", "503"},
+        ),
         ("post", "/agents/heartbeat", {"200", "401", "413", "422", "503"}),
         ("post", "/telemetry", {"201", "401", "413", "422", "503"}),
         ("post", "/inventory", {"201", "401", "413", "422", "503"}),
@@ -94,6 +98,12 @@ def test_openapi_documents_the_real_error_envelope(client: TestClient) -> None:
         ("get", "/assets/{asset_id}", {"200", "404", "422", "503"}),
         ("get", "/assets/{asset_id}/inventory", {"200", "404", "422", "503"}),
         ("get", "/alerts", {"200", "404", "422", "503"}),
+        (
+            "post",
+            "/alerts/{alert_id}/acknowledge",
+            {"200", "401", "403", "404", "409", "422", "503"},
+        ),
+        ("post", "/auth/login", {"200", "401", "403", "422", "429", "503"}),
         ("get", "/health", {"200", "503"}),
     ],
 )

@@ -1,18 +1,24 @@
 import { useCallback } from "react";
-import { ApiError } from "../api/client";
 import { consoleApi } from "../api/sentra";
-import type { ConsoleInfo } from "../api/types";
+import type { ConsoleInfo, Permission } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
 import { usePolling } from "./usePolling";
 
-// Whether this browser may manage agents rarely changes (server setting, where the browser
-// runs): checked once a minute.
+// Los datos del asistente (TTL, URLs sugeridas) cambian poco: se consultan una vez por minuto.
 const CHECK_MS = 60_000;
 
 export interface ConsoleState {
   info: ConsoleInfo | undefined;
   loading: boolean;
+  /**
+   * El rol de la sesión tiene el permiso. Si no, la UI OCULTA las acciones (un viewer no
+   * ve "Añadir agente", "Revocar" ni "Iniciar descubrimiento"). Ocultar no es la seguridad:
+   * el backend responde 403 igualmente.
+   */
+  allowed: boolean;
+  /** Permitido y listo para usarse (en agentes, cuando ya se cargaron los datos del asistente). */
   available: boolean;
-  /** Why agent management is unavailable, for the operator. */
+  /** Por qué no está disponible pese a tener permiso (p. ej. la API no responde). */
   reason: string | undefined;
   refresh: () => void;
 }
@@ -22,31 +28,32 @@ export function consoleUnavailableReason(
   feature = "La gestión de agentes",
 ): string | undefined {
   if (!error) return undefined;
-  if (error instanceof ApiError && error.code === "console_disabled") {
-    return `${feature} desde el dashboard está desactivada. Añade DASHBOARD_ADMIN_ENABLED=true al .env del servidor y reinicia la API.`;
-  }
-  if (error instanceof ApiError && error.code === "console_not_local") {
-    return `${feature} solo está disponible desde un navegador en el propio servidor Sentra (http://localhost). Mientras no exista login, no se permite desde otros equipos.`;
-  }
-  return `No se pudo comprobar la consola de administración: ${error.message}`;
+  return `${feature} no está disponible ahora mismo: ${error.message}`;
 }
 
 /**
- * `feature` personaliza el motivo mostrado ("La gestión de agentes", "El descubrimiento de
- * red"...): la guarda del servidor es la misma consola local para todas las acciones.
+ * Acciones administrativas del dashboard según el permiso de la sesión (Fase 4G).
+ *
+ * `permission` por defecto es la gestión de tokens/agentes, que además necesita los datos
+ * de /console para el asistente; para discovery se pasa "discovery:run" y no se consulta
+ * nada más. `feature` personaliza el motivo mostrado si algo falla.
  */
-export function useConsole(feature?: string): ConsoleState {
+export function useConsole(
+  feature?: string,
+  permission: Permission = "enrollment:manage",
+): ConsoleState {
+  const auth = useAuth();
+  const allowed = auth.can(permission);
+  const needsInfo = permission === "enrollment:manage";
   const fetchInfo = useCallback((signal: AbortSignal) => consoleApi.info(signal), []);
-  const { data, error, loading, refresh } = usePolling(fetchInfo, CHECK_MS);
-  // A refusal by the server (disabled, not local) disables the actions at once; a passing
-  // network blip keeps the last good answer, like every other panel.
-  const refused = error instanceof ApiError && error.code.startsWith("console_");
-  const available = data !== undefined && !refused;
+  const { data, error, loading, refresh } = usePolling(fetchInfo, CHECK_MS, allowed && needsInfo);
+  const available = allowed && (!needsInfo || data !== undefined);
   return {
     info: data,
-    loading,
+    loading: allowed && needsInfo && loading,
+    allowed,
     available,
-    reason: available ? undefined : consoleUnavailableReason(error, feature),
+    reason: allowed && !available ? consoleUnavailableReason(error, feature) : undefined,
     refresh,
   };
 }

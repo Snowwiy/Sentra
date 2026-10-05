@@ -3,7 +3,6 @@ import { ApiError } from "../../api/client";
 import { consoleApi } from "../../api/sentra";
 import type { DiscoveryJob, DiscoveryScope } from "../../api/types";
 import { errorMessage } from "../../lib/format";
-import { consoleUnavailableReason } from "../../lib/useConsole";
 import { Modal } from "../Modal";
 import { DiscoveryJobView, type JobActions } from "./DiscoveryJobView";
 
@@ -13,8 +12,8 @@ export const DISABLED_MESSAGE =
   "El descubrimiento de red está desactivado. Configure DISCOVERY_ALLOWED_NETWORKS en el servidor.";
 
 function startError(err: unknown): string {
-  if (err instanceof ApiError && err.code.startsWith("console_")) {
-    return consoleUnavailableReason(err, DISCOVERY_FEATURE) ?? err.message;
+  if (err instanceof ApiError && err.code === "permission_denied") {
+    return "Tu rol no permite iniciar ni cancelar descubrimientos.";
   }
   if (err instanceof ApiError && err.code === "discovery_busy") {
     return "Ya hay un descubrimiento en cola o en curso para esa red.";

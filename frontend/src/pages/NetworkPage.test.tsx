@@ -3,11 +3,13 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { WithRole } from "../test/auth";
 import type {
   Asset,
   DiscoveryJobDetail,
   DiscoverySchedule,
   DiscoveryScope,
+  Role,
 } from "../api/types";
 import { NetworkPage } from "./NetworkPage";
 
@@ -181,10 +183,12 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderPage() {
+function renderPage(role: Role = "admin") {
   return render(
     <MemoryRouter>
-      <NetworkPage />
+      <WithRole role={role}>
+        <NetworkPage />
+      </WithRole>
     </MemoryRouter>,
   );
 }
@@ -255,16 +259,18 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     expect(button).toBeDisabled();
   });
 
-  it("desde otro equipo (403): lectura disponible, iniciar deshabilitado", async () => {
-    routes["GET /console"] = refused("console_not_local");
+  it("viewer: lectura disponible, sin botón de iniciar ni de cancelar", async () => {
     routes["GET /discovery/jobs"] = () => ({ body: { items: [COMPLETED] } });
-    renderPage();
-    const button = await startButton();
-    await waitFor(() => expect(screen.getByText(/solo está disponible desde un navegador/)).toBeInTheDocument());
-    expect(button).toBeDisabled();
-    expect(button).toHaveAttribute("title", expect.stringContaining("El descubrimiento de red"));
-    const history = screen.getByRole("region", { name: "Ejecuciones recientes" });
-    expect(within(history).getByText("Completed")).toBeInTheDocument();
+    renderPage("viewer");
+    const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
+    await waitFor(() => expect(within(history).getByText("Completed")).toBeInTheDocument());
+    expect(screen.queryByRole("button", { name: "Iniciar descubrimiento" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method !== "GET")).toBe(false);
+  });
+
+  it("analyst: puede iniciar descubrimientos", async () => {
+    renderPage("analyst");
+    expect(await startButton()).toBeInTheDocument();
   });
 
   it("el modal solo ofrece redes autorizadas y advierte del alcance", async () => {
@@ -292,7 +298,8 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     await waitFor(() => expect(screen.getByText("Descubrimiento en curso")).toBeInTheDocument(), POLL);
     expect(body).toEqual({ target: NET });
     const post = calls.find((c) => c.method === "POST");
-    expect(new Headers(post?.init.headers).get("X-Sentra-Console")).toBe("1");
+    expect(new Headers(post?.init.headers).get("X-Sentra-Console")).toBeNull();
+    expect(post?.init.credentials).toBe("include");
     expect(screen.getByText("73 / 254")).toBeInTheDocument();
     expect(screen.getByText("8")).toBeInTheDocument();
     const bar = screen.getByRole("progressbar");
@@ -411,11 +418,12 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
   }, 10_000);
 
   it("error 403 al iniciar: muestra el motivo en el modal", async () => {
-    routes["POST /console/discovery/jobs"] = refused("console_not_local");
+    // El rol cambió en el servidor mientras la página estaba abierta: el backend manda.
+    routes["POST /console/discovery/jobs"] = refused("permission_denied");
     const dialog = await openModal();
     fireEvent.click(within(dialog).getByRole("button", { name: "Iniciar" }));
     expect(await within(dialog).findByRole("alert")).toHaveTextContent(
-      /El descubrimiento de red solo está disponible desde un navegador/,
+      /Tu rol no permite iniciar ni cancelar descubrimientos/,
     );
   });
 

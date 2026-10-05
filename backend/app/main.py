@@ -5,6 +5,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.api.v1.router import api_router
@@ -13,8 +14,10 @@ from app.core.config import get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import request_logging_middleware
+from app.core.rate_limit import RateLimiter
 from app.db.migrations import expected_heads, is_up_to_date
 from app.db.session import get_engine, get_sessionmaker
+from app.services.auth_service import LoginGuard
 from app.services.background import (
     PeriodicJob,
     discovery_job,
@@ -102,15 +105,26 @@ def create_app() -> FastAPI:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=settings.cors_origin_list,
+            # Cookie de sesión en peticiones de otro origen configurado (dashboard servido
+            # aparte). Seguro solo porque la lista es explícita: nunca "*" (lo impide el
+            # validador de CORS_ORIGINS).
+            allow_credentials=True,
             # Only what the API actually uses; widen deliberately when new verbs appear.
-            allow_methods=["GET", "POST"],
-            # X-Sentra-Console marks dashboard console calls (see api/console.py).
-            allow_headers=["Content-Type", "X-Request-ID", "X-Sentra-Console"],
+            allow_methods=["GET", "POST", "PATCH"],
+            # X-CSRF-Token: token anti-CSRF de las peticiones mutables (api/auth.py).
+            allow_headers=["Content-Type", "X-Request-ID", "X-CSRF-Token"],
         )
+    if settings.allowed_host_list:
+        # Rechaza cabeceras Host desconocidas (DNS rebinding, enlaces generados con un Host
+        # falso). Opcional para no romper el acceso por IP en la LAN de desarrollo.
+        app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
     app.middleware("http")(request_logging_middleware)
     # Added last so it runs first: oversized bodies are refused before any other work.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
     register_exception_handlers(app)
+    # Límites en memoria, uno por aplicación (core/rate_limit.py).
+    app.state.login_guard = LoginGuard(settings)
+    app.state.register_limiter = RateLimiter(settings.agent_register_max_per_minute, 60)
     app.include_router(api_router)
     return app
 

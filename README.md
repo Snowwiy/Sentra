@@ -63,8 +63,12 @@ Requirements: Python 3.12+, Node.js 20+, PostgreSQL 15+ running as a Windows ser
 
 Linux endpoints get a standalone package (tarball or `.deb`, systemd service, one command
 with a one-time enrollment token): [docs/agent-linux-installation.md](docs/agent-linux-installation.md).
-The **Agentes** page creates that token and the install command, and revokes agents, from
-the browser on the server (`DASHBOARD_ADMIN_ENABLED=true`): [docs/agent-management.md](docs/agent-management.md).
+The **Agentes** page creates that token and the install command, and revokes agents (admin
+role): [docs/agent-management.md](docs/agent-management.md).
+
+El dashboard exige iniciar sesión (usuarios locales con roles admin, analyst y viewer). El
+primer administrador se crea en el servidor con `python -m app.cli create-admin` desde
+`backend/`; no hay credenciales por defecto: [docs/authentication.md](docs/authentication.md).
 
 Windows endpoints get a zip with an embedded Python runtime and a PowerShell installer that
 enrolls the host and installs the standard Windows service "Sentra Agent" (no Git, Python or
@@ -90,8 +94,12 @@ Root `.env` (template: `.env.example`, never committed):
 | `MAX_REQUEST_BYTES` | Largest accepted request body, default 4 MiB (413 above it) |
 | `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens |
 | `ENROLLMENT_TOKEN_TTL_MINUTES` | Default lifetime of one-time enrollment tokens (default 15, max 1440) |
-| `ADMIN_API_KEY` | Operator key (`X-Admin-Key`) for the administration API (enrollment tokens); unset = those endpoints disabled (403). The CLI works without it |
-| `DASHBOARD_ADMIN_ENABLED` | Agent management and network discovery (start/cancel) from the dashboard (`/api/v1/console`), only for a browser on the server itself; default off. Temporary until dashboard login: [docs/agent-management.md](docs/agent-management.md) |
+| `ADMIN_API_KEY` | Legacy: operator key (`X-Admin-Key`) for the administration API (enrollment tokens), only for scripts on the server; unset = those endpoints disabled (403). The dashboard and the CLI do not use it |
+| `SESSION_TTL_HOURS`, `SESSION_IDLE_MINUTES` | Duración absoluta (12 h) e inactividad (60 min) de las sesiones del dashboard |
+| `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_SAMESITE` | Cookie `Secure` (por defecto solo con `ENVIRONMENT=production`, que debe ir por HTTPS) y `strict`/`lax` |
+| `LOGIN_RATE_WINDOW_MINUTES`, `LOGIN_MAX_FAILURES_PER_USER_IP`, `LOGIN_MAX_ATTEMPTS_PER_IP`, `LOGIN_MAX_FAILURES_PER_USER` | Límites de intentos de login (15 min; 5, 30, 50) |
+| `AGENT_REGISTER_MAX_PER_MINUTE` | `POST /agents/register` por IP y minuto (30) |
+| `ALLOWED_HOSTS` | Nombres de `Host` aceptados (vacío = cualquiera; recomendado en producción) |
 | `AGENT_SERVER_URL` | URL agents use to reach this server, shown in the dashboard's install command (unset = suggested from local addresses) |
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
@@ -128,7 +136,7 @@ cd backend
 | POST | `/api/v1/agents/heartbeat` | Mark an agent alive (Bearer token) |
 | GET | `/api/v1/agents` | Enrolled agents with state, credential status and summary (no secrets) |
 | GET | `/api/v1/assets/{asset_id}/agent` | The asset's agent and credential status |
-| GET/POST | `/api/v1/console/...` | **Dashboard console** (local browser only): enrollment tokens, revoke/reinstate agents ([docs/agent-management.md](docs/agent-management.md)) |
+| GET/POST | `/api/v1/console/...` | **Dashboard console** (sesión, solo rol admin): enrollment tokens, revoke/reinstate agents ([docs/agent-management.md](docs/agent-management.md)) |
 | GET | `/api/v1/assets` | List assets with status and latest telemetry |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |
 | GET | `/api/v1/assets/{asset_id}/telemetry?limit=120` | Telemetry history, oldest first |
@@ -146,11 +154,12 @@ cd backend
 | GET | `/api/v1/assets/{asset_id}/exposure` | Ports reachable from the Sentra server, correlated with the agent's listeners |
 | GET | `/api/v1/discovery/scope` | Networks and ports discovery may probe (configuration) |
 | GET | `/api/v1/discovery/jobs?limit=` | Recent discovery runs |
+| POST | `/api/v1/auth/login`, `/auth/logout`; GET `/auth/me` | Sesión del dashboard (cookie HttpOnly + `X-CSRF-Token` en mutaciones). Todos los GET del dashboard requieren sesión; usuarios, auditoría y acciones por rol: [docs/authentication.md](docs/authentication.md) |
 
-Alerts are acknowledged or resolved by an operator from the server, not over HTTP (the
-dashboard has no login yet): `python -m app.cli ack-alert <id>` / `resolve-alert <id>`.
-Network discovery se lanza desde la página **Red → Iniciar descubrimiento** (consola local,
-`DASHBOARD_ADMIN_ENABLED=true`; desde otro equipo de la LAN solo lectura), de forma periódica
+Las alertas se reconocen o resuelven desde el dashboard (roles admin y analyst) o con
+`python -m app.cli ack-alert <id>` / `resolve-alert <id>`.
+Network discovery se lanza desde la página **Red → Iniciar descubrimiento** (roles admin y
+analyst, desde cualquier equipo de la LAN con sesión), de forma periódica
 con `DISCOVERY_INTERVAL_MINUTES`, o con `python -m app.cli discover` como herramienta
 administrativa: [docs/discovery.md](docs/discovery.md).
 
@@ -193,13 +202,13 @@ agentless network discovery on explicitly authorized networks (DISCOVERED), with
 reachable ports and changes; installing the agent (MANAGED) merges both views into one
 asset ([docs/discovery.md](docs/discovery.md)). Monitoring only: no remote actions on hosts. See
 [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md) for details and known issues.
-Known limitation: the dashboard has **no login yet**; keep the API on a trusted network
-(it binds to 127.0.0.1 by default).
+El dashboard exige login con roles y sesiones de servidor ([docs/authentication.md](docs/authentication.md)).
+Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap
 
-1. Dashboard users and authentication.
-2. Alert acknowledgement from the dashboard (needs login); signed MSI for the Windows agent.
+1. HTTPS de serie (proxy inverso documentado) y endurecimiento de producción.
+2. Signed MSI for the Windows agent.
 3. Telemetry downsampling (opt-in retention exists); journald events on Linux.
 4. Live updates (WebSockets/SSE).
 5. Agentless collectors (WinRM/WMI, SSH, SNMP; contracts in `backend/app/agentless/`) once

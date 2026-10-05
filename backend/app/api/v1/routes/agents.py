@@ -1,7 +1,8 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Response, status
+from fastapi import APIRouter, Depends, Request, Response, status
 
+from app.api.auth import READ, client_ip
 from app.api.deps import (
     AgentToken,
     EnrollmentKey,
@@ -10,6 +11,8 @@ from app.api.deps import (
     get_agent_service,
 )
 from app.api.responses import error_responses
+from app.core.exceptions import RateLimitedError
+from app.core.rate_limit import RateLimiter
 from app.schemas.agent import (
     AgentRegisterRequest,
     AgentRegisterResponse,
@@ -24,6 +27,21 @@ router = APIRouter(prefix="/agents", tags=["agents"])
 Service = Annotated[AgentService, Depends(get_agent_service)]
 
 
+def limit_registration(request: Request) -> None:
+    """Límite de POST /agents/register por dirección (AGENT_REGISTER_MAX_PER_MINUTE).
+
+    Frena la prueba masiva de tokens y claves de enrollment. Solo este endpoint: heartbeat,
+    telemetría, inventario y eventos no se limitan, para no dejar sin datos a agentes
+    legítimos. El agente trata 429 como temporal y reintenta respetando Retry-After.
+    """
+    limiter: RateLimiter = request.app.state.register_limiter
+    key = client_ip(request) or "unknown"
+    wait = limiter.blocked_for(key)
+    if wait > 0:
+        raise RateLimitedError("Too many enrollment attempts, retry later", wait)
+    limiter.hit(key)
+
+
 @router.post(
     "/register",
     response_model=AgentRegisterResponse,
@@ -33,8 +51,9 @@ Service = Annotated[AgentService, Depends(get_agent_service)]
             "model": AgentRegisterResponse,
             "description": "Existing agent re-enrolled, token rotated (same body as 201)",
         },
-        **error_responses(401, 403, 409, 413),
+        **error_responses(401, 403, 409, 413, 429),
     },
+    dependencies=[Depends(limit_registration)],
 )
 def register_agent(
     payload: AgentRegisterRequest,
@@ -56,7 +75,7 @@ def heartbeat(payload: HeartbeatRequest, service: Service, token: AgentToken) ->
     return service.heartbeat(payload, token)
 
 
-@router.get("", response_model=AgentList)
+@router.get("", response_model=AgentList, dependencies=[READ])
 def list_agents(
     service: Annotated[AgentManagementService, Depends(get_agent_management_service)],
 ) -> AgentList:

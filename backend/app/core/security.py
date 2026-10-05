@@ -48,3 +48,35 @@ def enrollment_key_matches(provided: str | None, expected: str) -> bool:
     if not provided:
         return False
     return hmac.compare_digest(provided.encode(), expected.encode())
+
+
+# --- Sesiones del dashboard ---------------------------------------------------------------
+#
+# El ID de sesión es un valor aleatorio de 256 bits que solo viaja en una cookie HttpOnly;
+# la base de datos guarda su SHA-256 (igual que los tokens de agente), así una copia de
+# `user_sessions` no permite secuestrar sesiones. Son credenciales distintas: un token de
+# agente nunca se acepta como sesión ni al revés (tablas y cabeceras separadas).
+
+SESSION_TOKEN_PREFIX = "sentra_s_"  # noqa: S105  (un prefijo, no un secreto)
+_CSRF_CONTEXT = b"sentra-csrf-v1"
+
+
+def generate_session_token() -> str:
+    return SESSION_TOKEN_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def csrf_token_for(session_token: str) -> str:
+    """Token CSRF derivado de la sesión (HMAC-SHA256 con el ID de sesión como clave).
+
+    No se guarda en ningún sitio: el servidor lo recalcula a partir de la cookie. Un sitio
+    ajeno no puede calcularlo porque no puede leer la cookie (HttpOnly) ni la respuesta de
+    /auth/me (CORS), y cambia con cada sesión, así que rotar la sesión en el login también
+    invalida cualquier token CSRF anterior.
+    """
+    return hmac.new(session_token.encode(), _CSRF_CONTEXT, hashlib.sha256).hexdigest()
+
+
+def csrf_token_matches(session_token: str, provided: str | None) -> bool:
+    if not provided or len(provided) > MAX_CREDENTIAL_LENGTH:
+        return False
+    return hmac.compare_digest(csrf_token_for(session_token).encode(), provided.encode())

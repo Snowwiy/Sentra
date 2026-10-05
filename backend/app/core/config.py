@@ -53,15 +53,35 @@ class Settings(BaseSettings):
 
     # Key for the administration API (X-Admin-Key): creating, listing and revoking
     # enrollment tokens. Unset (the default) disables those endpoints; the CLI keeps working.
-    # Dashboard users/login do not exist yet, so this is a single operator credential.
+    # Desde la Fase 4G es un mecanismo LEGACY para automatización servidor a servidor: el
+    # dashboard usa login y roles, y el navegador nunca recibe ni envía esta clave.
     admin_api_key: SecretStr | None = Field(default=None, min_length=24)
 
-    # Agent management from the dashboard (/api/v1/console: enrollment tokens, revocation)
-    # without handing ADMIN_API_KEY to the browser. TEMPORARY until dashboard login/RBAC
-    # exists: the API itself performs the operation, only for a browser on the server
-    # machine (loopback peer, loopback Host, trusted Origin). Off by default (fail closed).
-    # See api/console.py and docs/agent-management.md.
-    dashboard_admin_enabled: bool = False
+    # --- Fase 4G: login del dashboard, sesiones y RBAC (ver docs/authentication.md) ---
+    # Caducidad absoluta de una sesión y caducidad por inactividad.
+    session_ttl_hours: int = Field(default=12, ge=1, le=168)
+    session_idle_minutes: int = Field(default=60, ge=5, le=1440)
+    # Atributo Secure de la cookie de sesión. Sin valor: activo solo con
+    # ENVIRONMENT=production. Con Secure el navegador solo la envía por HTTPS, así que en
+    # producción la API tiene que servirse por HTTPS (reverse proxy); HTTP en la LAN es solo
+    # para desarrollo y no protege las contraseñas ni la cookie frente a quien escuche la red.
+    session_cookie_secure: bool | None = None
+    # strict: el navegador no envía la cookie en peticiones iniciadas desde otro sitio
+    # (primera barrera contra CSRF; la segunda es el token X-CSRF-Token).
+    session_cookie_samesite: Literal["strict", "lax"] = "strict"
+    # Login: fallos por usuario+dirección, intentos por dirección y fallos por usuario
+    # (cualquier dirección) dentro de la ventana. Ver services/auth_service.py.
+    login_rate_window_minutes: int = Field(default=15, ge=1, le=1440)
+    login_max_failures_per_user_ip: int = Field(default=5, ge=1, le=1000)
+    login_max_attempts_per_ip: int = Field(default=30, ge=1, le=10_000)
+    login_max_failures_per_user: int = Field(default=50, ge=1, le=100_000)
+    # POST /agents/register por dirección y minuto. No afecta a heartbeat/telemetría.
+    agent_register_max_per_minute: int = Field(default=30, ge=1, le=10_000)
+    # Nombres de host aceptados en la cabecera Host (TrustedHostMiddleware), separados por
+    # coma, p. ej. "sentra.lan,192.168.50.201,localhost". Vacío: sin comprobación (LAN de
+    # desarrollo). Recomendado en producción contra DNS rebinding y cabeceras Host falsas.
+    allowed_hosts: str = ""
+
     # URL agents use to reach this server, shown in the dashboard's install command
     # (e.g. http://192.168.50.201:8000). Unset: suggested from this machine's addresses.
     agent_server_url: str | None = Field(
@@ -149,6 +169,16 @@ class Settings(BaseSettings):
             return value or None
         return value
 
+    @field_validator("cors_origins")
+    @classmethod
+    def _check_cors_origins(cls, value: str) -> str:
+        # Las peticiones del dashboard llevan la cookie de sesión (credenciales): un comodín
+        # permitiría a cualquier web leer datos con la sesión del operador. Se exige la lista
+        # explícita de orígenes.
+        if "*" in value:
+            raise ValueError("CORS_ORIGINS must list explicit origins; '*' is not allowed")
+        return value
+
     @field_validator("alert_critical_events")
     @classmethod
     def _check_critical_events(cls, value: str) -> str:
@@ -175,6 +205,16 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def allowed_host_list(self) -> list[str]:
+        return parse_name_list(self.allowed_hosts)
+
+    @property
+    def cookie_secure(self) -> bool:
+        if self.session_cookie_secure is None:
+            return self.is_production
+        return self.session_cookie_secure
 
     @property
     def is_production(self) -> bool:

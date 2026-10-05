@@ -13,7 +13,13 @@ export default defineConfig(({ mode }) => {
       port: Number(env.SENTRA_FRONTEND_PORT) || 5173,
       strictPort: true,
       proxy: {
-        "/api": { target: apiTarget, changeOrigin: true },
+        // changeOrigin: false conserva el Host del navegador (p. ej. 192.168.1.10:5173): la API
+        // compara el Origin de cada petición mutable con su propio origen (defensa CSRF) y
+        // así funciona igual desde localhost que desde otra PC de la LAN.
+        // xfwd: añade X-Forwarded-For con la IP real del navegador; uvicorn solo la acepta
+        // porque Vite corre en la misma máquina (127.0.0.1), y así el rate limiting del login
+        // y la auditoría ven cada PC en lugar de "127.0.0.1" para todas.
+        "/api": { target: apiTarget, changeOrigin: false, xfwd: true },
       },
     },
   };
