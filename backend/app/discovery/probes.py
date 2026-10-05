@@ -236,7 +236,9 @@ def clean_hostname(name: str | None, address: str) -> str | None:
     name = name.strip().rstrip(".")
     if not _HOSTNAME.match(name) or name == address:
         return None
-    return name.lower()
+    # Sin pasar a minúsculas (Fase 4E): el nombre se muestra tal como lo registró el equipo
+    # ("MNA-LX9"); las búsquedas y comparaciones ya ignoran mayúsculas.
+    return name
 
 
 def _lookup(address: str) -> str | None:

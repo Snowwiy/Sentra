@@ -63,7 +63,10 @@ def test_assets_list_mixes_managed_and_discovered(client: TestClient, engine: En
     assert printer["status"] == "online" and printer["agent_status"] is None
     assert printer["device_type"] == "printer" and printer["open_ports"] == [80, 443, 9100]
     assert printer["os_name"] is None and printer["latest_telemetry"] is None
-    assert by_ip["10.20.0.1"]["device_type"] == "network_device"
+    assert by_ip["10.20.0.1"]["device_type"] == "router"
+    # Sin nombre: display_name sigue siendo la IP (alertas/CLI); la UI usa device_name.
+    assert printer["device_name"] is None and printer["classification_confidence"] == "medium"
+    assert {"source": "ports", "value": "9100/jetdirect"} in printer["classification_evidence"]
 
 
 def test_asset_filters(client: TestClient, engine: Engine) -> None:

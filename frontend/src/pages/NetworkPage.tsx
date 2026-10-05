@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
+import { useNavigate } from "react-router-dom";
 import { sentraApi } from "../api/sentra";
 import type { Asset, DiscoveryJob, MonitoringMethod } from "../api/types";
 import {
@@ -9,13 +9,8 @@ import {
 } from "../components/discovery/DiscoveryModal";
 import { JobsPanel, SchedulePanel, ScopePanel } from "../components/discovery/DiscoveryPanels";
 import { FilterSelect, Pager, SearchInput, SortHeader, Toolbar } from "../components/ListControls";
-import {
-  DEVICE_TYPE_LABELS,
-  METHOD_LABELS,
-  MethodBadge,
-  PortList,
-  deviceTypeLabel,
-} from "../components/NetworkBadges";
+import { AssetName, DeviceTypeCell } from "../components/DeviceIdentity";
+import { DEVICE_TYPE_LABELS, METHOD_LABELS, MethodBadge, PortList } from "../components/NetworkBadges";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
@@ -42,7 +37,8 @@ type Key = "ip" | "name" | "type" | "status" | "method" | "first" | "last" | "po
 
 const SORTERS: Record<Key, (a: Asset) => string | number | null> = {
   ip: (a) => ipSortKey(a.primary_ip),
-  name: (a) => a.hostname ?? a.reverse_dns,
+  // Los activos sin nombre (null) se ordenan detrás de los nombrados.
+  name: (a) => a.device_name ?? a.hostname,
   type: (a) => a.device_type,
   status: (a) => a.status,
   method: (a) => a.monitoring_method,
@@ -140,7 +136,15 @@ export function NetworkPage() {
       (!list.filters.status || a.status === list.filters.status) &&
       (!list.filters.type || (a.device_type ?? "unknown") === list.filters.type) &&
       (!list.filters.subnet || inSubnet(a, list.filters.subnet)) &&
-      matchesText(list.query, a.display_name, a.primary_ip, a.mac_address, a.reverse_dns),
+      matchesText(
+        list.query,
+        a.display_name,
+        a.primary_ip,
+        a.mac_address,
+        a.reverse_dns,
+        a.device_vendor,
+        a.network_adapter_vendor,
+      ),
     compare: compareBy(SORTERS[list.sort.key], list.sort.dir),
     page: list.page,
     pageSize: PAGE_SIZE,
@@ -269,9 +273,9 @@ export function NetworkPage() {
               <table className="table">
                 <thead>
                   <tr>
+                    {header("Dispositivo", "name")}
                     {header("IP", "ip")}
-                    {header("Nombre", "name")}
-                    <th>MAC</th>
+                    <th>MAC / NIC</th>
                     {header("Tipo", "type")}
                     {header("Estado", "status")}
                     {header("Método", "method")}
@@ -287,15 +291,16 @@ export function NetworkPage() {
                       className="table__row--link"
                       onClick={() => navigate(`/assets/${asset.asset_id}`)}
                     >
-                      <td className="mono">
-                        <Link to={`/assets/${asset.asset_id}`} className="strong">
-                          {asset.primary_ip}
-                        </Link>
+                      <td>
+                        <AssetName asset={asset} showIp={false} />
                       </td>
-                      <td>{asset.hostname ?? asset.reverse_dns ?? <span className="muted">—</span>}</td>
-                      <td className="mono small muted">{asset.mac_address ?? "—"}</td>
-                      <td title={asset.device_type_reason ?? "No se puede determinar con la información disponible"}>
-                        {deviceTypeLabel(asset.device_type)}
+                      <td className="mono">{asset.primary_ip}</td>
+                      <td className="small muted">
+                        <span className="mono">{asset.mac_address ?? "—"}</span>
+                        {asset.network_adapter_vendor && <div>NIC {asset.network_adapter_vendor}</div>}
+                      </td>
+                      <td>
+                        <DeviceTypeCell asset={asset} />
                       </td>
                       <td>
                         <StatusBadge status={asset.status} />

@@ -47,6 +47,7 @@ export function profileLabel(parameters: Record<string, unknown> | null): string
   const parts = [`${ports} puertos TCP`];
   if (parameters.icmp === true) parts.push("ICMP");
   if (parameters.reverse_dns === true) parts.push("DNS");
+  if (parameters.identify === true) parts.push("nombres (mDNS/NetBIOS/UPnP)");
   return parts.join(" · ");
 }
 

@@ -15,7 +15,7 @@ from collections.abc import Iterator
 
 import pytest
 
-from app.discovery.classify import classify
+from app.discovery.classify import IdentityInput, identify
 from app.discovery.ports import liveness_ports, parse_ports
 from app.discovery.probes import (
     PortState,
@@ -148,7 +148,8 @@ def test_neighbour_route_and_ping_parsers() -> None:
     assert normalize_mac("AA-BB-CC-00-11-22") == "aa:bb:cc:00:11:22"
     assert normalize_mac("01:00:5e:00:00:16") is None  # multicast
     assert normalize_mac("garbage") is None
-    assert clean_hostname("PC-ADMIN-01.corp.local.", "10.0.0.5") == "pc-admin-01.corp.local"
+    # Se conserva el uso de mayúsculas: "MNA-LX9" se muestra como lo publica el equipo.
+    assert clean_hostname("PC-ADMIN-01.corp.local.", "10.0.0.5") == "PC-ADMIN-01.corp.local"
     assert clean_hostname("10.0.0.5", "10.0.0.5") is None
     assert clean_hostname("bad name\x00", "10.0.0.5") is None
 
@@ -162,15 +163,22 @@ def test_windows_ping_requires_a_real_echo_reply(monkeypatch: pytest.MonkeyPatch
 
 
 def test_classification_is_conservative() -> None:
-    assert classify([135, 445, 3389]) == (
-        "windows",
-        "Windows service ports open: msrpc 135, rdp 3389",
+    def kind(**kwargs: object) -> str | None:
+        result = identify(IdentityInput(**kwargs))  # type: ignore[arg-type]
+        return result.device_type.value if result.device_type else None
+
+    windows = identify(IdentityInput(open_ports=frozenset({135, 445, 3389})))
+    # Puertos de Windows: SO probable Windows y "PC probable" (confianza baja), no un hecho.
+    assert (windows.device_type, windows.probable_os, windows.confidence) == (
+        "pc",
+        "Windows",
+        "low",
     )
-    assert classify([80, 443, 9100])[0] == "printer"
-    assert classify([80, 443], is_gateway=True)[0] == "network_device"
-    assert classify([22]) == (None, None)  # SSH alone proves nothing
-    assert classify([80, 443]) == (None, None)
-    assert classify([], agent_os="Windows")[0] == "windows"
+    assert kind(open_ports=frozenset({80, 443, 9100})) == "printer"
+    assert kind(open_ports=frozenset({80, 443}), is_gateway=True) == "router"
+    assert kind(open_ports=frozenset({22})) is None  # SSH alone proves nothing
+    assert kind(open_ports=frozenset({80, 443})) is None
+    assert kind(managed=True, hostname="PC-1", os_name="Windows") == "pc"
 
 
 # --- real TCP on loopback ----------------------------------------------------------------

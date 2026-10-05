@@ -1,12 +1,14 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import BigInteger, DateTime, Enum, Index, Integer, String, Uuid, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.discovery.device_types import ClassificationConfidence
 
 
 class AssetStatus(enum.StrEnum):
@@ -81,11 +83,33 @@ class Asset(Base):
     # Unicast MAC (aa:bb:cc:dd:ee:ff), only known on the server's own L2 segment.
     mac_address: Mapped[str | None] = mapped_column(String(17))
     reverse_dns: Mapped[str | None] = mapped_column(String(255))
-    # Vendor from the MAC prefix: needs an OUI database, not shipped yet (always null).
+    # Fabricante de la tarjeta de red según el prefijo de la MAC (OUI, DISCOVERY_OUI_FILE).
+    # Es el "network_adapter_vendor": NO tiene por qué ser el fabricante del dispositivo
+    # (un adaptador Realtek en una consola), que va en device_vendor.
     vendor: Mapped[str | None] = mapped_column(String(128))
-    # Probable type (app/discovery/classify.py) and why; null when it cannot be told.
+    # --- Identificación (Fase 4E, app/discovery/classify.py). Se recalcula con cada dato
+    # nuevo (discovery, agente, fusión); nunca se escribe a mano. -------------------------
+    # Tipo (app/discovery/device_types.DeviceType) y resumen del porqué; null = desconocido.
     device_type: Mapped[str | None] = mapped_column(String(32))
     device_type_reason: Mapped[str | None] = mapped_column(String(255))
+    # Nombre resuelto por prioridad (agente > DNS inverso > mDNS > NetBIOS > UPnP >
+    # fabricante+modelo) y de qué fuente salió. Null si nada lo nombra: la UI muestra un
+    # texto de reserva ("Dispositivo desconocido") con la IP aparte.
+    device_name: Mapped[str | None] = mapped_column(String(255))
+    name_source: Mapped[str | None] = mapped_column(String(16))
+    device_vendor: Mapped[str | None] = mapped_column(String(128))
+    device_model: Mapped[str | None] = mapped_column(String(128))
+    # SO deducido desde la red, sin versión. Solo activos sin agente: con agente manda
+    # os_name/os_version.
+    probable_os: Mapped[str | None] = mapped_column(String(64))
+    classification_confidence: Mapped[ClassificationConfidence | None] = mapped_column(
+        _enum(ClassificationConfidence, "classification_confidence")
+    )
+    # [{"source": "...", "value": "..."}]: por qué se concluyó lo anterior.
+    classification_evidence: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
+    # Últimos datos de identidad observados en la red (mDNS, NetBIOS, SSDP/UPnP, gateway),
+    # guardados en bruto para poder recalcular la identificación sin volver a escanear.
+    identity_observations: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # How discovery saw it: any of "icmp", "tcp", "arp".
     discovery_sources: Mapped[list[str] | None] = mapped_column(JSONB)
     # Allowed network (CIDR) of the run that last saw it.
@@ -123,8 +147,12 @@ class Asset(Base):
 
     @property
     def display_name(self) -> str:
-        """Best available name: reported hostname, reverse DNS, or the address."""
-        return self.hostname or self.reverse_dns or self.primary_ip
+        """Nombre resuelto, hostname del agente, DNS inverso o, en último caso, la IP.
+
+        Se usa en alertas, eventos y CLI, donde un identificador concreto es más útil que
+        "Dispositivo desconocido"; ese texto de reserva solo lo pone la UI.
+        """
+        return self.device_name or self.hostname or self.reverse_dns or self.primary_ip
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

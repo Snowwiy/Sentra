@@ -149,6 +149,10 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   plano en el proceso de la API (uno a la vez), progreso y cancelación a través de la base
   de datos (funciona con varios workers), latido para detectar jobs huérfanos. Iniciar y
   cancelar reutilizan la consola local de la Fase 4C; sin worker ni cola externa (Redis).
+- Identificación de dispositivos (Fase 4E, docs/discovery.md): motor puro con evidencias y
+  confianza low/medium/high, recalculado con cada dato nuevo; el agente es autoritativo; el
+  OUI es un fichero local del IEEE (sin API externa) y la NIC no se confunde con el
+  fabricante del dispositivo. Migración 0015.
 - Agent management in the browser without exposing ADMIN_API_KEY: backend-for-frontend
   console restricted to the server's own browser (docs/agent-management.md), chosen over
   typing the key into the page or a session scheme that would pre-empt the login design.

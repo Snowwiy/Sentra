@@ -18,6 +18,7 @@ import { MethodBadge } from "../components/NetworkBadges";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { assetTitle, typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 
 const TABS = [
@@ -179,9 +180,13 @@ export function AssetDetailPage() {
       <div className="page__header">
         <div>
           <h1 className="detail__title">
-            {asset.display_name} <StatusBadge status={asset.status} />{" "}
+            {assetTitle(asset)} <StatusBadge status={asset.status} />{" "}
             <MethodBadge method={asset.monitoring_method} />
           </h1>
+          <p className="muted small">
+            <span className="mono">{asset.primary_ip}</span> · {typeWithConfidence(asset)}
+            {asset.device_vendor && ` · ${asset.device_vendor}`}
+          </p>
           <p className="muted small mono">{asset.asset_id}</p>
         </div>
       </div>

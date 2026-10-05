@@ -18,6 +18,8 @@ class ChangeCategory(enum.StrEnum):
     EXPOSURE = "exposure"
     # The asset's presence on the network (discovery).
     NETWORK = "network"
+    # Qué es el dispositivo (tipo) según la identificación de la Fase 4E.
+    IDENTITY = "identity"
 
 
 class ChangeKind(enum.StrEnum):
@@ -35,6 +37,8 @@ class ChangeKind(enum.StrEnum):
     PORT_CLOSED = "port_closed"
     APPEARED = "appeared"
     DISAPPEARED = "disappeared"
+    # El tipo deducido cambió (p. ej. de desconocido a móvil). Solo historial: no es alerta.
+    RECLASSIFIED = "reclassified"
 
 
 def _enum(enum_cls: type[enum.Enum], name: str) -> Enum:

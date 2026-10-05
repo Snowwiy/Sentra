@@ -24,8 +24,10 @@ from app.models.discovery import DiscoveryTrigger
 from app.schemas.enrollment import EnrollmentTokenCreate
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.asset_service import open_ports_by_asset
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.enrollment_token_service import EnrollmentTokenService
+from app.services.identification import oui_database, refresh_identity
 from app.services.retention_service import RetentionPolicy, RetentionService
 
 
@@ -167,6 +169,26 @@ def _discover(target: str | None) -> int:
     return 0
 
 
+def _reclassify_assets(session: Session) -> int:
+    """Recalcula la identificación de todos los activos con los datos ya guardados.
+
+    Sin sondear la red: sirve tras actualizar el fichero OUI o tras migrar a la 0015, para
+    no esperar al siguiente scan/heartbeat. No registra cambios en el historial: el
+    dispositivo no cambió, cambiaron las reglas o los datos de referencia.
+    """
+    assets = session.scalars(select(Asset)).all()
+    ports = open_ports_by_asset(session, (a.id for a in assets))
+    database = oui_database()
+    changed = 0
+    for asset in assets:
+        before = (asset.device_type, asset.device_name, asset.device_vendor)
+        refresh_identity(asset, ports.get(asset.id, []), database)
+        changed += before != (asset.device_type, asset.device_name, asset.device_vendor)
+    session.commit()
+    print(f"{len(assets)} assets reclassified ({changed} changed); OUI entries: {len(database)}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Sentra operator tools")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -205,6 +227,10 @@ def main(argv: list[str] | None = None) -> int:
     )
     revoke.add_argument("token_id", type=UUID, help="token id (from create/list)")
     commands.add_parser(
+        "reclassify-assets",
+        help="recompute device identification from stored data (no network probes)",
+    )
+    commands.add_parser(
         "discovery-scope", help="show the networks and ports discovery may probe (no probing)"
     )
     discover = commands.add_parser(
@@ -226,6 +252,8 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.command == "purge-old-data":
             return _purge_old_data(session)
+        if args.command == "reclassify-assets":
+            return _reclassify_assets(session)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

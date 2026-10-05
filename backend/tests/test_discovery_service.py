@@ -151,8 +151,9 @@ def test_first_run_is_a_quiet_baseline(engine: Engine, db: Session) -> None:
     assert all(a.monitoring_method == MonitoringMethod.DISCOVERED for a in assets.values())
     assert all(a.agent_id is None and a.hostname is None for a in assets.values())
     router, pc, printer, quiet = (assets[f"10.20.0.{i}"] for i in (1, 5, 7, 9))
-    assert router.device_type == "network_device"
-    assert pc.device_type == "windows" and pc.reverse_dns == "pc-admin-02.corp"
+    assert router.device_type == "router" and router.classification_confidence == "high"
+    assert pc.device_type == "pc" and pc.probable_os == "Windows"
+    assert pc.reverse_dns == "pc-admin-02.corp" and pc.device_name == "pc-admin-02.corp"
     assert printer.device_type == "printer"
     assert quiet.device_type is None and quiet.device_type_reason is None  # not guessed
     assert quiet.discovery_sources == ["arp"] and quiet.mac_address == "02:00:00:00:00:09"
@@ -317,7 +318,10 @@ def test_agent_host_is_matched_not_duplicated(
     assert managed.monitoring_method == MonitoringMethod.AGENT
     assert managed.mac_address == "02:00:00:00:00:05"  # from the agent's inventory
     assert managed.hostname == "PC-ADMIN-01"  # agent data is never overwritten
-    assert managed.device_type == "windows" and "agent" in (managed.device_type_reason or "")
+    assert managed.device_type == "pc" and "agente" in (managed.device_type_reason or "")
+    # Datos del agente: nombre autoritativo y sin SO "probable" (manda os_name).
+    assert managed.device_name == "PC-ADMIN-01" and managed.name_source == "agent_hostname"
+    assert managed.probable_os is None and managed.classification_confidence == "high"
     assert managed.discovered_at is not None and _ports(db, managed)[3389] == "open"
 
 
@@ -356,7 +360,9 @@ def test_agent_installed_later_merges_the_discovered_record(
     assert str(merged.public_id) == response.json()["asset_id"]
     assert merged.monitoring_method == MonitoringMethod.AGENT
     assert merged.discovered_at == discovered_at
-    assert merged.device_type == "windows"  # kept from the network view
+    # Antes "PC probable" desde la red; ahora el agente es la fuente autoritativa.
+    assert merged.device_type == "pc" and merged.classification_confidence == "high"
+    assert merged.device_name == payload["hostname"] and merged.probable_os is None
     assert _ports(db, merged)[8080] == "open"
     assert ("exposure", "port_opened", "8080/tcp (http-alt)") in _changes(db, merged)
     assert _alerts(db, AlertRule.PORT_EXPOSED)[0].asset_id == merged.id

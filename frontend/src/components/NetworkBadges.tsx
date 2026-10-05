@@ -21,17 +21,8 @@ export function MethodBadge({ method }: { method: MonitoringMethod }) {
   );
 }
 
-export const DEVICE_TYPE_LABELS: Record<string, string> = {
-  windows: "Windows",
-  linux: "Linux",
-  printer: "Impresora",
-  network_device: "Dispositivo de red",
-};
-
-export function deviceTypeLabel(type: string | null | undefined): string {
-  if (!type) return "Desconocido";
-  return DEVICE_TYPE_LABELS[type] ?? type;
-}
+// Los tipos de dispositivo y sus etiquetas viven en lib/identity (Fase 4E).
+export { DEVICE_TYPE_LABELS, deviceTypeLabel } from "../lib/identity";
 
 export function PortList({ ports, limit = 8 }: { ports: number[]; limit?: number }) {
   if (ports.length === 0) return <span className="muted">—</span>;

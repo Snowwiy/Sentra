@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError
 from app.discovery import probes
-from app.discovery.classify import classify
+from app.discovery.names import IdentityProber
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS, parse_ports
 from app.discovery.scanner import (
     HostObservation,
@@ -59,6 +59,7 @@ from app.models.discovery import (
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.identification import oui_database, record_observation, refresh_identity
 from app.services.reconciliation import interface_identity
 
 logger = logging.getLogger(__name__)
@@ -109,6 +110,7 @@ class DiscoveryConfig:
                 max_rate=settings.discovery_max_probes_per_second,
                 icmp=settings.discovery_icmp,
                 reverse_dns=settings.discovery_reverse_dns,
+                identify=settings.discovery_identify,
                 deadline=settings.discovery_job_timeout_minutes * 60,
             ),
             offline_after_misses=settings.discovery_offline_after_misses,
@@ -221,6 +223,7 @@ class DiscoveryService:
         thresholds: AlertThresholds,
         *,
         prober_factory: Callable[[], Prober] | None = None,
+        identity_factory: Callable[[], IdentityProber] | None = None,
         gateways: Callable[[], set[str]] = probes.default_gateways,
         cancel: threading.Event | None = None,
     ) -> None:
@@ -228,6 +231,7 @@ class DiscoveryService:
         self._config = config
         self._thresholds = thresholds
         self._prober_factory = prober_factory
+        self._identity_factory = identity_factory
         self._gateways = gateways
         # Parada de todo el proceso (shutdown). La cancelación de un job concreto la pide un
         # operador en la base de datos y la recoge _ProgressReporter.
@@ -376,6 +380,7 @@ class DiscoveryService:
             "max_probes_per_second": scan.max_rate,
             "icmp": scan.icmp,
             "reverse_dns": scan.reverse_dns,
+            "identify": scan.identify,
         }
 
     @staticmethod
@@ -401,8 +406,9 @@ class DiscoveryService:
         operator_cancel = threading.Event()
         try:
             prober = self._prober_factory() if self._prober_factory else None
+            identity = self._identity_factory() if self._identity_factory else None
             scanner = NetworkScanner(
-                self._config.scan, prober, _AnySet(self._cancel, operator_cancel)
+                self._config.scan, prober, _AnySet(self._cancel, operator_cancel), identity
             )
             reporter = _ProgressReporter(
                 self._sessions, job_id, scanner, operator_cancel, self._config.progress_interval
@@ -605,6 +611,8 @@ class ResultApplier:
         self._config = config
         self._alerts = AlertService(session, thresholds)
         self._gateways = gateways
+        # Una sola carga (cacheada) de la base OUI por job, no una por host.
+        self._oui = oui_database()
         self._change_details: dict[str, Any] | None = None
         self._ports_opened = 0
         self._ports_closed = 0
@@ -649,7 +657,7 @@ class ResultApplier:
             rows = ports_by_asset.setdefault(asset.id, {})
             open_ports = self._update_ports(asset, obs, rows, result.complete, now)
             open_total += len(open_ports)
-            self._classify(asset, open_ports, obs.address)
+            self._identify(asset, obs, open_ports, created, now)
             if created and not baseline:
                 self._announce(asset, open_ports, now)
             self._check_agent(asset, now)
@@ -833,14 +841,30 @@ class ResultApplier:
             )
         return sorted(p for p, row in rows.items() if row.state == PortStateValue.OPEN)
 
-    def _classify(self, asset: Asset, open_ports: Sequence[int], address: str) -> None:
-        device_type, reason = classify(
-            open_ports, is_gateway=address in self._gateways, agent_os=asset.os_name
-        )
-        # Keep an earlier conclusion when this run saw less (e.g. a port briefly down).
-        if device_type is not None:
-            asset.device_type = device_type
-            asset.device_type_reason = (reason or "")[:255]
+    def _identify(
+        self,
+        asset: Asset,
+        obs: HostObservation,
+        open_ports: Sequence[int],
+        created: bool,
+        now: datetime,
+    ) -> None:
+        # Sin tabla de rutas legible no sabemos quién es el gateway: None conserva lo anterior
+        # en vez de "desclasificar" el router por un fallo de lectura del propio servidor.
+        is_gateway = (obs.address in self._gateways) if self._gateways else None
+        record_observation(asset, obs, is_gateway)
+        change = refresh_identity(asset, open_ports, self._oui)
+        # Un cambio de tipo es historial, no una alerta de seguridad: una heurística que
+        # mejora con más evidencia no debe despertar a nadie.
+        if change.reclassified and not created:
+            self._change(
+                asset,
+                ChangeCategory.IDENTITY,
+                ChangeKind.RECLASSIFIED,
+                f"{change.previous_type or 'unknown'} -> {change.device_type or 'unknown'}",
+                now,
+                {"from": change.previous_type, "to": change.device_type},
+            )
 
     def _announce(self, asset: Asset, open_ports: Sequence[int], now: datetime) -> None:
         details: dict[str, Any] = {
@@ -848,9 +872,11 @@ class ResultApplier:
             "mac": asset.mac_address,
             "reverse_dns": asset.reverse_dns,
             "device_type": asset.device_type,
+            "device_name": asset.device_name,
+            "device_vendor": asset.device_vendor,
             "open_ports": list(open_ports),
         }
-        if asset.reverse_dns or asset.device_type:
+        if asset.device_name or asset.device_type:
             self._alerts.raise_alert(
                 asset,
                 AlertRule.ASSET_DISCOVERED,
@@ -928,15 +954,22 @@ class ResultApplier:
                     )
 
     def _change(
-        self, asset: Asset, category: ChangeCategory, kind: ChangeKind, item: str, now: datetime
+        self,
+        asset: Asset,
+        category: ChangeCategory,
+        kind: ChangeKind,
+        item: str,
+        now: datetime,
+        extra: dict[str, Any] | None = None,
     ) -> None:
+        details = {**(self._change_details or {}), **extra} if extra else self._change_details
         self._session.add(
             AssetChange(
                 asset_id=asset.id,
                 category=category,
                 kind=kind,
                 item=item[:512],
-                details=self._change_details,
+                details=details,
                 collected_at=now,
                 detected_at=now,
             )

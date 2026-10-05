@@ -119,8 +119,16 @@ function asset(ip: string, network: string | null = NET): Asset {
     mac_address: null,
     reverse_dns: null,
     vendor: null,
+    network_adapter_vendor: null,
     device_type: null,
     device_type_reason: null,
+    device_name: null,
+    name_source: null,
+    device_vendor: null,
+    device_model: null,
+    probable_os: null,
+    classification_confidence: null,
+    classification_evidence: [],
     discovery_sources: ["tcp"],
     discovery_network: network,
     discovered_at: iso(0),
@@ -454,5 +462,51 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     await screen.findByText("Descubrimiento en curso", undefined, POLL);
     expect(window.localStorage.length).toBe(0);
     expect(window.sessionStorage.length).toBe(0);
+  });
+});
+
+describe("NetworkPage: identificación de dispositivos", () => {
+  it("presenta nombre, IP, tipo en español, NIC y Managed frente a Discovered", async () => {
+    const phone = {
+      ...asset("192.168.50.141"),
+      device_name: "MNA-LX9",
+      display_name: "MNA-LX9",
+      device_type: "mobile",
+      device_vendor: "Huawei",
+      network_adapter_vendor: "Huawei",
+      classification_confidence: "high" as const,
+    };
+    const console_ = {
+      ...asset("192.168.50.108"),
+      mac_address: "a4:00:03:00:00:08",
+      device_type: "console",
+      network_adapter_vendor: "Realtek",
+      classification_confidence: "medium" as const,
+    };
+    const managed = {
+      ...asset("192.168.50.66"),
+      monitoring_method: "agent" as const,
+      hostname: "Ravenslg",
+      device_name: "Ravenslg",
+      display_name: "Ravenslg",
+      os_name: "Linux",
+      device_type: "pc",
+      classification_confidence: "high" as const,
+    };
+    const unknown = asset("192.168.50.12");
+    routes["GET /assets"] = () => ({ body: { items: [phone, console_, managed, unknown], total: 4 } });
+    renderPage();
+
+    const table = await screen.findByRole("region", { name: "Activos de red" });
+    const row = (ip: string) => within(table).getByText(ip, { selector: "td" }).closest("tr") as HTMLElement;
+    expect(within(row("192.168.50.141")).getByRole("link", { name: "MNA-LX9" })).toBeInTheDocument();
+    expect(within(row("192.168.50.141")).getByText("Móvil")).toBeInTheDocument();
+    expect(within(row("192.168.50.141")).getByText("Huawei")).toBeInTheDocument();
+    expect(within(row("192.168.50.108")).getByRole("link", { name: "Consola probable" })).toBeInTheDocument();
+    expect(within(row("192.168.50.108")).getByText("NIC Realtek")).toBeInTheDocument();
+    expect(within(row("192.168.50.66")).getByText("Managed")).toBeInTheDocument();
+    expect(within(row("192.168.50.66")).getByText("PC")).toBeInTheDocument();
+    expect(within(row("192.168.50.12")).getByRole("link", { name: "Dispositivo desconocido" })).toBeInTheDocument();
+    expect(within(row("192.168.50.12")).getByText("Desconocido")).toBeInTheDocument();
   });
 });

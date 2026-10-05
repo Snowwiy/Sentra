@@ -9,7 +9,8 @@ import { MetricBar } from "../MetricBar";
 import { Sparkline } from "../Sparkline";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import { StatusBadge } from "../StatusBadge";
-import { PortList, deviceTypeLabel } from "../NetworkBadges";
+import { IdentificationPanel } from "../DeviceIdentity";
+import { PortList } from "../NetworkBadges";
 import { ChangesList } from "./ChangesList";
 
 // At the agent's default 30 s interval this covers the last hour.
@@ -38,15 +39,10 @@ function NetworkPanel({ asset }: { asset: Asset }) {
           <Field label="Estado en red">
             {asset.network_status ? <StatusBadge status={asset.network_status} /> : "—"}
           </Field>
-          <Field label="Tipo probable">
-            {deviceTypeLabel(asset.device_type)}
-            {asset.device_type_reason && <div className="muted small">{asset.device_type_reason}</div>}
-          </Field>
           <Field label="MAC" mono>
             {dash(asset.mac_address)}
           </Field>
           <Field label="DNS inverso">{dash(asset.reverse_dns)}</Field>
-          <Field label="Fabricante">{dash(asset.vendor)}</Field>
           <Field label="Detectado por">{asset.discovery_sources.join(", ") || "—"}</Field>
           <Field label="Red" mono>
             {dash(asset.discovery_network)}
@@ -87,7 +83,10 @@ function NetworkOverview({ asset }: { asset: Asset }) {
   return (
     <div className="stack">
       <div className="detail-grid">
+        <IdentificationPanel asset={asset} />
         <NetworkPanel asset={asset} />
+      </div>
+      <div className="detail-grid">
         <section className="panel">
           <div className="panel__toolbar">
             <h2>Alertas activas</h2>
@@ -223,7 +222,10 @@ function AgentOverview({ asset }: { asset: Asset }) {
         </section>
       </div>
 
-      {asset.discovered_at && <NetworkPanel asset={asset} />}
+      <div className="detail-grid">
+        <IdentificationPanel asset={asset} />
+        {asset.discovered_at && <NetworkPanel asset={asset} />}
+      </div>
 
       <ChangesList assetId={assetId} limit={10} />
     </div>

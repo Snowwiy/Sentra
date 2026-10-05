@@ -30,6 +30,7 @@ from app.schemas.agent import (
 )
 from app.services.alert_service import resolve_offline_alert
 from app.services.enrollment_token_service import EnrollmentTokenService
+from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered
 
 logger = logging.getLogger(__name__)
@@ -63,6 +64,9 @@ def apply_host_info(asset: Asset, host: HostInfo) -> None:
     asset.architecture = host.architecture
     asset.primary_ip = str(host.primary_ip)
     asset.agent_version = host.agent_version
+    # El agente es la fuente autoritativa del nombre y del tipo: se recalcula con lo que
+    # acaba de reportar (sin escrituras si nada cambió).
+    refresh_identity(asset)
 
 
 def authenticate_agent(assets: AssetRepository, agent_id: UUID, token: str | None) -> Asset:
@@ -172,6 +176,7 @@ class AgentService:
                     first_seen_at=datetime.now(UTC),
                 )
             )
+            refresh_identity(asset)
         else:
             apply_host_info(asset, data)
         asset.agent_token_hash = hash_token(token)

@@ -128,6 +128,11 @@ class Settings(BaseSettings):
     discovery_max_probes_per_second: int = Field(default=200, ge=1, le=5000)
     discovery_icmp: bool = True
     discovery_reverse_dns: bool = True
+    # Sondas de nombre de hosts vivos: mDNS, NetBIOS y SSDP/UPnP (app/discovery/names.py).
+    discovery_identify: bool = True
+    # Ficheros OUI del IEEE (oui.csv, mam.csv, oui36.csv) separados por coma, para resolver
+    # el fabricante de la NIC sin consultar Internet. Vacío: fabricante desconocido.
+    discovery_oui_file: str = ""
     # Periodic runs over every allowed network; unset = manual only (CLI `discover`).
     discovery_interval_minutes: int | None = Field(default=None, ge=5, le=10_080)
     # A run is stopped (results kept as partial) after this long.

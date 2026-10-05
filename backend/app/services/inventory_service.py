@@ -22,6 +22,7 @@ from app.schemas.inventory import (
 from app.services.agent_service import authenticate_agent, record_contact
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.change_detection import admin_changes, diff_inventory
+from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered, interface_identity, primary_mac
 
 # Services start one by one after a reboot: their state changes are not news then.
@@ -83,6 +84,8 @@ class InventoryService:
             asset.mac_address = mac
         ips, macs = interface_identity(interfaces)
         adopt_discovered(self._session, asset, ips, macs)
+        # La MAC del agente puede revelar fabricante de NIC o una interfaz virtual (VM).
+        refresh_identity(asset)
 
     def _record_changes(
         self,

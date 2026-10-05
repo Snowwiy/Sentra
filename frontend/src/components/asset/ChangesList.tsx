@@ -2,6 +2,7 @@ import { useCallback } from "react";
 import { sentraApi } from "../../api/sentra";
 import type { AssetChange, ChangeCategory, ChangeKind } from "../../api/types";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
+import { deviceTypeLabel } from "../../lib/identity";
 import { usePolling } from "../../lib/usePolling";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 
@@ -23,6 +24,7 @@ const KIND_LABELS: Record<ChangeKind, string> = {
   port_closed: "Puerto cerrado",
   appeared: "Visible de nuevo",
   disappeared: "Desaparecido",
+  reclassified: "Reclasificado",
 };
 
 const CATEGORY_LABELS: Record<ChangeCategory, string> = {
@@ -31,6 +33,7 @@ const CATEGORY_LABELS: Record<ChangeCategory, string> = {
   account: "Cuenta",
   exposure: "Exposición",
   network: "Red",
+  identity: "Identificación",
 };
 
 const ATTENTION: ChangeKind[] = [
@@ -49,6 +52,11 @@ function show(value: unknown): string {
 
 export function describeChange(change: AssetChange): string {
   const details = change.details ?? {};
+  if (change.kind === "reclassified") {
+    // Tipos de dispositivo de la Fase 4E: se traducen; null = desconocido.
+    const label = (value: unknown) => (typeof value === "string" ? deviceTypeLabel(value) : "Desconocido");
+    return `${label(details.from)} → ${label(details.to)}`;
+  }
   if ("before" in details || "after" in details) return `${show(details.before)} → ${show(details.after)}`;
   if ("versions" in details) return show(details.versions);
   if ("status" in details) return [details.status, details.start_type].filter(Boolean).join(" · ");

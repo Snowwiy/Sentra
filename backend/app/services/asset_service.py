@@ -2,6 +2,7 @@ import ipaddress
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import func, select
@@ -14,8 +15,9 @@ from app.models.exposure import AssetPort, PortStateValue
 from app.models.telemetry import TelemetrySample
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.telemetry_repository import TelemetryRepository
-from app.schemas.asset import AssetList, AssetRead
+from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence
 from app.schemas.telemetry import TelemetrySnapshot
+from app.services.identification import network_adapter_vendor
 
 
 def effective_status(asset: Asset, now: datetime, timeout: timedelta) -> AssetStatus:
@@ -62,7 +64,15 @@ class AssetFilter:
                 return False
         if self.search:
             needle = self.search.lower()
-            fields = (asset.hostname, asset.reverse_dns, asset.primary_ip, asset.mac_address)
+            fields = (
+                asset.device_name,
+                asset.hostname,
+                asset.reverse_dns,
+                asset.primary_ip,
+                asset.mac_address,
+                asset.device_vendor,
+                asset.vendor,
+            )
             return any(needle in (value or "").lower() for value in fields)
         return True
 
@@ -82,6 +92,21 @@ def open_ports_by_asset(session: Session, asset_ids: Iterable[int]) -> dict[int,
         .group_by(AssetPort.asset_id)
     )
     return {asset_id: sorted(ports) for asset_id, ports in rows}
+
+
+def evidence_items(raw: Any) -> list[ClassificationEvidence]:
+    """Evidencias guardadas → API, descartando entradas mal formadas.
+
+    La columna es JSONB y la escribe solo el servidor, pero un dato corrupto (edición manual,
+    versión futura con otra forma) no debe tirar con un 500 el listado de activos entero.
+    """
+    items: list[ClassificationEvidence] = []
+    for entry in raw if isinstance(raw, list) else ():
+        if isinstance(entry, dict):
+            source, value = entry.get("source"), entry.get("value")
+            if isinstance(source, str) and isinstance(value, str) and source and value:
+                items.append(ClassificationEvidence(source=source[:32], value=value[:255]))
+    return items
 
 
 class AssetService:
@@ -145,8 +170,16 @@ class AssetService:
             mac_address=asset.mac_address,
             reverse_dns=asset.reverse_dns,
             vendor=asset.vendor,
+            network_adapter_vendor=network_adapter_vendor(asset),
             device_type=asset.device_type,
             device_type_reason=asset.device_type_reason,
+            device_name=asset.device_name,
+            name_source=asset.name_source,
+            device_vendor=asset.device_vendor,
+            device_model=asset.device_model,
+            probable_os=asset.probable_os,
+            classification_confidence=asset.classification_confidence,
+            classification_evidence=evidence_items(asset.classification_evidence),
             discovery_sources=asset.discovery_sources or [],
             discovery_network=asset.discovery_network,
             discovered_at=asset.discovered_at,

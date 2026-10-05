@@ -15,6 +15,7 @@ import {
   stopReasonLabel,
 } from "../../lib/discovery";
 import { errorMessage, formatDateTime } from "../../lib/format";
+import { deviceTypeLabel } from "../../lib/identity";
 import { usePolling } from "../../lib/usePolling";
 import { ErrorState, LoadingState } from "../StateViews";
 
@@ -313,7 +314,10 @@ function JobChanges({ job }: { job: DiscoveryJobDetail }) {
                 <Link to={`/assets/${change.asset_id}`} className="mono">
                   {change.primary_ip}
                 </Link>{" "}
-                {CHANGE_LABELS[change.kind] ?? change.kind} <span className="mono small">{change.item}</span>
+                {CHANGE_LABELS[change.kind] ?? change.kind}{" "}
+                <span className="mono small">
+                  {change.kind === "reclassified" ? reclassifiedText(change.item) : change.item}
+                </span>
               </li>
             ))}
           </ul>
@@ -323,11 +327,20 @@ function JobChanges({ job }: { job: DiscoveryJobDetail }) {
   );
 }
 
+/** "mobile -> console" (identificadores de la API) → "Móvil → Consola". */
+function reclassifiedText(item: string): string {
+  const [from, to] = item.split(" -> ");
+  if (from === undefined || to === undefined) return item;
+  const label = (value: string) => (value === "unknown" ? "Desconocido" : deviceTypeLabel(value));
+  return `${label(from)} → ${label(to)}`;
+}
+
 const CHANGE_LABELS: Record<string, string> = {
   port_opened: "puerto abierto",
   port_closed: "puerto cerrado",
   appeared: "volvió a aparecer",
   disappeared: "desapareció",
+  reclassified: "reclasificado",
 };
 
 function Counter({ label, value, title }: { label: string; value: string | number; title?: string }) {

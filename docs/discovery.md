@@ -26,7 +26,10 @@ The agent-based flow is unchanged: agents use the same protocol and see no diffe
 - `DISCOVERY_EXCLUDED` addresses are never probed.
 - What a probe is: a full TCP connect that is closed immediately (no data sent, no banner
   read), one ICMP echo through the operating system's `ping`, a read of the server's own
-  neighbour (ARP) table, and a reverse DNS lookup. **No** raw packets, SYN/stealth scans,
+  neighbour (ARP) table, and a reverse DNS lookup. Desde la Fase 4E, a los hosts vivos se
+  les piden además los nombres que ellos mismos publican (mDNS, NetBIOS y SSDP/UPnP, ver
+  "Identificación de dispositivos"); se puede desactivar con `DISCOVERY_IDENTIFY=false`.
+  **No** raw packets, SYN/stealth scans,
   fragmentation, spoofing, evasion, banner grabbing, OS fingerprinting, credentials,
   brute force or exploitation. No elevated privileges are needed or requested.
 - Load is bounded: `DISCOVERY_CONCURRENCY` probes in flight (default 64),
@@ -51,6 +54,8 @@ The agent-based flow is unchanged: agents use the same protocol and see no diffe
 | `DISCOVERY_MAX_PROBES_PER_SECOND` | `200` | Rate limit (1–5000) |
 | `DISCOVERY_ICMP` | `true` | Use the system `ping` (skipped automatically if missing) |
 | `DISCOVERY_REVERSE_DNS` | `true` | Reverse lookups of live hosts |
+| `DISCOVERY_IDENTIFY` | `true` | Sondas de nombre de hosts vivos: mDNS, NetBIOS y SSDP/UPnP (Fase 4E) |
+| `DISCOVERY_OUI_FILE` | vacío | Ficheros OUI del IEEE (`oui.csv`, `mam.csv`, `oui36.csv`) separados por coma para el fabricante de la NIC. Vacío: fabricante desconocido |
 | `DISCOVERY_INTERVAL_MINUTES` | unset (manual) | Periodic runs over every allowed network (≥ 5) |
 | `DISCOVERY_JOB_TIMEOUT_MINUTES` | `30` | A run stops here; its results are kept as partial |
 | `DISCOVERY_OFFLINE_AFTER_MISSES` | `3` | Complete runs without seeing a host before it is offline |
@@ -202,6 +207,105 @@ petición.
 servicio, misma allowlist, ejecuta en primer plano sin pasar por la cola de la API y aparece
 en el historial con origen CLI.
 
+## Identificación de dispositivos (Fase 4E)
+
+Después de cada scan Sentra responde, para cada activo: **qué es, cómo se llama, qué tipo
+tiene, qué fabricante parece tener, qué evidencia lo sustenta y con qué confianza**. Todo
+se calcula en `app/discovery/classify.py` (función pura, sin red) a partir de lo que el scan
+ya observó, y se guarda en el activo (`services/identification.py`).
+
+### Campos
+
+| Campo (API) | Significado |
+|---|---|
+| `device_name` / `name_source` | Nombre resuelto y de dónde sale. Null si nada lo nombra |
+| `device_type` | `pc`, `laptop`, `server`, `mobile`, `tablet`, `console`, `printer`, `router`, `network_switch`, `access_point`, `iot`, `voice_assistant`, `smart_tv`, `nas`, `virtual_machine`; null = desconocido. La UI los muestra en español |
+| `device_vendor` / `device_model` | Fabricante y modelo **del dispositivo**, solo con evidencia real |
+| `vendor` / `network_adapter_vendor` | Organización OUI de la MAC y su marca corta: fabricante **de la NIC** |
+| `probable_os` | SO deducido desde la red, sin versión. Null con agente (manda `os_name`) |
+| `classification_confidence` | `low`, `medium`, `high` |
+| `classification_evidence` | `[{"source": "...", "value": "..."}]`: el porqué |
+
+### Prioridad del nombre
+
+1. Nombre manual: no existe todavía (Sentra no permite renombrar activos).
+2. Hostname reportado por el agente (MANAGED).
+3. Nombre DHCP: Sentra no es servidor DHCP; el DNS del router suele registrar esos
+   nombres y llegan por el punto siguiente.
+4. DNS inverso (sin el dominio local `.lan`, `.home`, `.local`...; se descartan nombres de
+   relleno como `192-168-1-20` o `localhost`).
+5. mDNS. 6. NetBIOS. 7. `friendlyName` UPnP. 8. Fabricante + modelo si ambos son seguros.
+9. Sin nombre: la UI muestra el tipo ("Consola probable") o "Dispositivo desconocido" y la
+   IP como dato secundario. En alertas, eventos y CLI `display_name` sigue cayendo en la
+   IP, que ahí es más útil que un texto genérico.
+
+### Confianza
+
+Cada pista tiene una fuerza (débil, media, fuerte, autoritativa) y se suman por tipo:
+
+- **high**: fuente autoritativa (agente, gateway por defecto del servidor, UPnP
+  `InternetGatewayDevice`) o pistas independientes que se confirman. Ejemplo: hostname
+  `MNA-LX9` (código de modelo Huawei) + OUI Huawei → Móvil, Huawei, modelo MNA-LX9.
+- **medium**: una pista clara o varias débiles coherentes (`MNA-LX9` con MAC aleatoria).
+- **low**: una pista débil (un solo puerto de Windows → "PC probable").
+- Pistas incompatibles empatadas → tipo desconocido; no se elige al azar.
+
+La UI presenta como "probable" todo lo que no es confianza alta.
+
+### El fabricante de la NIC no es el del dispositivo
+
+`app/discovery/vendors.py` separa fabricantes de dispositivos (Huawei, Apple, Nintendo...)
+de fabricantes de chips/NICs (Realtek, Intel, Broadcom...). Un Nintendo Switch con un
+adaptador USB-Ethernet Realtek muestra **NIC Realtek** y, sin más evidencia, tipo
+desconocido; con un nombre `Nintendo-Switch` pasa a **Consola probable** con fabricante
+Nintendo. Las MAC aleatorias (bit localmente administrado, típicas de móviles) no tienen
+fabricante y quedan como evidencia propia. `52:54:00` se reconoce como NIC virtual QEMU/KVM.
+
+### Fuentes agentless
+
+| Fuente | Qué se hace | Límite |
+|---|---|---|
+| ARP | Lectura de la tabla del propio servidor | Solo mismo segmento L2 |
+| DNS inverso | Resolver del sistema | `DISCOVERY_TIMEOUT_MS` (mín. 1 s) |
+| mDNS | Pregunta PTR unicast al puerto 5353 del host (RFC 6762 §6.7) | `DISCOVERY_TIMEOUT_MS`, respuesta acotada |
+| NetBIOS | Consulta NBSTAT (como `nbtstat -A`), solo el nombre del equipo | `DISCOVERY_TIMEOUT_MS` |
+| SSDP/UPnP | Un M-SEARCH por scan con TTL 1 y lectura del XML de descripción que anuncia el dispositivo | 2 s de escucha; XML ≤ 64 KB, sin DTD, solo `http://` a la misma IP que respondió (anti-SSRF) |
+| OUI | Fichero local del IEEE, en memoria y cacheado | Sin consultas a Internet |
+| Puertos | Los del scan de exposición | Pistas débiles |
+
+No hay explotación, fuerza bruta, credenciales, evasión ni fingerprinting de paquetes. Las
+sondas de nombre usan la misma concurrencia, ritmo y timeout que el resto y solo se envían a
+hosts vivos dentro de la allowlist; un fallo de una sonda es un error del job, no del scan.
+
+### Base OUI (fabricante de la NIC)
+
+Sentra no incluye el registro OUI completo (varios MB) ni lo descarga solo. Para activarlo:
+
+```powershell
+# Descarga manual del registro público del IEEE (MA-L; opcionalmente mam.csv y oui36.csv).
+New-Item -ItemType Directory -Force C:\ProgramData\Sentra\oui | Out-Null
+Invoke-WebRequest https://standards-oui.ieee.org/oui/oui.csv -OutFile C:\ProgramData\Sentra\oui\oui.csv
+```
+
+y en `.env`: `DISCOVERY_OUI_FILE=C:\ProgramData\Sentra\oui\oui.csv`. Formatos aceptados: CSV
+del IEEE (`Registry,Assignment,Organization Name,...`) y `oui.txt`. El fichero se relee solo
+cuando cambia su fecha de modificación. Sin fichero, el fabricante queda desconocido.
+
+### Cambios de clasificación
+
+Un cambio de tipo (por ejemplo Móvil → Consola) se registra como cambio del activo
+(`identity` / `reclassified`) con el job que lo detectó; **nunca** como alerta. La primera
+clasificación tras actualizar no se registra (no cambió el dispositivo, cambiaron las
+reglas). `python -m app.cli reclassify-assets` recalcula todos los activos con los datos
+guardados, sin sondear la red (útil tras configurar la base OUI).
+
+### Reconciliación
+
+Al instalar el agente en un host descubierto se conserva todo (historial, exposición,
+fechas, alertas) y también lo observado en la red (`identity_observations`); el agente pasa
+a ser la fuente autoritativa: "PC probable" deducido de la red se convierte en el hostname,
+tipo y SO que reporta el agente.
+
 ## Running it (CLI)
 
 ```powershell
@@ -327,3 +431,11 @@ Tested here on Linux (real TCP on loopback; Windows tool output from captured sa
     a Linux Sentra server does not have this behaviour.
 - Windows Defender Firewall blocks inbound ICMP echo by default on many profiles: hosts may
   be found by TCP/ARP only.
+- Identificación (Fase 4E), pendiente de validar en Windows real:
+  - mDNS y NetBIOS usan UDP sobre el ProactorEventLoop; un "port unreachable" llega como
+    WSAECONNRESET y se trata como "sin respuesta". Probado solo en Linux (loopback real).
+  - SSDP: el M-SEARCH multicast necesita que el firewall de Windows permita las respuestas
+    UDP entrantes a python.exe (perfil Privado). Si las bloquea, el scan sigue igual pero
+    sin datos UPnP (fabricante/modelo de Smart TVs, NAS, routers).
+  - NetBIOS sobre TCP/IP debe estar activo en el adaptador del servidor para recibir
+    respuestas NBSTAT de otros equipos Windows.

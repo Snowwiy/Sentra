@@ -6,6 +6,9 @@ Three phases, so dead addresses cost little:
 2. the server's neighbour (ARP) table is read once: entries complete after phase 1 mark
    hosts that answered nothing else as up and give their MAC;
 3. the remaining configured ports and reverse DNS, for live hosts only.
+   Fase 4E: en esta fase también se piden los nombres que el propio host publica (mDNS,
+   NetBIOS y la descripción UPnP tras un único M-SEARCH SSDP por scan), solo a hosts vivos
+   y con el mismo límite de concurrencia, ritmo y timeout que el resto de sondas.
 
 Load is bounded three ways: at most `concurrency` probes in flight, at most `max_rate`
 probes started per second, and a `timeout` per probe. A whole scan also stops at its
@@ -21,7 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.discovery import probes
+from app.discovery import names, probes
+from app.discovery.names import IdentityProber, SsdpResponse, UpnpDescription
 from app.discovery.ports import liveness_ports
 from app.discovery.probes import PortState
 from app.discovery.targets import IPAddress
@@ -41,6 +45,8 @@ class ScanConfig:
     max_rate: float = 200.0
     icmp: bool = True
     reverse_dns: bool = True
+    # Sondas de nombre (mDNS, NetBIOS, SSDP/UPnP); ver app/discovery/names.py.
+    identify: bool = True
     # Seconds for the whole scan (None: no limit).
     deadline: float | None = None
 
@@ -53,6 +59,10 @@ class HostObservation:
     sources: set[str] = field(default_factory=set)
     mac: str | None = None
     reverse_dns: str | None = None
+    mdns_name: str | None = None
+    netbios_name: str | None = None
+    ssdp: SsdpResponse | None = None
+    upnp: UpnpDescription | None = None
     # State of every port that was probed.
     ports: dict[int, PortState] = field(default_factory=dict)
 
@@ -168,9 +178,16 @@ class NetworkScanner:
         config: ScanConfig,
         prober: Prober | None = None,
         cancel: CancelSignal | None = None,
+        identity: IdentityProber | None = None,
     ) -> None:
         self._config = config
         self._prober: Prober = prober or SystemProber()
+        # Con un prober inyectado (tests) solo hay sondas de nombre si también se inyectan:
+        # así ningún test envía UDP real a la red por accidente.
+        if identity is None and prober is None and config.identify:
+            identity = names.SystemIdentityProber()
+        self._identity = identity if config.identify else None
+        self._ssdp: dict[str, SsdpResponse] = {}
         self._cancel: CancelSignal = cancel or threading.Event()
         self._errors: list[str] = []
         self._probes = 0
@@ -224,6 +241,8 @@ class NetworkScanner:
             self._phase = "details"
             self._details_total = len(alive)
             remaining = tuple(p for p in self._config.ports if p not in live_ports)
+            if alive:
+                await self._ssdp_search({str(a) for a in alive})
             for batch in _batches(alive, HOST_BATCH):
                 await asyncio.gather(*(self._details(a, found[str(a)], remaining) for a in batch))
         except _StopScanError:
@@ -274,6 +293,8 @@ class NetworkScanner:
         tasks: list[Awaitable[None]] = [self._tcp(address, obs, port) for port in ports]
         if self._config.reverse_dns:
             tasks.append(self._rdns(address, obs))
+        if self._identity is not None:
+            tasks.append(self._names(address, obs))
         await asyncio.gather(*tasks)
         self._details_done += 1
 
@@ -324,6 +345,53 @@ class NetworkScanner:
             raise
         except Exception as exc:
             self._error(f"{address} reverse dns: {exc!r}")
+
+    async def _ssdp_search(self, addresses: set[str]) -> None:
+        identity = self._identity
+        if identity is None:
+            return
+        try:
+            self._ssdp = await self._limited(
+                lambda: identity.ssdp_search(addresses, names.SSDP_WINDOW)
+            )
+        except _StopScanError:
+            raise
+        except Exception as exc:  # sin multicast (firewall, sin red) el scan sigue igual
+            self._error(f"ssdp search: {exc!r}")
+
+    async def _names(self, address: IPAddress, obs: HostObservation) -> None:
+        """Nombres publicados por el host. Cada sonda falla por separado sin afectar al resto."""
+        identity = self._identity
+        if identity is None:
+            return
+        host = str(address)
+        timeout = self._config.timeout
+        obs.ssdp = self._ssdp.get(host)
+        ssdp = obs.ssdp
+
+        async def mdns() -> None:
+            obs.mdns_name = await self._limited(lambda: identity.mdns_name(host, timeout))
+
+        async def netbios() -> None:
+            obs.netbios_name = await self._limited(lambda: identity.netbios_name(host, timeout))
+
+        async def upnp() -> None:
+            if ssdp is not None and ssdp.location:
+                obs.upnp = await self._limited(
+                    lambda: identity.upnp_description(ssdp, max(timeout, names.DESCRIPTION_TIMEOUT))
+                )
+
+        async def guarded(label: str, probe: Callable[[], Awaitable[None]]) -> None:
+            try:
+                await probe()
+            except _StopScanError:
+                raise
+            except Exception as exc:
+                self._error(f"{address} {label}: {exc!r}")
+
+        await asyncio.gather(
+            guarded("mdns", mdns), guarded("netbios", netbios), guarded("upnp", upnp)
+        )
 
     # --- control --------------------------------------------------------------------------
 

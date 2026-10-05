@@ -61,6 +61,7 @@ INTERFACES = {
     "DiscoveryChange": "DiscoveryChangeRead",
     "DiscoveryJobDetail": "DiscoveryJobDetail",
     "DiscoverySchedule": "DiscoveryScheduleRead",
+    "ClassificationEvidence": "ClassificationEvidence",
 }
 ENUMS = [
     "AssetStatus",
@@ -76,6 +77,7 @@ ENUMS = [
     "PortStateValue:PortState",
     "CredentialStatus",
     "EnrollmentTokenState",
+    "ClassificationConfidence",
 ]
 
 

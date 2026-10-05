@@ -17,9 +17,18 @@ export interface TelemetrySnapshot {
 /** DISCOVERED (network only) → MONITORED (agentless, reserved) → MANAGED (agent). */
 export type MonitoringMethod = "discovered" | "agentless" | "agent";
 
+/** Confianza de la identificación (Fase 4E). */
+export type ClassificationConfidence = "low" | "medium" | "high";
+
+/** Una evidencia de la identificación: fuente (agent_hostname, reverse_dns, mdns, ...) y valor. */
+export interface ClassificationEvidence {
+  source: string;
+  value: string;
+}
+
 export interface Asset {
   asset_id: string;
-  /** Hostname, reverse DNS name or address: always set. */
+  /** Nombre resuelto, hostname, DNS inverso o la IP: siempre presente (alertas, búsquedas). */
   display_name: string;
   monitoring_method: MonitoringMethod;
   /** Reported by the agent; null for assets only seen on the network. */
@@ -40,10 +49,23 @@ export interface Asset {
   latest_telemetry: TelemetrySnapshot | null;
   mac_address: string | null;
   reverse_dns: string | null;
+  /** Organización OUI de la MAC: fabricante de la NIC, no necesariamente del dispositivo. */
   vendor: string | null;
-  /** "windows" | "linux" | "printer" | "network_device"; null when it cannot be told. */
+  /** Marca corta de la NIC ("Realtek"). */
+  network_adapter_vendor: string | null;
+  /** pc, laptop, server, mobile, tablet, console, printer, router, network_switch,
+   * access_point, iot, voice_assistant, smart_tv, nas, virtual_machine; null = desconocido. */
   device_type: string | null;
   device_type_reason: string | null;
+  /** Nombre resuelto por prioridad; null si nada lo nombra (la UI usa un texto de reserva). */
+  device_name: string | null;
+  name_source: string | null;
+  device_vendor: string | null;
+  device_model: string | null;
+  /** SO deducido desde la red, sin versión; null con agente (ver os_name). */
+  probable_os: string | null;
+  classification_confidence: ClassificationConfidence | null;
+  classification_evidence: ClassificationEvidence[];
   discovery_sources: string[];
   discovery_network: string | null;
   discovered_at: IsoDateTime | null;
@@ -239,7 +261,7 @@ export interface ProcessSnapshot {
   processes: ProcessEntry[];
 }
 
-export type ChangeCategory = "service" | "software" | "account" | "exposure" | "network";
+export type ChangeCategory = "service" | "software" | "account" | "exposure" | "network" | "identity";
 export type ChangeKind =
   | "added"
   | "removed"
@@ -254,7 +276,8 @@ export type ChangeKind =
   | "port_opened"
   | "port_closed"
   | "appeared"
-  | "disappeared";
+  | "disappeared"
+  | "reclassified";
 
 /** A difference Sentra found between two inventory snapshots. */
 export interface AssetChange {

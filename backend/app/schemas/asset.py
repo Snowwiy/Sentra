@@ -1,14 +1,25 @@
 from datetime import datetime
 from uuid import UUID
 
+from app.discovery.device_types import ClassificationConfidence
 from app.models.asset import AssetStatus, MonitoringMethod
 from app.schemas.common import ResponseModel
 from app.schemas.telemetry import TelemetrySnapshot
 
 
+class ClassificationEvidence(ResponseModel):
+    """Una evidencia de la identificación: de dónde sale (source) y qué se observó (value)."""
+
+    # agent_hostname, agent_os, reverse_dns, mdns, netbios, upnp, ssdp, mac_vendor,
+    # mac_random, ports o gateway.
+    source: str
+    value: str
+
+
 class AssetRead(ResponseModel):
     asset_id: UUID
-    # Hostname, reverse DNS name or address: always present, for display.
+    # Nombre resuelto, hostname, DNS inverso o la IP: siempre presente. La UI prefiere
+    # device_name y usa un texto de reserva ("Dispositivo desconocido") en vez de la IP.
     display_name: str
     monitoring_method: MonitoringMethod
     # Reported by the agent; null for assets only seen on the network.
@@ -32,9 +43,25 @@ class AssetRead(ResponseModel):
     # Network view (discovery); null/empty when unknown.
     mac_address: str | None
     reverse_dns: str | None
+    # Organización registrada del prefijo de la MAC (OUI) y su marca corta: es el fabricante
+    # de la NIC, no necesariamente el del dispositivo (device_vendor).
     vendor: str | None
+    network_adapter_vendor: str | None
+    # Identificación (Fase 4E). device_type: pc, laptop, server, mobile, tablet, console,
+    # printer, router, network_switch, access_point, iot, voice_assistant, smart_tv, nas,
+    # virtual_machine; null = desconocido.
     device_type: str | None
     device_type_reason: str | None
+    # Nombre resuelto por prioridad y su fuente (agent_hostname, reverse_dns, mdns, netbios,
+    # upnp, vendor_model); null si nada lo nombra.
+    device_name: str | None
+    name_source: str | None
+    device_vendor: str | None
+    device_model: str | None
+    # SO deducido desde la red (sin versión); null en activos con agente (ver os_name).
+    probable_os: str | None
+    classification_confidence: ClassificationConfidence | None
+    classification_evidence: list[ClassificationEvidence]
     discovery_sources: list[str]
     discovery_network: str | None
     discovered_at: datetime | None

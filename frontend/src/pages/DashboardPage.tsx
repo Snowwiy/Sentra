@@ -4,12 +4,14 @@ import { sentraApi } from "../api/sentra";
 import type { Asset, AssetStatus } from "../api/types";
 import { AlertTable } from "../components/AlertTable";
 import { EventTable } from "../components/EventTable";
-import { MethodBadge, deviceTypeLabel } from "../components/NetworkBadges";
+import { AssetName } from "../components/DeviceIdentity";
+import { MethodBadge } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { deviceTypeLabel, typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 
 type Filter = AssetStatus | "all";
@@ -32,9 +34,14 @@ function countByStatus(assets: Asset[]): Record<Filter, number> {
 function matches(asset: Asset, query: string): boolean {
   if (!query) return true;
   const q = query.toLowerCase();
-  return [asset.display_name, asset.primary_ip, asset.os_name, asset.device_type].some((field) =>
-    (field ?? "").toLowerCase().includes(q),
-  );
+  return [
+    asset.display_name,
+    asset.primary_ip,
+    asset.os_name,
+    asset.device_type,
+    asset.device_type ? deviceTypeLabel(asset.device_type) : null,
+    asset.device_vendor,
+  ].some((field) => (field ?? "").toLowerCase().includes(q));
 }
 
 export function DashboardPage() {
@@ -145,7 +152,7 @@ export function DashboardPage() {
             <table className="table">
               <thead>
                 <tr>
-                  <th>Hostname</th>
+                  <th>Dispositivo</th>
                   <th>Estado</th>
                   <th>Método</th>
                   <th>OS / tipo</th>
@@ -166,9 +173,7 @@ export function DashboardPage() {
                       onClick={() => navigate(`/assets/${asset.asset_id}`)}
                     >
                       <td>
-                        <Link to={`/assets/${asset.asset_id}`} className="strong">
-                          {asset.display_name}
-                        </Link>
+                        <AssetName asset={asset} showIp={false} />
                       </td>
                       <td>
                         <StatusBadge status={asset.status} />
@@ -177,12 +182,16 @@ export function DashboardPage() {
                         <MethodBadge method={asset.monitoring_method} />
                       </td>
                       <td>
+                        {/* Con agente: SO real. Sin agente: tipo deducido y SO probable si lo hay. */}
                         {asset.os_name ? (
                           <>
                             {asset.os_name} <span className="muted">{asset.os_version}</span>
                           </>
                         ) : (
-                          <span className="muted">{deviceTypeLabel(asset.device_type)}</span>
+                          <span className="muted">
+                            {typeWithConfidence(asset)}
+                            {asset.probable_os && ` · ${asset.probable_os} probable`}
+                          </span>
                         )}
                       </td>
                       <td className="mono">{asset.primary_ip}</td>

@@ -28,6 +28,7 @@ from app.models.asset import Asset
 from app.models.change import AssetChange
 from app.models.exposure import AssetPort, PortStateValue
 from app.repositories.alert_repository import AlertRepository
+from app.services.identification import refresh_identity
 
 logger = logging.getLogger(__name__)
 
@@ -139,9 +140,14 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     target.mac_address = target.mac_address or source.mac_address
     target.reverse_dns = target.reverse_dns or source.reverse_dns
     target.vendor = target.vendor or source.vendor
-    if target.device_type is None:
-        target.device_type = source.device_type
-        target.device_type_reason = source.device_type_reason
+    # Lo observado en la red (mDNS, NetBIOS, UPnP, gateway) se conserva como evidencia; lo
+    # ya observado por el activo del agente gana si ambos tienen el mismo dato.
+    observations = {**(source.identity_observations or {}), **(target.identity_observations or {})}
+    target.identity_observations = observations or None
+    # Se recalcula con el agente como fuente autoritativa: "PC probable" deducido de la red
+    # pasa a ser el hostname y SO que reporta el agente. Sin puertos: con agente el tipo no
+    # depende de ellos.
+    refresh_identity(target)
     target.first_seen_at = min(target.first_seen_at, source.first_seen_at)
     logger.info(
         "discovered asset merged into agent asset",
