@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
-import { riskApi } from "../../api/sentra";
+import { aiApi, riskApi } from "../../api/sentra";
 import type { AssetCriticality, RiskAssetDetail, RiskContribution } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { config } from "../../config";
@@ -16,6 +16,7 @@ import {
 } from "../../lib/risk";
 import { usePolling } from "../../lib/usePolling";
 import { ConfidenceBadge, DetectionSeverityBadge, DetectionStatusBadge } from "../detections/DetectionBadges";
+import { AIAnalyzePanel } from "../ai/AIAnalyzePanel";
 import { ErrorState, LoadingState } from "../StateViews";
 import { CriticalityBadge, RiskBadge, RiskConfidenceBadge } from "./RiskBadges";
 import { RiskTrend } from "./RiskTrend";
@@ -301,6 +302,13 @@ export function RiskPanel({ assetId }: { assetId: string }) {
           )}
         </section>
       </div>
+      <AIAnalyzePanel
+        title="Interpretación del riesgo con IA"
+        buttonLabel="Analizar riesgo"
+        kind="risk_explanation"
+        assetId={assetId}
+        run={(refresh) => aiApi.analyzeRisk(assetId, refresh)}
+      />
     </div>
   );
 }

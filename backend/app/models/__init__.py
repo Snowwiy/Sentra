@@ -1,3 +1,4 @@
+from app.models.ai import AIInsight
 from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.audit import AuditEvent
@@ -28,6 +29,7 @@ from app.models.telemetry import TelemetrySample
 from app.models.user import User, UserSession
 
 __all__ = [
+    "AIInsight",
     "AgentEnrollmentToken",
     "Alert",
     "AlertRule",

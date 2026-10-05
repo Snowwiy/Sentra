@@ -3,6 +3,7 @@ import { AuthProvider } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
 import { RequireAuth, RequirePermission } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
+import { AIInsightsPage } from "./pages/AIInsightsPage";
 import { AgentsPage } from "./pages/AgentsPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
@@ -35,6 +36,14 @@ export function AppRoutes() {
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="detections" element={<DetectionsPage />} />
           <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
+          <Route
+            path="ai"
+            element={
+              <RequirePermission permission="ai:use">
+                <AIInsightsPage />
+              </RequirePermission>
+            }
+          />
           <Route
             path="admin/users"
             element={

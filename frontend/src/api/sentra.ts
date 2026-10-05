@@ -1,5 +1,7 @@
 import { apiGet, apiPatch, apiPost } from "./client";
 import type {
+  AIStatus,
+  AIWindow,
   Agent,
   AgentList,
   Alert,
@@ -35,6 +37,9 @@ import type {
   Health,
   Inventory,
   MonitoringMethod,
+  Insight,
+  InsightKind,
+  InsightList,
   ProcessSnapshot,
   AssetCriticality,
   RiskAssetDetail,
@@ -312,4 +317,42 @@ export const usersApi = {
     apiPost<User>(`/users/${encodeURIComponent(userId)}/sessions/revoke`),
   audit: (limit: number, signal?: AbortSignal) =>
     apiGet<AuditEventList>(`/audit?limit=${limit}`, { signal }),
+};
+
+/**
+ * AI Security Insights (Fase 4J). Solo se envían la entidad y, en Ask, la pregunta: el
+ * proveedor, la URL, el modelo y la clave son configuración exclusiva del servidor.
+ */
+export const aiApi = {
+  status: (signal?: AbortSignal) => apiGet<AIStatus>("/ai/status", { signal }),
+  ask: (question: string, scope: { assetId?: string; detectionId?: string } = {}, refresh = false) =>
+    apiPost<Insight>("/ai/ask", {
+      question,
+      asset_id: scope.assetId ?? null,
+      detection_id: scope.detectionId ?? null,
+      refresh,
+    }),
+  analyzeAsset: (assetId: string, refresh = false) =>
+    apiPost<Insight>(`/ai/assets/${encodeURIComponent(assetId)}/analyze`, { refresh }),
+  analyzeDetection: (detectionId: string, refresh = false) =>
+    apiPost<Insight>(`/ai/detections/${encodeURIComponent(detectionId)}/analyze`, { refresh }),
+  analyzeRisk: (assetId: string, refresh = false) =>
+    apiPost<Insight>(`/ai/risk/assets/${encodeURIComponent(assetId)}/analyze`, { refresh }),
+  socSummary: (window: AIWindow, refresh = false) => apiPost<Insight>("/ai/soc/analyze", { window, refresh }),
+  list: (
+    query: { kind?: InsightKind; assetId?: string; detectionId?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) =>
+    apiGet<InsightList>(
+      `/ai/insights${queryString({
+        kind: query.kind,
+        asset_id: query.assetId,
+        detection_id: query.detectionId,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  get: (insightId: string, signal?: AbortSignal) =>
+    apiGet<Insight>(`/ai/insights/${encodeURIComponent(insightId)}`, { signal }),
 };

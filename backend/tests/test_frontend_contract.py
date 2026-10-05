@@ -89,6 +89,14 @@ INTERFACES = {
     "RiskAssetDetail": "RiskAssetDetail",
     "RiskHistory": "RiskHistory",
     "RiskContributionList": "RiskContributionList",
+    # Fase 4J: AI Security Insights.
+    "EvidenceRef": "EvidenceRefRead",
+    "InsightFinding": "InsightFinding",
+    "InsightAction": "InsightAction",
+    "InsightResult": "InsightResult",
+    "Insight": "InsightRead",
+    "InsightList": "InsightList",
+    "AIStatus": "AIStatus",
 }
 ENUMS = [
     "AssetStatus",
@@ -177,3 +185,10 @@ def test_created_token_is_the_listed_token_plus_the_value(schemas: dict[str, Any
     assert set(re.findall(r"^\s+(\w+)\??:", match.group(1), re.MULTILINE)) == {"token"}
     created = set(_schema(schemas, "EnrollmentTokenCreated")["properties"])
     assert created == set(_schema(schemas, "EnrollmentTokenRead")["properties"]) | {"token"}
+
+
+def test_permissions_match_the_backend() -> None:
+    # Un permiso nuevo (como ai:use en la Fase 4J) debe existir también en la UI.
+    from app.core.permissions import Permission
+
+    assert set(_enum_values(_typescript(), "Permission")) == {p.value for p in Permission}

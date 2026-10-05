@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
 import { Link, useParams } from "react-router-dom";
-import { detectionsApi } from "../api/sentra";
+import { aiApi, detectionsApi } from "../api/sentra";
 import type { DetectionDetail, DetectionEvidence } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { config } from "../config";
@@ -10,6 +10,7 @@ import {
   DetectionSeverityBadge,
   DetectionStatusBadge,
 } from "../components/detections/DetectionBadges";
+import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
@@ -260,6 +261,14 @@ export function DetectionDetailPage() {
           <p className="muted">Sin evidencias registradas.</p>
         )}
       </section>
+
+      <AIAnalyzePanel
+        title="Explicación asistida por IA"
+        buttonLabel="Explicar con IA"
+        kind="detection_analysis"
+        detectionId={d.detection_id}
+        run={(refresh) => aiApi.analyzeDetection(d.detection_id, refresh)}
+      />
 
       <DetectionActions detection={d} onChanged={refresh} />
     </div>

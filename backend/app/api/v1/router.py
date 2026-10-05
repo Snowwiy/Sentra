@@ -3,6 +3,7 @@ from fastapi import APIRouter
 from app.api.responses import error_responses
 from app.api.v1.routes import (
     agents,
+    ai,
     alerts,
     assets,
     audit,
@@ -39,6 +40,7 @@ api_router.include_router(telemetry.router, responses=_COMMON)
 api_router.include_router(alerts.router, responses=_COMMON)
 api_router.include_router(detections.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
+api_router.include_router(ai.router, responses=_COMMON)
 api_router.include_router(inventory.router, responses=_COMMON)
 api_router.include_router(events.router, responses=_COMMON)
 api_router.include_router(processes.router, responses=_COMMON)

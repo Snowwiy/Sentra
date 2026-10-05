@@ -8,6 +8,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
+from app.ai.config import AIConfig
 from app.api.v1.router import api_router
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import get_settings
@@ -17,6 +18,7 @@ from app.core.middleware import request_logging_middleware
 from app.core.rate_limit import RateLimiter
 from app.db.migrations import expected_heads, is_up_to_date
 from app.db.session import get_engine, get_sessionmaker
+from app.services.ai_service import AIRuntime, default_provider_factory
 from app.services.auth_service import LoginGuard
 from app.services.background import (
     PeriodicJob,
@@ -141,6 +143,10 @@ def create_app() -> FastAPI:
     # Límites en memoria, uno por aplicación (core/rate_limit.py).
     app.state.login_guard = LoginGuard(settings)
     app.state.register_limiter = RateLimiter(settings.agent_register_max_per_minute, 60)
+    # Fase 4J: límites de la IA y fábrica del proveedor (los tests inyectan uno falso).
+    # Nada se conecta al proveedor al arrancar: la IA solo actúa bajo demanda.
+    app.state.ai_runtime = AIRuntime(AIConfig.from_settings(settings))
+    app.state.ai_provider_factory = default_provider_factory
     app.include_router(api_router)
     return app
 

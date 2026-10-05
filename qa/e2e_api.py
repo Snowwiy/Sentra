@@ -1228,6 +1228,37 @@ def test_risk() -> None:
         call("PATCH", f"/users/{created.body['user_id']}", {"is_active": False})
 
 
+def test_ai() -> None:
+    """Fase 4J: AI Security Insights sobre HTTP real (sin depender de un modelo).
+
+    Con la IA desactivada (por defecto en QA) comprueba que Sentra responde con un error
+    controlado y que nada más cambia. Si la instancia QA tiene un modelo configurado, pide
+    además un análisis real y valida que las referencias sean datos de Sentra.
+    """
+    r = call("GET", "/ai/status")
+    check("ai status readable", r.status == 200 and "available" in r.body, (r.status, r.body))
+    status = r.body if isinstance(r.body, dict) else {}
+    check("ai status never exposes key or url", "api_key" not in json.dumps(status).lower()
+          and "base_url" not in json.dumps(status).lower(), status)  # fmt: skip
+    r = call("POST", "/ai/ask", {"question": "¿Qué pasa?"}, session={})
+    check("ai ask without session -> 401", r.status == 401, r.status)
+    r = call("POST", "/ai/ask", {"question": "¿Qué pasa?", "model": "x", "base_url": "http://x"})
+    check("client cannot choose model or url -> 422", r.status == 422, (r.status, r.body))
+    _, _, asset_id = enroll("qa-ai")
+    r = call("POST", f"/ai/assets/{asset_id}/analyze", {})
+    if not status.get("available"):
+        check(
+            "ai disabled -> 409 ai_not_configured",
+            r.status == 409 and is_error_envelope(r, "ai_not_configured"),
+            (r.status, r.body),
+        )
+    else:
+        check("ai asset analysis", r.status == 200, (r.status, r.body))
+        refs = r.body.get("result", {}).get("evidence_refs", []) if r.status == 200 else []
+        check("ai evidence refs are Sentra ids", all(ref.get("id") for ref in refs), refs)
+    check("dashboard unaffected by ai", call("GET", f"/risk/assets/{asset_id}").status == 200)
+
+
 def test_auth() -> None:
     """Fase 4G: login, sesión, CSRF, permisos y separación de credenciales sobre HTTP real."""
     for path in ("/assets", "/alerts", "/events", "/agents", "/discovery/jobs", "/users"):
@@ -1321,6 +1352,7 @@ def main() -> int:
         test_enrollment_tokens,
         test_detections,
         test_risk,
+        test_ai,
         test_auth,
     ]
     if args.offline:

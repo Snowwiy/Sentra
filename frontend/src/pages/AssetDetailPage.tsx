@@ -1,9 +1,10 @@
 import { useCallback } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { sentraApi } from "../api/sentra";
+import { aiApi, sentraApi } from "../api/sentra";
 import { AlertsView } from "../components/AlertsView";
 import { AgentPanel } from "../components/asset/AgentPanel";
+import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { ChangesList } from "../components/asset/ChangesList";
 import { EventsTab } from "../components/asset/EventsTab";
 import { ExposureTab } from "../components/asset/ExposureTab";
@@ -218,6 +219,13 @@ export function AssetDetailPage() {
         {tab === "overview" && (
           <div className="stack">
             <OverviewTab asset={asset} />
+            <AIAnalyzePanel
+              title="AI Insights del activo"
+              buttonLabel="Analizar con IA"
+              kind="asset_summary"
+              assetId={asset.asset_id}
+              run={(refresh) => aiApi.analyzeAsset(asset.asset_id, refresh)}
+            />
             {managed && <AgentPanel assetId={asset.asset_id} />}
           </div>
         )}

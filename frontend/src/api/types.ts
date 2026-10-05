@@ -580,7 +580,8 @@ export type Permission =
   | "agents:manage"
   | "enrollment:manage"
   | "users:manage"
-  | "audit:read";
+  | "audit:read"
+  | "ai:use";
 
 export interface CurrentUser {
   user_id: string;
@@ -873,4 +874,89 @@ export interface RiskContributionList {
   calculated_at: IsoDateTime | null;
   score: number | null;
   items: RiskContribution[];
+}
+
+// --- Fase 4J: AI Security Insights ----------------------------------------------------------
+
+export type InsightKind = "asset_summary" | "detection_analysis" | "risk_explanation" | "soc_summary" | "ask";
+export type InsightScope = "asset" | "detection" | "fleet";
+/** Vocabulario de certeza que exige el backend a cada hallazgo. */
+export type Certainty = "observed" | "detected" | "correlated" | "possible" | "requires_validation";
+export type AIWindow = "24h" | "7d" | "30d";
+
+/** Referencia a un dato real de Sentra (validada por el backend; el modelo no inventa IDs). */
+export interface EvidenceRef {
+  ref: string;
+  type: string;
+  id: string;
+  label: string;
+  asset_id: string | null;
+}
+
+export interface InsightFinding {
+  text: string;
+  certainty: Certainty;
+  evidence: string[];
+}
+
+export interface InsightAction {
+  text: string;
+  evidence: string[];
+}
+
+export interface InsightResult {
+  summary: string;
+  assessment: string;
+  confidence_note: string;
+  key_findings: InsightFinding[];
+  recommended_actions: InsightAction[];
+  evidence_refs: EvidenceRef[];
+  limitations: string[];
+  insufficient_data: boolean;
+  warnings: string[];
+  dropped_refs: number;
+}
+
+export interface Insight {
+  insight_id: string;
+  kind: InsightKind;
+  scope: InsightScope;
+  asset_id: string | null;
+  asset_name: string | null;
+  detection_id: string | null;
+  risk_snapshot_id: string | null;
+  question: string | null;
+  provider: string;
+  model: string;
+  prompt_version: string;
+  generated_at: string;
+  expires_at: string;
+  stale: boolean;
+  stale_reason: "expired" | "data_changed" | "entity_deleted" | null;
+  cached: boolean;
+  evidence_count: number;
+  context_items: number;
+  latency_ms: number | null;
+  requested_by: string;
+  result: InsightResult;
+}
+
+export interface InsightList {
+  items: Insight[];
+  total: number;
+}
+
+/** Estado de la IA. Nunca incluye la URL ni la clave del proveedor. */
+export interface AIStatus {
+  enabled: boolean;
+  available: boolean;
+  reason: string | null;
+  provider: string | null;
+  model: string | null;
+  location: "local" | "external" | null;
+  external_allowed: boolean;
+  redaction: string[];
+  max_context_items: number;
+  rate_limit_per_user_per_minute: number;
+  prompt_versions: Record<string, string>;
 }

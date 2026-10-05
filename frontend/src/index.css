@@ -1620,3 +1620,153 @@ td > .badge:first-child {
 .risk-trend__dot {
   fill: var(--accent);
 }
+
+/* AI Security Insights (Fase 4J): el análisis del modelo se distingue visualmente de los
+   datos deterministas de Sentra (borde punteado y etiqueta "Análisis de IA"). */
+
+.ai-panel__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.ai-insight {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.ai-meta {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.ai-section {
+  padding: 10px 12px;
+  border-radius: var(--radius);
+}
+
+.ai-section h3 {
+  margin: 0 0 6px;
+  font-size: 0.85rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+}
+
+.ai-section h4 {
+  margin: 10px 0 4px;
+  font-size: 0.85rem;
+}
+
+.ai-section p {
+  margin: 4px 0;
+}
+
+.ai-section--model {
+  border: 1px dashed var(--accent);
+  background: color-mix(in srgb, var(--accent) 6%, var(--surface));
+  /* Texto del modelo: nunca HTML, y saltos largos sin desbordar. */
+  overflow-wrap: anywhere;
+}
+
+.ai-section--data {
+  border: 1px solid var(--border);
+  background: var(--surface-2);
+}
+
+.ai-disclaimer {
+  color: var(--warn);
+}
+
+.ai-findings,
+.ai-evidence,
+.ai-history {
+  margin: 0;
+  padding-left: 18px;
+}
+
+.ai-history {
+  padding-left: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.ai-history__item {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  text-align: left;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  font: inherit;
+}
+
+.ai-certainty {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+}
+
+.ai-certainty--detected,
+.ai-certainty--correlated {
+  border-color: var(--accent);
+  color: var(--accent);
+}
+
+.ai-certainty--observed {
+  border-color: var(--ok);
+  color: var(--ok);
+}
+
+.ai-certainty--possible,
+.ai-certainty--requires_validation {
+  border-color: var(--warn);
+  color: var(--warn);
+}
+
+.ai-refs {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.ai-ref {
+  display: inline-block;
+  padding: 0 6px;
+  font-size: 0.75rem;
+  border-radius: 4px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+
+.ai-ask textarea {
+  width: 100%;
+  resize: vertical;
+}
+
+.ai-soc {
+  margin-top: 12px;
+  align-items: center;
+}
+
+.ai-warnings {
+  margin: 0;
+  padding-left: 28px;
+}

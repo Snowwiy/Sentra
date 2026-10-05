@@ -183,7 +183,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
     body = response.json()
     assert body["user"]["username"] == "ana" and body["user"]["role"] == "analyst"
     assert set(body["permissions"]) == {
-        "monitoring:read", "alerts:manage", "detections:manage", "discovery:run",
+        "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -450,12 +450,13 @@ def test_last_admin_guard_in_the_service(db: Session) -> None:
 
 
 def test_role_permissions_are_least_privilege() -> None:
-    writes = set(Permission) - {Permission.MONITORING_READ}
-    assert ROLE_PERMISSIONS[Role.VIEWER] == {Permission.MONITORING_READ}
+    # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer.
+    writes = set(Permission) - {Permission.MONITORING_READ, Permission.AI_USE}
+    assert ROLE_PERMISSIONS[Role.VIEWER] == {Permission.MONITORING_READ, Permission.AI_USE}
     assert not writes & ROLE_PERMISSIONS[Role.VIEWER]
     assert ROLE_PERMISSIONS[Role.ANALYST] == {
         Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DETECTIONS_MANAGE,
-        Permission.DISCOVERY_RUN,
+        Permission.DISCOVERY_RUN, Permission.AI_USE,
     }  # fmt: skip
     assert ROLE_PERMISSIONS[Role.ADMIN] == set(Permission)
     # Un rol desconocido (BD manipulada) o con otra capitalización no hereda nada.
@@ -554,7 +555,9 @@ def _api_routes(client: TestClient) -> list[tuple[str, str]]:
 
 
 def _concrete(path: str) -> str:
-    for name in ("asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id"):
+    for name in (
+        "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
+    ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     assert "{" not in path, path
     return path
@@ -577,6 +580,15 @@ def test_no_dashboard_endpoint_is_public(client: TestClient, anonymous: TestClie
 
 # Mutaciones que cualquier usuario autenticado puede hacer sobre sí mismo.
 SELF_SERVICE = {("POST", "/api/v1/auth/logout"), ("POST", "/api/v1/auth/password")}
+# Fase 4J: pedir un análisis de IA (ai:use, también viewer). No modifica activos,
+# detecciones, riesgo, alertas ni usuarios: solo guarda el insight de quien lo pidió.
+AI_ANALYSIS = {
+    ("POST", "/api/v1/ai/ask"),
+    ("POST", "/api/v1/ai/assets/{asset_id}/analyze"),
+    ("POST", "/api/v1/ai/detections/{detection_id}/analyze"),
+    ("POST", "/api/v1/ai/risk/assets/{asset_id}/analyze"),
+    ("POST", "/api/v1/ai/soc/analyze"),
+}
 
 
 def test_viewer_cannot_mutate_anything(client: TestClient, engine: Engine, db: Session) -> None:
@@ -587,6 +599,13 @@ def test_viewer_cannot_mutate_anything(client: TestClient, engine: Engine, db: S
         checked = 0
         for method, path in _api_routes(client):
             if method == "GET" or (method, path) in NON_SESSION_ROUTES | SELF_SERVICE:
+                continue
+            if (method, path) in AI_ANALYSIS:
+                # Permitido al viewer; con la IA desactivada (por defecto) responde 409.
+                body = {"question": "hola?"} if path.endswith("/ask") else {}
+                response = viewer.request(method, _concrete(path), json=body)
+                assert response.status_code == 409, (method, path, response.status_code)
+                assert response.json()["error"]["code"] == "ai_not_configured"
                 continue
             response = viewer.request(method, _concrete(path), json={})
             assert response.status_code == 403, (method, path, response.status_code)

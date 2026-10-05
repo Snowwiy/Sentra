@@ -71,6 +71,22 @@ describe("frontend security", () => {
     }
   });
 
+  // Fase 4J: el texto del modelo nunca se interpreta como HTML, la UI de IA no persiste ni
+  // registra nada y ninguna clave o URL de proveedor de IA llega al bundle.
+  it("AI insights code renders text only and never persists, logs or holds AI secrets", () => {
+    const files = sources(SRC).filter((f) => /components[\\/]ai|AIInsightsPage|lib[\\/]ai/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /dangerouslySetInnerHTML|innerHTML|localStorage|sessionStorage|indexedDB|console\.(log|info|debug|warn|error)|window\.open|navigator\.clipboard|eval\(/,
+      );
+    }
+    for (const file of sources(SRC)) {
+      expect(readFileSync(file, "utf8"), relative(FRONTEND, file)).not.toMatch(/AI_API_KEY|AI_BASE_URL|AI_MODEL|\bapi_key\b|ai_base_url/i);
+    }
+  });
+
   it("no longer uses the temporary local console marker", () => {
     for (const file of sources(SRC)) {
       const text = readFileSync(file, "utf8");

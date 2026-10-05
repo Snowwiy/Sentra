@@ -32,6 +32,18 @@ const AUTH_MESSAGES: Record<string, string> = {
   last_admin: "Sentra debe conservar al menos un administrador activo.",
 };
 
+// Errores de AI Security Insights (Fase 4J): mensajes claros sin detalles del proveedor.
+const AI_MESSAGES: Record<string, string> = {
+  ai_not_configured: "IA no configurada en el servidor.",
+  ai_busy: "Hay otros análisis de IA en curso. Inténtalo en unos segundos.",
+  ai_timeout: "El modelo de IA no respondió a tiempo.",
+  ai_provider_unavailable: "El proveedor de IA no está disponible.",
+  ai_provider_rate_limited: "El proveedor de IA está limitando peticiones. Inténtalo más tarde.",
+  ai_provider_auth_failed: "El proveedor de IA rechazó las credenciales del servidor.",
+  ai_invalid_response: "El modelo devolvió una respuesta no válida.",
+  ai_ungrounded_response: "La respuesta del modelo no citaba evidencia válida de Sentra y se descartó.",
+};
+
 // Motivos de la política de usuarios/contraseñas (backend core/passwords.py), en español.
 const POLICY_MESSAGES: [RegExp, string][] = [
   [/^Password must be at least (\d+)/, "La contraseña debe tener al menos $1 caracteres."],
@@ -48,6 +60,9 @@ const POLICY_MESSAGES: [RegExp, string][] = [
 
 function translate(code: string, message: string): string {
   if (AUTH_MESSAGES[code]) return AUTH_MESSAGES[code];
+  // ai_not_configured trae el motivo concreto del servidor (ya en español).
+  if (code === "ai_not_configured") return message || "IA no configurada en el servidor.";
+  if (AI_MESSAGES[code]) return AI_MESSAGES[code];
   for (const [pattern, spanish] of POLICY_MESSAGES) {
     if (pattern.test(message)) return message.replace(pattern, spanish).replace(/^(.*?\.).*$/, "$1");
   }

@@ -39,10 +39,13 @@ class Permission(enum.StrEnum):
     USERS_MANAGE = "users:manage"
     # Registro de auditoría.
     AUDIT_READ = "audit:read"
+    # AI Security Insights (Fase 4J): pedir análisis de IA sobre datos que el rol ya puede
+    # leer (se exige junto con monitoring:read; nunca amplía lo que el rol ve).
+    AI_USE = "ai:use"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
-    Role.VIEWER: frozenset({Permission.MONITORING_READ}),
+    Role.VIEWER: frozenset({Permission.MONITORING_READ, Permission.AI_USE}),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
     # pero no gestiona credenciales (agentes, tokens de enrollment) ni usuarios.
     Role.ANALYST: frozenset(
@@ -51,6 +54,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ALERTS_MANAGE,
             Permission.DETECTIONS_MANAGE,
             Permission.DISCOVERY_RUN,
+            Permission.AI_USE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

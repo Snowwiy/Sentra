@@ -234,6 +234,64 @@ class Settings(BaseSettings):
     # Snapshots de riesgo más antiguos se borran. Sin valor (por defecto) no se borra nada.
     risk_history_retention_days: int | None = Field(default=None, ge=1)
 
+    # --- Fase 4J: AI Security Insights (ver docs/ai-security-insights.md) ---
+    # Apagado por defecto: Sentra funciona completo sin IA. Encenderlo solo habilita el
+    # análisis bajo demanda; la ingesta, las detecciones y el riesgo nunca dependen de él.
+    ai_enabled: bool = False
+    # Único protocolo soportado: API de chat compatible con OpenAI (/v1/chat/completions),
+    # que exponen tanto servidores locales (llama.cpp, vLLM, LM Studio, Ollama...) como
+    # proveedores externos. El cliente nunca puede elegir proveedor, URL ni modelo.
+    ai_provider: Literal["openai_compatible"] = "openai_compatible"
+    # URL base que termina en /v1, p. ej. http://127.0.0.1:11434/v1. Sin query ni fragmento.
+    ai_base_url: str | None = Field(
+        default=None, pattern=r"^https?://[A-Za-z0-9.\-\[\]:]+(/[A-Za-z0-9._~/-]*)?$"
+    )
+    ai_model: str | None = Field(default=None, max_length=128)
+    # Solo servidor: nunca se registra, nunca se audita y nunca llega al navegador.
+    ai_api_key: SecretStr | None = None
+    # Tiempo total máximo de una llamada (incluye conexión y lectura) y límites parciales.
+    ai_timeout_seconds: int = Field(default=60, ge=5, le=600)
+    ai_connect_timeout_seconds: float = Field(default=5, gt=0, le=60)
+    ai_read_timeout_seconds: float = Field(default=45, gt=0, le=600)
+    # Elementos de contexto (detecciones, contribuciones, puertos, evidencias) por análisis.
+    ai_max_context_items: int = Field(default=40, ge=5, le=200)
+    ai_max_output_tokens: int = Field(default=1200, ge=200, le=8000)
+    # Proveedores externos (fuera de loopback/red privada/AI_LOCAL_HOSTS) bloqueados salvo
+    # permiso explícito: los datos de seguridad no salen del servidor sin decisión del admin.
+    ai_allow_external: bool = False
+    # Nombres de host que se consideran locales (servidor de IA propio en la LAN).
+    ai_local_hosts: str = ""
+    # Datos que se seudonimizan antes de enviarlos: usernames, hostnames, ips, paths.
+    ai_redact: str = ""
+    # Pide response_format JSON al servidor. Algunos servidores locales no lo aceptan.
+    ai_json_mode: bool = True
+    # Un insight se marca stale al caducar o cuando cambian los datos que lo respaldan.
+    ai_insight_ttl_minutes: int = Field(default=60, ge=1, le=10_080)
+    # Llamadas reales al modelo (no las respuestas de caché) por usuario y en total.
+    ai_rate_limit_per_user_per_minute: int = Field(default=6, ge=1, le=1000)
+    ai_rate_limit_global_per_minute: int = Field(default=30, ge=1, le=10_000)
+    # Llamadas simultáneas al modelo; el resto recibe 429 en vez de ocupar hilos esperando.
+    ai_max_concurrent: int = Field(default=2, ge=1, le=32)
+    # Reintentos ante JSON inválido (0 = ninguno).
+    ai_max_retries: int = Field(default=1, ge=0, le=3)
+
+    @field_validator("ai_redact")
+    @classmethod
+    def _check_ai_redact(cls, value: str) -> str:
+        unknown = set(parse_name_list(value.lower())) - {"usernames", "hostnames", "ips", "paths"}
+        if unknown:
+            raise ValueError(f"AI_REDACT has unknown values: {sorted(unknown)}")
+        return value
+
+    @field_validator("ai_base_url", "ai_model", mode="before")
+    @classmethod
+    def _blank_ai_values(cls, value: object) -> object:
+        # `AI_BASE_URL=` en .env significa "sin configurar", no un valor inválido.
+        if isinstance(value, str):
+            value = value.strip().rstrip("/") if value.strip().startswith("http") else value.strip()
+            return value or None
+        return value
+
     @field_validator("agent_server_url", mode="before")
     @classmethod
     def _blank_server_url(cls, value: object) -> object:
