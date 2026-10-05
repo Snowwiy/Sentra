@@ -17,6 +17,7 @@ import hashlib
 import json
 import logging
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -30,7 +31,7 @@ from app.ai.config import AIConfig
 from app.ai.context import AIContext, ContextBuilder
 from app.ai.freshness import data_version
 from app.ai.intent import resolve_scope
-from app.ai.openai_compat import OpenAICompatibleProvider
+from app.ai.openai_compat import OpenAICompatibleProvider, ProviderHealth
 from app.ai.output import ground, insufficient_result, parse_json
 from app.ai.prompts import TEMPLATES, InsightKind
 from app.ai.provider import (
@@ -39,7 +40,9 @@ from app.ai.provider import (
     AIInvalidResponseError,
     AINotConfiguredError,
     AIProvider,
+    AIProviderUnavailableError,
     AIRequest,
+    AITimeoutError,
 )
 from app.ai.redaction import Redactor
 from app.core.config import Settings
@@ -50,7 +53,7 @@ from app.models.asset import Asset
 from app.models.detection import Detection
 from app.models.risk import RiskSnapshot
 from app.risk.config import RiskConfig
-from app.schemas.ai import AIStatus, InsightList, InsightRead, InsightResult
+from app.schemas.ai import AIProviderState, AIStatus, InsightList, InsightRead, InsightResult
 from app.services import audit_service
 from app.services.audit_service import Actor
 
@@ -63,6 +66,17 @@ def default_provider_factory(config: AIConfig) -> AIProvider:
     return OpenAICompatibleProvider(config)
 
 
+# El estado del proveedor se cachea: la UI consulta /ai/status en cada página con IA y no
+# queremos una conexión al modelo por cada visita.
+HEALTH_TTL_SECONDS = 15.0
+
+
+@dataclass(frozen=True)
+class HealthResult:
+    health: ProviderHealth
+    checked_at: datetime
+
+
 class AIRuntime:
     """Estado por proceso: límites de frecuencia y de concurrencia (como el login)."""
 
@@ -72,12 +86,61 @@ class AIRuntime:
         # Acotar llamadas simultáneas: cada una ocupa un hilo del threadpool de la API
         # hasta AI_TIMEOUT_SECONDS; sin tope, un bucle de peticiones lo agotaría.
         self.slots = threading.BoundedSemaphore(config.max_concurrent)
+        self._health_lock = threading.Lock()
+        self._health: tuple[float, str, HealthResult | None] | None = None
+
+    def health(self, config: AIConfig, factory: ProviderFactory) -> HealthResult | None:
+        """Health check del proveedor configurado, cacheado HEALTH_TTL_SECONDS.
+
+        Solo se llama con la IA activada y el destino permitido (ver AIInsightService.status):
+        con AI_ENABLED=false o un externo bloqueado no se abre ninguna conexión. El lock evita
+        que varias pestañas disparen sondeos simultáneos; cada sondeo dura como mucho ~5 s.
+        """
+        key = f"{config.base_url}|{config.model}"
+        with self._health_lock:
+            cached = self._health
+            if cached and cached[1] == key and time.monotonic() - cached[0] < HEALTH_TTL_SECONDS:
+                return cached[2]
+            result: HealthResult | None
+            try:
+                provider = factory(config)
+            except (ValueError, AIError) as exc:
+                detail = exc.message if isinstance(exc, AIError) else "Invalid AI configuration"
+                result = HealthResult(ProviderHealth(False, 0, detail), datetime.now(UTC))
+            else:
+                check = getattr(provider, "check", None)
+                result = HealthResult(check(), datetime.now(UTC)) if callable(check) else None
+            self._health = (time.monotonic(), key, result)
+            return result
+
+    def forget_health(self) -> None:
+        # Tras un fallo real del modelo, el próximo /ai/status vuelve a comprobarlo.
+        with self._health_lock:
+            self._health = None
 
 
 @dataclass(frozen=True)
 class Requester:
     actor: Actor
     user_id: int
+
+
+def _provider_state(
+    config: AIConfig, reason: str | None, health: HealthResult | None
+) -> AIProviderState:
+    """Estado legible del proveedor: Disabled, Local/External y Available/Unavailable/Blocked."""
+    if not config.enabled:
+        return "disabled"
+    if not config.base_url or not config.model:
+        return "not_configured"
+    if reason is not None:
+        # Destino no permitido (externo sin AI_ALLOW_EXTERNAL, IP privada no autorizada...).
+        return "external_blocked"
+    location = config.location or "external"
+    # Sin health check (proveedor sin `check`) no afirmamos que esté caído.
+    if health is None or health.health.reachable:
+        return "local_available" if location == "local" else "external_available"
+    return "local_unavailable" if location == "local" else "external_unavailable"
 
 
 class AIInsightService:
@@ -101,10 +164,23 @@ class AIInsightService:
     def status(self) -> AIStatus:
         c = self._config
         reason = c.unavailable_reason()
+        # Sin IA activada o con el destino bloqueado no se sondea nada (cero conexiones).
+        health = self._runtime.health(c, self._factory) if reason is None else None
+        state = _provider_state(c, reason, health)
         return AIStatus(
             enabled=c.enabled,
             available=reason is None,
             reason=reason,
+            state=state,
+            mode_label=(
+                ("Local AI" if c.location == "local" else "External AI")
+                if c.enabled and c.location
+                else None
+            ),
+            reachable=health.health.reachable if health else None,
+            health_detail=health.health.detail if health else None,
+            health_latency_ms=health.health.latency_ms if health else None,
+            checked_at=health.checked_at if health else None,
             provider=c.provider if c.enabled else None,
             model=c.model if c.enabled else None,
             location=c.location,
@@ -391,7 +467,14 @@ class AIInsightService:
         latency = 0
         attempts = config.max_retries + 1
         for attempt in range(attempts):
-            response = provider.complete(request)
+            # Solo se reintenta ante JSON inválido y contra el MISMO proveedor. Un fallo de
+            # conexión, timeout o error HTTP se propaga tal cual: no hay fallback a otro
+            # proveedor (ni cloud) y el resto de Sentra no se ve afectado (4J.1).
+            try:
+                response = provider.complete(request)
+            except (AIProviderUnavailableError, AITimeoutError):
+                self._runtime.forget_health()
+                raise
             latency += response.latency_ms
             output_chars += len(response.content)
             try:

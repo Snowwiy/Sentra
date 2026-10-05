@@ -27,7 +27,7 @@ from app.ai.provider import (
     AIUngroundedResponseError,
 )
 from app.ai.redaction import Redactor
-from app.core.config import Settings, get_settings
+from app.core.config import Settings, get_settings, parse_ai_local_networks
 
 KEY = "sk-unit-test-secret-value"
 Handler = Callable[[BaseHTTPRequestHandler, dict[str, Any]], None]
@@ -174,6 +174,8 @@ def test_provider_unreachable_is_unavailable() -> None:
 
 def test_local_or_external_by_configured_url() -> None:
     local_hosts = frozenset({"servidor-ia"})
+    # 4J.1: una IP privada solo es local si su red está en AI_LOCAL_NETWORKS.
+    networks = parse_ai_local_networks("192.168.50.0/24,10.0.0.0/8")
     for url in (
         "http://127.0.0.1:11434/v1",
         "http://localhost:8080/v1",
@@ -182,14 +184,16 @@ def test_local_or_external_by_configured_url() -> None:
         "http://[::1]:8000/v1",
         "http://servidor-ia:9000/v1",
     ):
-        assert classify_location(url, local_hosts) == "local", url
+        assert classify_location(url, local_hosts, networks) == "local", url
     for url in (
         "https://api.openai.com/v1",
         "http://8.8.8.8/v1",
+        "http://192.168.51.10/v1",
+        "http://172.16.0.5/v1",
         # Un nombre no listado es externo aunque resuelva a una IP privada (fail closed).
         "http://ia.empresa.lan/v1",
     ):
-        assert classify_location(url, local_hosts) == "external", url
+        assert classify_location(url, local_hosts, networks) == "external", url
 
 
 def test_settings_validation_and_config_never_prints_the_key() -> None:

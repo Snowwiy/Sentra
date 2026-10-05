@@ -1240,6 +1240,10 @@ def test_ai() -> None:
     status = r.body if isinstance(r.body, dict) else {}
     check("ai status never exposes key or url", "api_key" not in json.dumps(status).lower()
           and "base_url" not in json.dumps(status).lower(), status)  # fmt: skip
+    # Fase 4J.1: estado del proveedor legible (local/externo y disponible/caído/bloqueado).
+    check("ai status reports provider state", status.get("state") in {
+        "disabled", "not_configured", "local_available", "local_unavailable",
+        "external_blocked", "external_available", "external_unavailable"}, status)  # fmt: skip
     r = call("POST", "/ai/ask", {"question": "¿Qué pasa?"}, session={})
     check("ai ask without session -> 401", r.status == 401, r.status)
     r = call("POST", "/ai/ask", {"question": "¿Qué pasa?", "model": "x", "base_url": "http://x"})

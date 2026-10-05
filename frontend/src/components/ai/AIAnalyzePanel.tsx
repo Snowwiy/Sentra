@@ -6,7 +6,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { aiApi } from "../../api/sentra";
-import type { AIStatus, Insight, InsightKind } from "../../api/types";
+import type { AIProviderState, AIStatus, Insight, InsightKind } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { errorMessage } from "../../lib/format";
 import { InsightView } from "./InsightView";
@@ -25,6 +25,43 @@ export function useAIStatus(): { status?: AIStatus; error?: Error } {
     return () => controller.abort();
   }, []);
   return { status, error };
+}
+
+const STATE_LABELS: Record<AIProviderState, string> = {
+  disabled: "Desactivada",
+  not_configured: "Sin configurar",
+  local_available: "Disponible",
+  local_unavailable: "No disponible",
+  external_blocked: "Bloqueado",
+  external_available: "Disponible",
+  external_unavailable: "No disponible",
+};
+
+/**
+ * Modo, modelo y estado del proveedor. Se muestra "Local AI" o "External AI" según dónde
+ * está el servidor, nunca el nombre del protocolo: un modelo local OpenAI-compatible no es
+ * "OpenAI".
+ */
+export function AIProviderBadge({ status }: { status: AIStatus }) {
+  const ok = status.state === "local_available" || status.state === "external_available";
+  const tone = ok ? "badge--ok" : status.state === "disabled" || status.state === "not_configured" ? "" : "badge--warn";
+  const parts = [status.mode_label ?? "IA", status.model, STATE_LABELS[status.state]].filter(Boolean);
+  return (
+    <span className={`badge ${tone}`.trim()} aria-label="Estado de la IA">
+      {parts.join(" · ")}
+    </span>
+  );
+}
+
+export function AIUnreachable({ status }: { status: AIStatus }) {
+  if (status.reachable !== false) return null;
+  return (
+    <p className="banner banner--warn small" role="note">
+      {status.location === "local"
+        ? "El servidor de IA local no responde. Sentra sigue funcionando; no se usará ningún otro proveedor."
+        : "El proveedor de IA no responde. Sentra sigue funcionando sin IA."}
+    </p>
+  );
 }
 
 export function AINotAvailable({ status }: { status: AIStatus }) {
@@ -100,6 +137,7 @@ export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId,
       </div>
       {statusError && <p className="muted small">No se pudo consultar el estado de la IA.</p>}
       {status && !status.available && <AINotAvailable status={status} />}
+      {status?.available && <AIUnreachable status={status} />}
       {error && (
         <p className="banner banner--warn" role="alert">
           {error}

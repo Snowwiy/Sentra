@@ -6,7 +6,7 @@
 import { useCallback, useState } from "react";
 import { aiApi } from "../api/sentra";
 import type { AIWindow, Insight } from "../api/types";
-import { AINotAvailable, useAIStatus } from "../components/ai/AIAnalyzePanel";
+import { AINotAvailable, AIProviderBadge, AIUnreachable, useAIStatus } from "../components/ai/AIAnalyzePanel";
 import { InsightMeta, InsightView } from "../components/ai/InsightView";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { config } from "../config";
@@ -59,11 +59,8 @@ export function AIInsightsPage() {
         <h1>AI Security Insights</h1>
         {status && (
           <span className="muted small">
-            {status.available
-              ? `Modelo ${status.model ?? "—"} · ${status.location === "external" ? "proveedor externo" : "local"}${
-                  status.redaction.length ? ` · seudonimiza ${status.redaction.join(", ")}` : ""
-                }`
-              : "IA no disponible"}
+            <AIProviderBadge status={status} />
+            {status.available && status.redaction.length ? ` · seudonimiza ${status.redaction.join(", ")}` : ""}
           </span>
         )}
       </div>
@@ -73,6 +70,7 @@ export function AIInsightsPage() {
           <AINotAvailable status={status} />
         </section>
       )}
+      {status && available && <AIUnreachable status={status} />}
 
       {available && (
         <section className="panel panel--padded ai-ask" aria-label="Ask Sentra AI">

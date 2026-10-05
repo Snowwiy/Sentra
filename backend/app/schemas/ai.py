@@ -105,6 +105,19 @@ class InsightList(ResponseModel):
     total: int
 
 
+# Estado del proveedor (4J.1). "Local" se decide por AI_BASE_URL/AI_LOCAL_NETWORKS, nunca por
+# el protocolo: un servidor local OpenAI-compatible es "Local AI", no "OpenAI".
+AIProviderState = Literal[
+    "disabled",
+    "not_configured",
+    "local_available",
+    "local_unavailable",
+    "external_blocked",
+    "external_available",
+    "external_unavailable",
+]
+
+
 class AIStatus(ResponseModel):
     """Estado de la IA para la UI. Nunca incluye la clave ni la URL del proveedor."""
 
@@ -113,6 +126,15 @@ class AIStatus(ResponseModel):
     available: bool
     # Motivo legible cuando no está disponible ("IA no configurada...").
     reason: str | None
+    state: AIProviderState
+    # "Local AI" / "External AI" para la UI (None si la IA está desactivada).
+    mode_label: Literal["Local AI", "External AI"] | None
+    # Resultado del último health check (cacheado unos segundos); None si no se sondeó.
+    reachable: bool | None
+    health_detail: str | None
+    health_latency_ms: int | None
+    checked_at: datetime | None
+    # Protocolo del cliente (openai_compatible), no el fabricante del modelo.
     provider: str | None
     model: str | None
     # local / external según AI_BASE_URL (ver app/ai/config.py).

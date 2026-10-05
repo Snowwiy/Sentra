@@ -1,4 +1,4 @@
-# AI Security Insights (Fase 4J)
+# AI Security Insights (Fases 4J y 4J.1)
 
 Capa de interpretación asistida por IA sobre los datos que Sentra ya calculó. Ayuda al
 analista a responder "¿qué está pasando?", "¿por qué importa?", "¿qué evidencia lo
@@ -8,6 +8,32 @@ vienen de esos motores deterministas; el modelo solo los interpreta.
 
 Está **desactivada por defecto** (`AI_ENABLED=false`). Sin IA, Sentra funciona exactamente
 igual: ingesta, detecciones, riesgo, alertas y dashboard. La UI muestra "IA no configurada".
+
+**Local-first (Fase 4J.1).** El modo recomendado es **Local AI**: un servidor de modelos en
+la misma máquina o en una LAN privada autorizada. Ninguna función de Sentra necesita OpenAI,
+Anthropic, Gemini, Azure OpenAI, AWS Bedrock ni ningún proveedor cloud, y por defecto ningún
+dato de seguridad sale de la infraestructura de Sentra.
+
+## Arquitectura recomendada: Sentra Server + Local Model Server
+
+```
+              red interna / misma máquina
+┌──────────────────┐  POST /v1/chat/completions  ┌──────────────────────────┐
+│  Sentra Server   │ ──────────────────────────> │  Local Model Server      │
+│  (API + BD)      │ <────────────────────────── │  Ollama, llama.cpp,      │
+│  AI_ENABLED=true │      JSON (análisis)        │  vLLM u otro compatible  │
+└──────────────────┘                             └──────────────────────────┘
+        ✗  sin tráfico a Internet: AI_ALLOW_EXTERNAL=false (por defecto)
+```
+
+- El servidor de modelos expone la API de chat compatible con OpenAI en `/v1`. Es solo un
+  **protocolo**: Sentra no habla con OpenAI ni depende de ningún fabricante, y la UI lo
+  presenta como "Local AI", nunca como "OpenAI".
+- Funciona sin Internet y sin DNS externo si `AI_BASE_URL` usa una IP literal (`127.0.0.1`,
+  `::1`, IP de la LAN) o `localhost`.
+- Si el modelo local se apaga o no responde, solo falla la petición de análisis que lo pidió
+  (`502 ai_provider_unavailable` / `504 ai_timeout`). Ingesta, detecciones, riesgo, alertas y
+  dashboard siguen igual, y **no hay fallback automático** a otro proveedor (ni cloud).
 
 ## Arquitectura
 
@@ -72,22 +98,57 @@ Lecturas: `GET /ai/status`, `GET /ai/insights` (filtros `kind`, `asset_id`, `det
 ## Proveedores: local y externo
 
 Un único protocolo: la API de chat compatible con OpenAI, que exponen servidores locales
-(llama.cpp server, vLLM, LM Studio, Ollama en `/v1`, LocalAI...) y proveedores externos. No hay
-SDK ni dependencia nueva, y no se asume ninguna plataforma concreta.
+(Ollama en `/v1`, llama.cpp server, vLLM, LM Studio, LocalAI...) y, opcionalmente, proveedores
+externos. No hay SDK ni dependencia nueva, y no se asume ninguna plataforma concreta.
+`AI_API_KEY` es opcional: sin clave no se envía `Authorization` (no hace falta clave dummy).
 
 **Local vs externo** se decide solo con `AI_BASE_URL`, sin resolver DNS (fail closed):
 
-- local: IP literal de loopback, privada (RFC 1918, ULA) o link-local, `localhost`, o un nombre
-  listado en `AI_LOCAL_HOSTS` (p. ej. `servidor-ia`);
-- externo: cualquier otro nombre o IP pública.
+- local: loopback (`127.0.0.0/8`, `::1`), `localhost`, una IP dentro de `AI_LOCAL_NETWORKS`
+  o un nombre listado en `AI_LOCAL_HOSTS`;
+- externo: cualquier otro nombre o IP. **Una IP privada fuera de `AI_LOCAL_NETWORKS` es
+  externa**: la LAN se autoriza de forma explícita, no por estar en un rango privado.
+- prohibido siempre (incluso con `AI_ALLOW_EXTERNAL=true`): link-local (incluye
+  `169.254.169.254`, metadatos de nube), `0.0.0.0`, multicast y rangos reservados.
 
-Con `AI_ALLOW_EXTERNAL=false` (por defecto) un proveedor externo se rechaza
-(`409 ai_not_configured`) y no sale ningún dato del servidor.
+`AI_LOCAL_NETWORKS` solo acepta subredes de RFC 1918 (`10/8`, `172.16/12`, `192.168/16`) o ULA
+(`fc00::/7`); Internet, link-local, CGNAT o `0.0.0.0/0` se rechazan al arrancar.
+
+**Verificación de la IP real.** Tras conectar y antes de enviar ningún dato, el proveedor
+comprueba la IP a la que conectó: un destino local debe ser loopback o estar en
+`AI_LOCAL_NETWORKS`. Así un nombre de `AI_LOCAL_HOSTS` (o `localhost`) que resuelva a otra
+dirección por DNS manipulado o un `/etc/hosts` erróneo no recibe nada
+(`409 ai_destination_blocked`). En https el handshake TLS ocurre antes de esta comprobación
+(sale el nombre del servidor, no datos de Sentra).
+
+**Externos: solo opción explícita.** Con `AI_ALLOW_EXTERNAL=false` (por defecto) un proveedor
+externo se rechaza (`409 ai_not_configured`) sin abrir ninguna conexión ni consultar DNS. Si un
+admin lo activa a propósito, el externo exige `https`. Nunca es necesario para ninguna función.
 
 Detalles del cliente HTTP: no sigue redirecciones, no usa los proxies del entorno (el destino
 es exactamente `AI_BASE_URL`), timeout de conexión, de lectura por bloque y total (cada lectura
 se acota con el tiempo restante), respuesta máxima 512 KB, TLS verificado con el almacén del
-sistema.
+sistema. Un único destino por análisis: solo se reintenta ante JSON inválido y contra el mismo
+servidor.
+
+## Estado del proveedor (`GET /ai/status`)
+
+| `state` | Significado | ¿Se conecta? |
+|---|---|---|
+| `disabled` | `AI_ENABLED=false` | No |
+| `not_configured` | Falta `AI_BASE_URL` o `AI_MODEL` | No |
+| `local_available` | Local y el servidor responde | Health check |
+| `local_unavailable` | Local y el servidor no responde (apagado, puerto cerrado, 5xx) | Health check |
+| `external_blocked` | Externo sin `AI_ALLOW_EXTERNAL`, IP privada no autorizada o destino prohibido | No |
+| `external_available` / `external_unavailable` | Externo permitido explícitamente | Health check |
+
+El health check es `GET {AI_BASE_URL}/models` sin datos de Sentra, con 3 s de conexión y 5 s en
+total, cacheado 15 s por proceso (y se invalida tras un fallo real del modelo). Un `404` cuenta
+como disponible (hay servidores sin `/models`). La respuesta incluye `mode_label` ("Local AI" /
+"External AI"), `model`, `reachable`, `health_detail` y `checked_at`; nunca la URL, la clave ni
+el cuerpo de la respuesta del servidor. La UI muestra, por ejemplo,
+`Local AI · qwen2.5:14b-instruct · Disponible` y, si el servidor local está caído, avisa de que
+Sentra sigue funcionando y de que no se usará ningún otro proveedor.
 
 ## Configuración
 
@@ -95,16 +156,17 @@ sistema.
 |---|---|---|
 | `AI_ENABLED` | `false` | Activa los análisis bajo demanda |
 | `AI_PROVIDER` | `openai_compatible` | Único valor soportado |
-| `AI_BASE_URL` | — | URL base terminada en `/v1` (`http://127.0.0.1:11434/v1`, `http://servidor-ia:8000/v1`) |
+| `AI_BASE_URL` | — | URL base terminada en `/v1` (`http://127.0.0.1:11434/v1`, `http://192.168.10.20:8000/v1`) |
 | `AI_MODEL` | — | Nombre del modelo en ese servidor |
-| `AI_API_KEY` | — | Solo servidor; se envía como `Authorization: Bearer`. Nunca se registra, audita ni llega al navegador |
+| `AI_API_KEY` | — | Opcional (los servidores locales no la necesitan). Solo servidor; se envía como `Authorization: Bearer`. Nunca se registra, audita ni llega al navegador |
 | `AI_TIMEOUT_SECONDS` | `60` | Tiempo total máximo por llamada |
 | `AI_CONNECT_TIMEOUT_SECONDS` | `5` | Conexión |
 | `AI_READ_TIMEOUT_SECONDS` | `45` | Espera máxima entre bloques de respuesta |
 | `AI_MAX_CONTEXT_ITEMS` | `40` | Elementos citables por análisis |
 | `AI_MAX_OUTPUT_TOKENS` | `1200` | `max_tokens` pedido al modelo |
-| `AI_ALLOW_EXTERNAL` | `false` | Permite proveedores externos |
-| `AI_LOCAL_HOSTS` | — | Nombres de host que cuentan como locales |
+| `AI_ALLOW_EXTERNAL` | `false` | Permite proveedores externos (opción explícita, no necesaria; exige https) |
+| `AI_LOCAL_NETWORKS` | — | Redes privadas (CIDR) autorizadas para el servidor de IA en la LAN, p. ej. `192.168.10.0/24` |
+| `AI_LOCAL_HOSTS` | — | Nombres de host del servidor de IA; deben resolver a loopback o a `AI_LOCAL_NETWORKS` |
 | `AI_REDACT` | — | `usernames,hostnames,ips,paths` a seudonimizar |
 | `AI_JSON_MODE` | `true` | Pide `response_format: json_object` (desactívalo si el servidor no lo soporta) |
 | `AI_INSIGHT_TTL_MINUTES` | `60` | Caducidad de un insight (stale aunque los datos no cambien) |
@@ -113,7 +175,10 @@ sistema.
 | `AI_MAX_CONCURRENT` | `2` | Llamadas simultáneas; el resto recibe `429 ai_busy` |
 | `AI_MAX_RETRIES` | `1` | Reintentos ante JSON inválido |
 
-Ejemplo con un modelo local en la misma máquina:
+Ejemplos (recomendado: modelo local, sin clave y sin Internet). Cualquier servidor compatible
+sirve; los puertos son los habituales de cada uno.
+
+Ollama en la misma máquina:
 
 ```env
 AI_ENABLED=true
@@ -121,20 +186,52 @@ AI_BASE_URL=http://127.0.0.1:11434/v1
 AI_MODEL=qwen2.5:14b-instruct
 ```
 
-Ejemplo con un servidor de IA propio en la LAN y redacción:
+llama.cpp server (`llama-server -m modelo.gguf --port 8080`) en la misma máquina:
 
 ```env
 AI_ENABLED=true
+AI_BASE_URL=http://127.0.0.1:8080/v1
+AI_MODEL=modelo-local
+# Si el servidor no acepta response_format:
+# AI_JSON_MODE=false
+```
+
+vLLM en un servidor de la LAN, con redacción:
+
+```env
+AI_ENABLED=true
+AI_BASE_URL=http://192.168.10.20:8000/v1
+AI_LOCAL_NETWORKS=192.168.10.0/24
+AI_MODEL=meta-llama/Llama-3.1-8B-Instruct
+AI_REDACT=usernames,ips
+```
+
+Con nombre en vez de IP (necesita DNS interno o `hosts`; la IP resuelta debe estar en la red
+autorizada):
+
+```env
 AI_BASE_URL=http://servidor-ia:8000/v1
 AI_LOCAL_HOSTS=servidor-ia
-AI_MODEL=llama-3.1-8b-instruct
-AI_REDACT=usernames,ips
+AI_LOCAL_NETWORKS=192.168.10.0/24
+```
+
+Proveedor externo (solo si el admin lo decide explícitamente; los datos salen del servidor):
+
+```env
+AI_ALLOW_EXTERNAL=true
+AI_BASE_URL=https://proveedor.example/v1
+AI_API_KEY=...
 ```
 
 El cliente nunca puede elegir proveedor, URL, modelo ni parámetros: los cuerpos de las
 peticiones rechazan cualquier campo extra (`422`).
 
 ## Privacidad: qué sale del servidor
+
+Por defecto (`AI_ENABLED=false`, `AI_ALLOW_EXTERNAL=false`) **ningún** dato sale de la
+infraestructura de Sentra: ni telemetría, detecciones, eventos, hostnames, IPs, usernames,
+procesos ni datos de riesgo. Con Local AI los datos solo viajan al servidor de modelos local
+(loopback o LAN autorizada). El health check no envía datos de Sentra.
 
 Solo cuando un usuario pide un análisis, y solo hacia `AI_BASE_URL`, sale:
 
@@ -211,7 +308,8 @@ ni por id).
 - La conexión a PostgreSQL se libera antes de llamar al modelo: un modelo lento no agota el pool.
 - Errores controlados, sin cuerpo del proveedor ni secretos: `ai_timeout` (504),
   `ai_provider_unavailable`, `ai_provider_auth_failed`, `ai_invalid_response`,
-  `ai_ungrounded_response` (502), `ai_provider_rate_limited` (503), `ai_not_configured` (409).
+  `ai_ungrounded_response` (502), `ai_provider_rate_limited` (503), `ai_not_configured` y
+  `ai_destination_blocked` (409).
 
 ## Caché y estado stale
 
@@ -260,6 +358,8 @@ hardware y del proveedor.
 
 ## Limitaciones
 
+- El estado `local_available` solo indica que el servidor responde; no comprueba que el modelo
+  `AI_MODEL` esté cargado (algunos servidores ignoran el nombre). El primer análisis lo confirma.
 - El rate limit y el tope de concurrencia son por proceso (como el login): con varios workers
   el límite efectivo se multiplica.
 - La redacción del texto libre es por valores conocidos y patrones (IPv4, rutas), no un

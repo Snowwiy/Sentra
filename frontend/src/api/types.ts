@@ -946,11 +946,27 @@ export interface InsightList {
   total: number;
 }
 
+/** Estado del proveedor de IA (4J.1): local/externo según la URL configurada, no el protocolo. */
+export type AIProviderState =
+  | "disabled"
+  | "not_configured"
+  | "local_available"
+  | "local_unavailable"
+  | "external_blocked"
+  | "external_available"
+  | "external_unavailable";
+
 /** Estado de la IA. Nunca incluye la URL ni la clave del proveedor. */
 export interface AIStatus {
   enabled: boolean;
   available: boolean;
   reason: string | null;
+  state: AIProviderState;
+  mode_label: "Local AI" | "External AI" | null;
+  reachable: boolean | null;
+  health_detail: string | null;
+  health_latency_ms: number | null;
+  checked_at: string | null;
   provider: string | null;
   model: string | null;
   location: "local" | "external" | null;

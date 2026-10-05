@@ -17,6 +17,12 @@ const AVAILABLE: AIStatus = {
   enabled: true,
   available: true,
   reason: null,
+  state: "local_available",
+  mode_label: "Local AI",
+  reachable: true,
+  health_detail: null,
+  health_latency_ms: 4,
+  checked_at: new Date().toISOString(),
   provider: "openai_compatible",
   model: "llama-local",
   location: "local",
@@ -115,6 +121,37 @@ describe("AIInsightsPage", () => {
     expect(await screen.findByText(/IA no configurada: AI_ENABLED=false/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Pregunta para Sentra AI")).not.toBeInTheDocument();
     expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("shows Local AI, the active model and its state, never the protocol vendor", async () => {
+    renderPage();
+    const badge = await screen.findByLabelText("Estado de la IA");
+    expect(badge).toHaveTextContent("Local AI · llama-local · Disponible");
+    expect(badge.textContent).not.toMatch(/openai/i);
+    expect(screen.queryByText(/no responde/)).not.toBeInTheDocument();
+  });
+
+  it("keeps working and warns when the local model server is down", async () => {
+    status = { ...AVAILABLE, state: "local_unavailable", reachable: false, health_detail: "down" };
+    renderPage();
+    expect(await screen.findByLabelText("Estado de la IA")).toHaveTextContent("Local AI · llama-local · No disponible");
+    expect(screen.getByText(/servidor de IA local no responde.*ningún otro proveedor/)).toBeInTheDocument();
+    expect(calls.some((c) => c.method === "POST")).toBe(false);
+  });
+
+  it("shows a blocked external provider without leaking configuration", async () => {
+    status = {
+      ...AVAILABLE,
+      available: false,
+      state: "external_blocked",
+      mode_label: "External AI",
+      location: "external",
+      reachable: null,
+      reason: "El proveedor configurado es externo y AI_ALLOW_EXTERNAL=false: los datos no salen del servidor.",
+    };
+    renderPage();
+    expect(await screen.findByLabelText("Estado de la IA")).toHaveTextContent("External AI · llama-local · Bloqueado");
+    expect(screen.queryByLabelText("Pregunta para Sentra AI")).not.toBeInTheDocument();
   });
 
   it("asks only on submit and shows model text as plain text, apart from Sentra data", async () => {

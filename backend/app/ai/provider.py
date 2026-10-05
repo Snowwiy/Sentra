@@ -63,6 +63,14 @@ class AINotConfiguredError(AIError):
     code = "ai_not_configured"
 
 
+class AIDestinationBlockedError(AIError):
+    # AI_BASE_URL (o la IP real a la que resolvió) no es un destino permitido: externo con
+    # AI_ALLOW_EXTERNAL=false, IP privada no autorizada o dirección prohibida. Fail closed
+    # (4J.1): no se envía nada y no se prueba ningún otro proveedor.
+    status_code = status.HTTP_409_CONFLICT
+    code = "ai_destination_blocked"
+
+
 class AIProviderUnavailableError(AIError):
     code = "ai_provider_unavailable"
 

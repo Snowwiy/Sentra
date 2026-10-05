@@ -10,6 +10,7 @@ import json
 from collections.abc import Callable
 from typing import Any
 
+from app.ai.openai_compat import ProviderHealth
 from app.ai.provider import AIRequest, AIResponse
 
 Responder = Callable[[AIRequest], str | Exception]
@@ -74,6 +75,15 @@ class FakeAIProvider:
     def __init__(self) -> None:
         self.requests: list[AIRequest] = []
         self.responder: Responder = grounded
+        # Health check simulado (4J.1): False = servidor de IA local apagado.
+        self.healthy = True
+        self.checks = 0
+
+    def check(self) -> ProviderHealth:
+        self.checks += 1
+        if self.healthy:
+            return ProviderHealth(True, 2)
+        return ProviderHealth(False, 2, "The AI provider is unavailable (ConnectionRefusedError)")
 
     def complete(self, request: AIRequest) -> AIResponse:
         self.requests.append(request)

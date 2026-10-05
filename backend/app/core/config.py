@@ -1,3 +1,4 @@
+import ipaddress
 from functools import lru_cache
 from typing import Literal
 
@@ -11,6 +12,36 @@ from app.discovery.targets import DiscoveryScope
 def parse_name_list(value: str) -> list[str]:
     """Comma separated names, blanks dropped."""
     return [item.strip() for item in value.split(",") if item.strip()]
+
+
+AINetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
+_LAN_RANGES: tuple[AINetwork, ...] = tuple(
+    ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fc00::/7")
+)
+
+
+def parse_ai_local_networks(value: str) -> tuple[AINetwork, ...]:
+    """'192.168.1.0/24,fd00::/64' -> redes donde se autoriza un servidor de IA local.
+
+    Solo se aceptan subredes de RFC 1918 o ULA (fc00::/7). Se rechazan Internet, link-local
+    (incluye 169.254.169.254, metadatos de nube), CGNAT y rangos como 0.0.0.0/0: autorizar
+    uno de esos convertiría un destino externo en "local" y saltaría AI_ALLOW_EXTERNAL.
+    """
+    networks: list[AINetwork] = []
+    for item in parse_name_list(value):
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"AI_LOCAL_NETWORKS has an invalid network: {item!r}") from None
+        # Lista cerrada de rangos de LAN en vez de `is_private`, que también incluye rangos
+        # reservados (0.0.0.0/8, documentación, benchmarking) que no son una LAN real.
+        if not any(
+            network.version == lan.version and network.subnet_of(lan)  # type: ignore[arg-type]
+            for lan in _LAN_RANGES
+        ):
+            raise ValueError(f"AI_LOCAL_NETWORKS only accepts private LAN networks, got {item!r}")
+        networks.append(network)
+    return tuple(networks)
 
 
 def parse_risk_thresholds(value: str) -> tuple[int, int, int, int]:
@@ -256,10 +287,15 @@ class Settings(BaseSettings):
     # Elementos de contexto (detecciones, contribuciones, puertos, evidencias) por análisis.
     ai_max_context_items: int = Field(default=40, ge=5, le=200)
     ai_max_output_tokens: int = Field(default=1200, ge=200, le=8000)
-    # Proveedores externos (fuera de loopback/red privada/AI_LOCAL_HOSTS) bloqueados salvo
-    # permiso explícito: los datos de seguridad no salen del servidor sin decisión del admin.
+    # Proveedores externos (fuera de loopback, AI_LOCAL_NETWORKS o AI_LOCAL_HOSTS) bloqueados
+    # salvo permiso explícito: los datos de seguridad no salen del servidor sin decisión del
+    # admin. Nunca hay fallback de un proveedor local caído a uno externo (Fase 4J.1).
     ai_allow_external: bool = False
-    # Nombres de host que se consideran locales (servidor de IA propio en la LAN).
+    # Redes privadas (CIDR) autorizadas para un servidor de IA en la LAN. Loopback siempre es
+    # local; una IP privada fuera de esta lista NO es local (autorización explícita, 4J.1).
+    ai_local_networks: str = ""
+    # Nombres de host del servidor de IA propio. Deben resolver a loopback o a una IP de
+    # AI_LOCAL_NETWORKS: se comprueba la IP real conectada antes de enviar nada.
     ai_local_hosts: str = ""
     # Datos que se seudonimizan antes de enviarlos: usernames, hostnames, ips, paths.
     ai_redact: str = ""
@@ -281,6 +317,12 @@ class Settings(BaseSettings):
         unknown = set(parse_name_list(value.lower())) - {"usernames", "hostnames", "ips", "paths"}
         if unknown:
             raise ValueError(f"AI_REDACT has unknown values: {sorted(unknown)}")
+        return value
+
+    @field_validator("ai_local_networks")
+    @classmethod
+    def _check_ai_local_networks(cls, value: str) -> str:
+        parse_ai_local_networks(value)
         return value
 
     @field_validator("ai_base_url", "ai_model", mode="before")
