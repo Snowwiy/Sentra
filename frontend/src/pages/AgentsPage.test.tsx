@@ -23,6 +23,7 @@ function agent(overrides: Partial<Agent>): Agent {
     architecture: "x86_64",
     platform: "linux",
     agent_version: "0.1.0",
+    installation_method: null,
     monitoring_method: "agent",
     status: "online",
     credential_status: "active",
@@ -193,12 +194,51 @@ describe("AgentsPage", () => {
 });
 
 describe("Add agent wizard", () => {
-  it("offers Linux and marks Windows as coming soon", async () => {
+  it("offers Linux (default) and Windows, no longer as coming soon", async () => {
     const dialog = await openWizard();
     expect(within(dialog).getByRole("radio", { name: /Linux/ })).toHaveAttribute("aria-checked", "true");
     const windows = within(dialog).getByRole("radio", { name: /Windows/ });
-    expect(windows).toBeDisabled();
-    expect(windows).toHaveTextContent("Próximamente");
+    expect(windows).toBeEnabled();
+    expect(dialog).not.toHaveTextContent("Próximamente");
+    fireEvent.click(windows);
+    expect(windows).toHaveAttribute("aria-checked", "true");
+  });
+
+  it("Windows: one-time windows token, PowerShell installer, token never in a command", async () => {
+    routes["POST /console/enrollment-tokens"] = () => ({
+      status: 201,
+      body: { ...tokenRow({ expected_platform: "windows" }), token: TOKEN },
+    });
+    const dialog = await openWizard();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /Windows/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    expect(dialog).toHaveTextContent("Plataforma Windows · un solo uso");
+    fireEvent.change(within(dialog).getByPlaceholderText("http://192.168.1.10:8000"), {
+      target: { value: "http://localhost:8000" },
+    });
+    expect(dialog).toHaveTextContent("localhost/127.0.0.1 es el propio equipo Windows");
+    fireEvent.change(within(dialog).getByPlaceholderText("http://192.168.1.10:8000"), {
+      target: { value: "http://192.168.50.201:8000" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Generar token de instalación" }));
+    await within(dialog).findByLabelText("Token de instalación");
+
+    const create = calls.find((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")!;
+    expect(JSON.parse(create.init.body as string)).toEqual({ expected_platform: "windows", max_uses: 1 });
+    const commands = () => within(dialog).getAllByText((_, el) => el?.tagName === "PRE").map((el) => el.textContent);
+    const text = commands().join("\n");
+    expect(text).not.toContain(TOKEN);
+    expect(text).toContain(
+      "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1 -Server 'http://192.168.50.201:8000'",
+    );
+    expect(text).not.toContain("-Reenroll");
+    expect(text).toContain("Get-Service SentraAgent");
+    expect(dialog).toHaveTextContent("como administrador");
+    expect(dialog).not.toHaveTextContent("Paquete Debian");
+
+    fireEvent.click(within(dialog).getByRole("tab", { name: "Archivo (-TokenFile)" }));
+    expect(commands().join("\n")).toContain("-TokenFile .\\enrollment.token");
+    expect(commands().join("\n")).not.toContain(TOKEN);
   });
 
   it("suggests the server URL, warns about HTTP and loopback and validates it", async () => {
@@ -372,6 +412,40 @@ describe("Revocation", () => {
     const wizard = await screen.findByRole("dialog", { name: "Añadir agente" });
     expect(within(wizard).getByPlaceholderText("p. ej. pc-ana")).toHaveValue("linux-revoked");
     expect(wizard).toHaveTextContent("conservará su identidad");
+  });
+
+  it("re-enrolls a Windows agent with a windows token and the -Reenroll installer", async () => {
+    const windows = agent({
+      hostname: "pc-win",
+      display_name: "pc-win",
+      os_name: "Windows",
+      platform: "windows",
+      status: "offline",
+      credential_status: "re_enrollment_required",
+    });
+    routes["GET /agents"] = () => ({ body: { summary: SUMMARY, items: [windows] } });
+    routes["POST /console/enrollment-tokens"] = () => ({
+      status: 201,
+      body: { ...tokenRow({ expected_platform: "windows", expected_hostname: "pc-win" }), token: TOKEN },
+    });
+    renderPage();
+    await screen.findByText("pc-win");
+    const row = screen.getAllByRole("row").find((r) => r.textContent?.includes("pc-win"))!;
+    const button = within(row).getByRole("button", { name: "Nuevo token…" });
+    await waitFor(() => expect(button).toBeEnabled());
+    fireEvent.click(button);
+
+    const wizard = await screen.findByRole("dialog", { name: "Añadir agente" });
+    expect(wizard).toHaveTextContent("Plataforma Windows");
+    fireEvent.click(within(wizard).getByRole("button", { name: "Generar token de instalación" }));
+    await within(wizard).findByLabelText("Token de instalación");
+    const create = calls.find((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")!;
+    expect(JSON.parse(create.init.body as string)).toMatchObject({
+      expected_platform: "windows",
+      expected_hostname: "pc-win",
+    });
+    const install = within(wizard).getByText(/install-sentra-agent\.ps1/, { selector: "pre" });
+    expect(install.textContent).toContain("-Reenroll");
   });
 
   it("lists installation tokens without their value and revokes an active one", async () => {

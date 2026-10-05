@@ -168,8 +168,10 @@ class Agent:
             except Exception:
                 # Last line of defense: an unexpected error (a collector failing in a new way,
                 # a proxy answering 200 with a body that is not ours, a corrupt state file)
-                # must not kill the agent. Nothing supervises it yet (no Windows service), so a
-                # crash would leave the host silently "offline" until someone restarts it.
+                # must not kill the agent.
+                # Aunque systemd o el SCM de Windows lo reinicien, una caída pierde el estado en
+                # memoria y deja el equipo "offline" durante el retardo de reinicio; ejecutado a
+                # mano, nadie lo reiniciaría.
                 # Keep the normal pace: earlier steps of the cycle (heartbeat, telemetry) may
                 # still be working, and backing off would only slow them down. The traceback
                 # goes to the (secret-redacting) log for diagnosis.
@@ -275,6 +277,22 @@ class Agent:
             self._ensure_enrolled()
         return self.identity.asset_id
 
+    def has_bootstrap(self) -> bool:
+        """True si hay un token de un solo uso pendiente (configurado o en su archivo)."""
+        return self._bootstrap_token() is not None
+
+    def discard_bootstrap(self) -> None:
+        """Borra el token de un solo uso que no hizo falta (el agente ya tenía uno válido).
+
+        El servicio Windows lo llama tras un enrolamiento resuelto: un token que no se usó
+        no debe quedarse en disco hasta caducar.
+        """
+        path = self.config.enrollment_token_file
+        if self.config.enrollment_token or (path is not None and path.exists()):
+            self._forget_bootstrap()
+        else:
+            self._bootstrap_spent = True
+
     def _bootstrap_token(self) -> str | None:
         """The one-time token from the config or its file, unless already spent this run."""
         if self._bootstrap_spent:
@@ -284,7 +302,9 @@ class Agent:
         path = self.config.enrollment_token_file
         if path is not None and path.is_file():
             try:
-                token = path.read_text(encoding="utf-8").strip()
+                # utf-8-sig: el Bloc de notas de Windows guarda con BOM, que si no acabaría
+                # dentro del token y el servidor lo rechazaría.
+                token = path.read_text(encoding="utf-8-sig").strip()
             except OSError as exc:
                 logger.warning("enrollment token file unreadable", extra={"error": str(exc)})
                 return None
@@ -316,16 +336,20 @@ class Agent:
             raise EnrollmentKeyMissingError
         try:
             if bootstrap is not None:
-                response = self.client.register(
-                    self.identity.agent_id,
-                    self.host_info().as_payload(),
-                    enrollment_token=bootstrap,
+                response = self._send_adapting(
+                    "register",
+                    lambda body: self.client.register(
+                        self.identity.agent_id, body, enrollment_token=bootstrap
+                    ),
+                    self._host_payload(),
                 )
             else:
-                response = self.client.register(
-                    self.identity.agent_id,
-                    self.host_info().as_payload(),
-                    self.config.enrollment_key,
+                response = self._send_adapting(
+                    "register",
+                    lambda body: self.client.register(
+                        self.identity.agent_id, body, self.config.enrollment_key
+                    ),
+                    self._host_payload(),
                 )
         except ApiError as exc:
             if exc.status in (HTTP_FORBIDDEN, HTTP_UNAUTHORIZED) and bootstrap is not None:
@@ -370,10 +394,20 @@ class Agent:
     def _heartbeat(self, token: str) -> None:
         # Host info rides along on every heartbeat so IP/OS/agent version changes reach the
         # server without a separate inventory call.
-        response = self.client.heartbeat(
-            self.identity.agent_id, token, self.host_info().as_payload()
+        response = self._send_adapting(
+            "heartbeat",
+            lambda body: self.client.heartbeat(self.identity.agent_id, token, body["host"]),
+            {"host": self._host_payload()},
         )
         self._remember_asset(response["asset_id"])
+
+    def _host_payload(self) -> dict[str, Any]:
+        payload = self.host_info().as_payload()
+        # Solo se envía si el instalador lo configuró: un servidor anterior a la Fase 4F lo
+        # rechazaría con 422 extra_forbidden (y _send_adapting lo quitaría para esta ejecución).
+        if self.config.installation_method:
+            payload["installation_method"] = self.config.installation_method
+        return payload
 
     def _flush_buffer(self, token: str) -> None:
         while self.buffer:
@@ -442,8 +476,11 @@ class Agent:
         self._processes_sent_at = now
 
     def _send_adapting(
-        self, endpoint: str, send: Callable[[dict[str, Any]], Any], payload: dict[str, Any]
-    ) -> None:
+        self,
+        endpoint: str,
+        send: Callable[[dict[str, Any]], dict[str, Any]],
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         """Send a payload, leaving out fields this server rejected as unknown.
 
         The API refuses unknown fields; an agent newer than its server would otherwise lose
@@ -453,8 +490,7 @@ class Agent:
         """
         dropped = self._unsupported.setdefault(endpoint, set())
         try:
-            send(_drop_fields(payload, dropped))
-            return
+            return send(_drop_fields(payload, dropped))
         except ApiError as exc:
             unknown = _unknown_fields(exc) if exc.status == HTTP_UNPROCESSABLE else set()
             if not unknown:
@@ -464,7 +500,7 @@ class Agent:
             extra={"endpoint": endpoint, "fields": sorted(".".join(path) for path in unknown)},
         )
         dropped |= unknown
-        send(_drop_fields(payload, dropped))
+        return send(_drop_fields(payload, dropped))
 
     def _remember_asset(self, asset_id: str) -> None:
         if self.identity.asset_id is None or str(self.identity.asset_id) != asset_id:

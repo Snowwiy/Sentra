@@ -375,3 +375,65 @@ def test_remote_browser_cannot_revoke(console: TestClient, client: TestClient) -
         refused = lan.post(f"{CONSOLE}/agents/{asset_id}/revoke", headers=LOCAL)
     assert refused.status_code == 403
     assert _agent(client, asset_id)["credential_status"] == "active"
+
+
+# --- Fase 4F: método de instalación y re-enrolamiento de un servicio Windows ---------------
+
+
+def test_installation_method_is_reported_and_follows_the_running_agent(
+    console: TestClient, client: TestClient
+) -> None:
+    # Un agente antiguo (sin el campo) queda "No reportado" (null), sin romper nada.
+    old_response, _ = _enroll(client, _create_token(console)["token"])
+    assert _agent(client, old_response.json()["asset_id"])["installation_method"] is None
+
+    token = _create_token(console, expected_platform="windows")["token"]
+    response, payload = _enroll(client, token, installation_method="windows_service")
+    assert response.status_code == 201, response.text
+    asset_id = response.json()["asset_id"]
+    assert _agent(client, asset_id)["installation_method"] == "windows_service"
+
+    # Cada heartbeat lo actualiza: el mismo equipo ejecutado a mano deja de mostrarlo.
+    bearer = {"Authorization": f"Bearer {response.json()['agent_token']}"}
+    host = {k: v for k, v in payload.items() if k not in ("agent_id", "installation_method")}
+    beat = client.post(
+        "/api/v1/agents/heartbeat",
+        json={"agent_id": payload["agent_id"], "host": host},
+        headers=bearer,
+    )
+    assert beat.status_code == 200
+    assert _agent(client, asset_id)["installation_method"] is None
+
+
+@pytest.mark.parametrize("value", ["Windows Service", "x" * 40, "1abc", "a;b"])
+def test_installation_method_is_validated(
+    console: TestClient, client: TestClient, value: str
+) -> None:
+    response, _ = _enroll(client, _create_token(console)["token"], installation_method=value)
+    assert response.status_code == 422
+
+
+def test_revoked_windows_service_reenrolls_as_the_same_asset_keeping_history(
+    console: TestClient, client: TestClient
+) -> None:
+    # Flujo del criterio de éxito 15: revocar -> reactivar -> token nuevo -> -Reenroll con el
+    # mismo agent_id (la identidad se conserva en ProgramData) -> mismo activo, con historial.
+    host = {"installation_method": "windows_service"}
+    response, payload = _enroll(client, _create_token(console)["token"], **host)
+    asset_id = response.json()["asset_id"]
+    bearer = {"Authorization": f"Bearer {response.json()['agent_token']}"}
+    sample = telemetry_payload(payload["agent_id"])
+    assert client.post("/api/v1/telemetry", json=sample, headers=bearer).status_code == 201
+    console.post(f"{CONSOLE}/agents/{asset_id}/revoke", headers=LOCAL)
+    console.post(f"{CONSOLE}/agents/{asset_id}/reinstate", headers=LOCAL)
+
+    token = _create_token(console, expected_platform="windows", expected_hostname="PC-ADMIN-01")
+    again = client.post(REGISTER, json=payload, headers={"X-Enrollment-Token": token["token"]})
+
+    assert again.status_code == 200
+    assert again.json()["asset_id"] == asset_id
+    assert client.get(AGENTS).json()["summary"]["total"] == 1
+    assert len(client.get(f"/api/v1/assets/{asset_id}/telemetry").json()["items"]) == 1
+    agent = _agent(client, asset_id)
+    assert agent["credential_status"] == "active"
+    assert agent["installation_method"] == "windows_service"

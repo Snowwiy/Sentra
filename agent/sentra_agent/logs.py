@@ -56,10 +56,14 @@ class JsonFormatter(logging.Formatter):
         return redact(json.dumps(payload, default=str))
 
 
-def configure_logging(state_dir: Path, level: str, log_dir: Path | None = None) -> Path:
+def configure_logging(
+    state_dir: Path, level: str, log_dir: Path | None = None, console: bool = True
+) -> Path:
     """Log to the console and to a size-capped local file.
 
     Rotation (5 x 1 MB) bounds disk usage on hosts where the agent runs for months unattended.
+    `console=False` lo usa el servicio Windows: un servicio no tiene consola (sys.stderr es
+    None) y el archivo rotado en %ProgramData% es su único destino.
     """
     log_dir = log_dir or state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
@@ -69,11 +73,13 @@ def configure_logging(state_dir: Path, level: str, log_dir: Path | None = None) 
     file_handler = RotatingFileHandler(
         log_file, maxBytes=1_000_000, backupCount=5, encoding="utf-8"
     )
-    console_handler = logging.StreamHandler(sys.stderr)
-    for handler in (file_handler, console_handler):
+    handlers: list[logging.Handler] = [file_handler]
+    if console and sys.stderr is not None:
+        handlers.append(logging.StreamHandler(sys.stderr))
+    for handler in handlers:
         handler.setFormatter(formatter)
 
     root = logging.getLogger()
-    root.handlers = [file_handler, console_handler]
+    root.handlers = handlers
     root.setLevel(level.upper())
     return log_file

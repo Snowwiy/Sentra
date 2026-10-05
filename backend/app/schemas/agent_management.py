@@ -34,6 +34,8 @@ class AgentRead(ResponseModel):
     architecture: str | None
     platform: AgentPlatform
     agent_version: str | None
+    # Informado por el agente (p. ej. "windows_service"); null = no reportado.
+    installation_method: str | None
     monitoring_method: MonitoringMethod
     # Liveness of the agent (unknown = enrolled, never reported yet).
     status: AssetStatus

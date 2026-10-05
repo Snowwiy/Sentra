@@ -21,8 +21,9 @@ firewall). The dashboard itself is still opened **on the server**, at `http://lo
 
 ## Add a Linux agent
 
-1. **Agentes → + Añadir agente → Linux → Continuar.** Windows shows "Próximamente" until its
-   installer exists.
+1. **Agentes → + Añadir agente → Linux → Continuar.** Para Windows (Fase 4F) el asistente
+   genera un token de plataforma `windows` y muestra los comandos de PowerShell del
+   instalador: ver [agent-windows-installation.md](agent-windows-installation.md).
 2. Check the **server URL** (suggested, editable; never `localhost`, which on the Linux host
    is the Linux host itself). Over `http://` the page warns: *HTTP no cifra las credenciales
    durante el transporte. Use HTTPS en producción.* It is allowed (LAN/development).

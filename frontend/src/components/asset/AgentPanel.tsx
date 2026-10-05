@@ -8,6 +8,11 @@ import { AgentActions } from "../agents/AgentActions";
 import { AgentStateBadge, CredentialBadge, PLATFORM_LABELS } from "../agents/AgentBadges";
 import { ErrorState, LoadingState } from "../StateViews";
 
+// Valores conocidos de installation_method; uno desconocido (agente más nuevo) se muestra tal cual.
+const INSTALLATION_METHOD_LABELS: Record<string, string> = {
+  windows_service: "Servicio Windows",
+};
+
 /** "Agent" section of a managed asset: identity, credential state and actions. */
 export function AgentPanel({ assetId }: { assetId: string }) {
   const fetchAgent = useCallback(
@@ -28,7 +33,11 @@ export function AgentPanel({ assetId }: { assetId: string }) {
               type="button"
               className="button"
               disabled
-              title="Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (sudo systemctl restart sentra-agent)."
+              title={
+                agent.platform === "windows"
+                  ? "Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (Restart-Service SentraAgent, como administrador)."
+                  : "Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (sudo systemctl restart sentra-agent)."
+              }
             >
               Reiniciar agente
             </button>
@@ -88,9 +97,13 @@ export function AgentPanel({ assetId }: { assetId: string }) {
             </div>
             <div className="field">
               <dt>Método de instalación</dt>
-              <dd className="muted" title="El agente todavía no informa de cómo se instaló">
-                No reportado
-              </dd>
+              {agent.installation_method ? (
+                <dd>{INSTALLATION_METHOD_LABELS[agent.installation_method] ?? agent.installation_method}</dd>
+              ) : (
+                <dd className="muted" title="El agente no informa de cómo se instaló (versión anterior o ejecución manual)">
+                  No reportado
+                </dd>
+              )}
             </div>
           </dl>
           {agent.credential_status === "re_enrollment_required" && (

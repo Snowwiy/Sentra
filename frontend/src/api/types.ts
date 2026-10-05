@@ -489,6 +489,8 @@ export interface Agent {
   architecture: string | null;
   platform: AgentPlatform;
   agent_version: string | null;
+  /** Informado por el agente ("windows_service"…); null = no reportado. */
+  installation_method: string | null;
   monitoring_method: MonitoringMethod;
   /** unknown = enrolled, never reported yet (Pending). */
   status: AssetStatus;

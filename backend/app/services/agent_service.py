@@ -64,6 +64,9 @@ def apply_host_info(asset: Asset, host: HostInfo) -> None:
     asset.architecture = host.architecture
     asset.primary_ip = str(host.primary_ip)
     asset.agent_version = host.agent_version
+    # Se asigna aunque venga vacío: refleja cómo corre el agente que informa ahora (p. ej.
+    # un servicio desinstalado y el agente lanzado a mano deja de mostrar "Servicio Windows").
+    asset.agent_installation_method = host.installation_method
     # El agente es la fuente autoritativa del nombre y del tipo: se recalcula con lo que
     # acaba de reportar (sin escrituras si nada cambió).
     refresh_identity(asset)
@@ -170,6 +173,7 @@ class AgentService:
                     architecture=data.architecture,
                     primary_ip=str(data.primary_ip),
                     agent_version=data.agent_version,
+                    agent_installation_method=data.installation_method,
                     # Registration alone does not prove the agent keeps running; it becomes
                     # online with its first heartbeat or telemetry sample.
                     status=AssetStatus.UNKNOWN,

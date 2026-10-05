@@ -72,9 +72,15 @@ Header `X-Enrollment-Key: <key>`.
   "os_version": "11 (build 10.0.26200)",
   "architecture": "AMD64",
   "primary_ip": "192.168.1.20",
-  "agent_version": "0.1.0"
+  "agent_version": "0.1.0",
+  "installation_method": "windows_service"
 }
 ```
+
+`installation_method` (Fase 4F) es opcional: lo envían solo los agentes instalados por un
+instalador que lo configura (`windows_service`); patrón `^[a-z][a-z0-9_]{0,31}$`. Si un
+servidor anterior lo rechaza (422 `extra_forbidden`), el agente deja de enviarlo en esa
+ejecución y sigue funcionando.
 
 | Status | Meaning |
 |--------|---------|
@@ -88,7 +94,8 @@ Header `X-Enrollment-Key: <key>`.
 
 `{"agent_id": "...", "host": {...}}` → 200 with `asset_id`, `status` (`online`), `last_seen_at`.
 `host` is optional (same fields as registration minus `agent_id`) and refreshes the asset's
-hostname, OS, IP and agent version.
+hostname, OS, IP, agent version and installation method (null when the agent no longer
+reports it).
 
 ## POST /telemetry
 

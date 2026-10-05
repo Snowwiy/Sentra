@@ -74,10 +74,23 @@ cd agent
 .venv\Scripts\python.exe -m mypy sentra_agent tests
 ```
 
+## Install on Windows (servicio, sin Git ni Python)
+
+```powershell
+python agent\packaging\windows\build.py     # en el PC de desarrollo: dist\sentra-agent-*-windows-x86_64.zip
+# en el equipo, PowerShell como administrador, en la carpeta del zip descomprimido:
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-sentra-agent.ps1 -Server http://SERVER:8000
+```
+
+Instala el servicio estándar "Sentra Agent" (`SentraAgent`) con la cuenta virtual
+`NT SERVICE\SentraAgent` (lee el registro Security como miembro de Event Log Readers, sin ser
+administrador). El propio servicio se enrola con el token de un solo uso, cifra su token con
+DPAPI y borra el de instalación. Estado en `%ProgramData%\Sentra\Agent`. Guía completa,
+upgrade, re-enrolamiento y desinstalación: [docs/agent-windows-installation.md](../docs/agent-windows-installation.md).
+
 ## Not yet
 
-On Windows it still runs as the current user in the foreground: no Windows service,
-installer or auto-update yet (Linux has a package and a systemd service, see above).
-A service running under another account will re-enroll once (same `agent_id`) because the
-DPAPI blob is bound to the Windows user. No mTLS; use https for non-loopback API URLs (the
+No auto-update and no MSI yet (Windows uses a zip + PowerShell installer). A manual run
+(`start_agent.ps1`) keeps its own state in `%LOCALAPPDATA%`; the Windows installer imports its
+`agent_id` so the host stays the same asset. No mTLS; use https for non-loopback API URLs (the
 agent warns otherwise).

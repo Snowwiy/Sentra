@@ -21,10 +21,12 @@ export function AgentActions({
 }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const name = agent.hostname ?? agent.display_name;
-  const linux = agent.platform === "linux";
+  // Plataformas con instalador desde el dashboard (Linux desde la Fase 4B, Windows desde la 4F).
+  const platform = agent.platform === "linux" || agent.platform === "windows" ? agent.platform : null;
   const disabledReason = consoleState.available ? undefined : consoleState.reason;
   const preset: WizardPreset = {
     hostname: agent.hostname ?? undefined,
+    platform: platform ?? undefined,
     note: `Nuevo token para que ${name} vuelva a registrarse. Ejecuta de nuevo el instalador en ese equipo: conservará su identidad (mismo activo e histórico).`,
   };
   const size = compact ? " button--small" : "";
@@ -57,11 +59,8 @@ export function AgentActions({
         <button
           type="button"
           className={`button${size}`}
-          disabled={!consoleState.available || !linux}
-          title={
-            disabledReason ??
-            (linux ? undefined : "El instalador Windows aún no está disponible desde el dashboard")
-          }
+          disabled={!consoleState.available || !platform}
+          title={disabledReason ?? (platform ? undefined : "No hay instalador para esta plataforma")}
           onClick={() => setDialog("wizard")}
         >
           Nuevo token…
@@ -100,7 +99,7 @@ export function AgentActions({
             await consoleApi.reinstateAgent(agent.asset_id);
             onChanged();
             // The old credential never comes back: go straight to a new one-time token.
-            if (linux && consoleState.info) setDialog("wizard");
+            if (platform && consoleState.info) setDialog("wizard");
           }}
         >
           <p>
@@ -110,7 +109,7 @@ export function AgentActions({
           <p className="muted small">
             Necesitará un token de instalación nuevo y volver a ejecutar el instalador en el equipo;
             seguirá siendo el mismo activo, con su histórico.
-            {!linux && " El instalador Windows aún no está disponible desde el dashboard."}
+            {!platform && " No hay instalador para esta plataforma desde el dashboard."}
           </p>
         </ConfirmDialog>
       )}

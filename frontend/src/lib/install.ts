@@ -1,8 +1,11 @@
-// Install instructions for the Linux agent (agent/packaging/linux, docs/agent-linux-installation.md).
+// Install instructions for the Linux agent (agent/packaging/linux, docs/agent-linux-installation.md)
+// y para Windows (agent/packaging/windows, docs/agent-windows-installation.md).
 // Pure functions: the one-time token only passes through here to build the text the operator
 // copies; nothing is stored or logged.
 
 export type InstallMethod = "file" | "inline";
+/** Windows: "prompt" (aviso oculto del instalador, recomendado) o "file" (-TokenFile). */
+export type WindowsInstallMethod = "prompt" | "file";
 export type InstallPackage = "tarball" | "deb";
 
 export interface InstallStep {
@@ -108,6 +111,65 @@ export function installSteps(options: {
     });
   }
   steps.push({ title: "Comprueba el servicio", command: "systemctl status sentra-agent" });
+  return steps;
+}
+
+/** Comillas simples de PowerShell: dentro solo hay que duplicar la comilla simple. */
+export function psQuote(value: string): string {
+  return `'${value.replace(/'/g, "''")}'`;
+}
+
+export const WINDOWS_PACKAGE = "sentra-agent-<versión>-windows-x86_64.zip";
+
+/**
+ * Comandos para el equipo Windows, en orden, en PowerShell abierto como administrador.
+ * El token nunca va en un comando: el instalador lo pide en un aviso sin eco (no queda en el
+ * historial de PSReadLine ni en la línea de comandos de ningún proceso), o se guarda antes en
+ * un archivo con -TokenFile, que el instalador borra al registrarse.
+ * `reenroll` añade -Reenroll: un agente revocado y reactivado conserva su identidad, y sin esa
+ * opción el instalador la reutilizaría sin pedir token.
+ */
+export function windowsInstallSteps(options: {
+  serverUrl: string;
+  method: WindowsInstallMethod;
+  reenroll?: boolean;
+}): InstallStep[] {
+  const { serverUrl, method, reenroll = false } = options;
+  const server = checkServerUrl(serverUrl);
+  if (!server.valid) throw new Error("URL del servidor no válida");
+
+  const installer =
+    "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1" +
+    ` -Server ${psQuote(server.url)}${reenroll ? " -Reenroll" : ""}`;
+  const steps: InstallStep[] = [
+    {
+      title: `Descomprime el paquete (${WINDOWS_PACKAGE}) y entra en la carpeta`,
+      command:
+        "Expand-Archive -Path .\\sentra-agent-*-windows-x86_64.zip -DestinationPath . -Force; " +
+        "Set-Location .\\sentra-agent-*-windows-x86_64",
+    },
+  ];
+  if (method === "prompt") {
+    steps.push({
+      title:
+        "Instala, registra y arranca el servicio: pega el token cuando lo pida (no se muestra ni queda en el historial)",
+      command: installer,
+    });
+  } else {
+    steps.push(
+      {
+        title: "Guarda el token en un archivo: pégalo cuando lo pida (no se muestra)",
+        command:
+          "$t = Read-Host 'Token de instalación' -AsSecureString; " +
+          `[IO.File]::WriteAllText("$PWD\\${TOKEN_FILE}", [Net.NetworkCredential]::new('', $t).Password)`,
+      },
+      {
+        title: "Instala, registra y arranca el servicio (el archivo del token se borra al terminar)",
+        command: `${installer} -TokenFile .\\${TOKEN_FILE}`,
+      },
+    );
+  }
+  steps.push({ title: "Comprueba el servicio", command: "Get-Service SentraAgent" });
   return steps;
 }
 

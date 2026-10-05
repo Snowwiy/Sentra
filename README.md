@@ -66,6 +66,10 @@ with a one-time enrollment token): [docs/agent-linux-installation.md](docs/agent
 The **Agentes** page creates that token and the install command, and revokes agents, from
 the browser on the server (`DASHBOARD_ADMIN_ENABLED=true`): [docs/agent-management.md](docs/agent-management.md).
 
+Windows endpoints get a zip with an embedded Python runtime and a PowerShell installer that
+enrolls the host and installs the standard Windows service "Sentra Agent" (no Git, Python or
+open console needed): [docs/agent-windows-installation.md](docs/agent-windows-installation.md).
+
 To report this machine with the real agent:
 
 ```powershell
@@ -195,7 +199,7 @@ Known limitation: the dashboard has **no login yet**; keep the API on a trusted 
 ## Roadmap
 
 1. Dashboard users and authentication.
-2. Agent as a Windows service; alert acknowledgement from the dashboard (needs login).
+2. Alert acknowledgement from the dashboard (needs login); signed MSI for the Windows agent.
 3. Telemetry downsampling (opt-in retention exists); journald events on Linux.
 4. Live updates (WebSockets/SSE).
 5. Agentless collectors (WinRM/WMI, SSH, SNMP; contracts in `backend/app/agentless/`) once

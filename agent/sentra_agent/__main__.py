@@ -10,11 +10,23 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from sentra_agent import __version__
-from sentra_agent.client import SentraClient, TransportError
-from sentra_agent.config import load_config
+from sentra_agent.client import SentraClient
+from sentra_agent.config import AgentConfig, load_config
+from sentra_agent.enrollment import (
+    EXIT_ENROLLED,
+    EXIT_NO_CREDENTIAL,
+    EXIT_REJECTED,
+    EXIT_UNREACHABLE,
+    bootstrap_service_enrollment,
+    enroll_once,
+)
 from sentra_agent.identity import IdentityStore
 from sentra_agent.logs import configure_logging
-from sentra_agent.runner import Agent, CredentialsRejectedError, EnrollmentKeyMissingError
+from sentra_agent.runner import Agent
+from sentra_agent.winservice import NotRunningAsServiceError, dispatch
+
+# Re-exported: the Linux installer tests import the exit codes from here.
+__all__ = ["EXIT_ENROLLED", "EXIT_NO_CREDENTIAL", "EXIT_REJECTED", "EXIT_UNREACHABLE", "main"]
 
 
 def _warn_if_cleartext(api_url: str) -> None:
@@ -36,32 +48,37 @@ def _warn_if_cleartext(api_url: str) -> None:
         )
 
 
-# Exit codes of --enroll, read by the Linux installer.
-EXIT_ENROLLED = 0
-EXIT_NO_CREDENTIAL = 3
-EXIT_REJECTED = 4
-EXIT_UNREACHABLE = 5
-
-
 def _enroll(agent: Agent) -> int:
-    before = agent.identity.token
+    # One result line on stdout (read by installers); details are in the log.
+    outcome = enroll_once(agent)
+    print(outcome.message)
+    return outcome.exit_code
+
+
+def _run_service(config: AgentConfig) -> int:
+    """Modo servicio Windows: el SCM arranca el proceso y lo controla con dispatch()."""
+
+    def body(stop: threading.Event) -> None:
+        # El agente se crea dentro del ServiceMain: un error al cargar el estado (permisos
+        # del directorio, disco lleno) se informa al SCM como fallo del servicio y activa
+        # su recuperación, en lugar de terminar el proceso antes de conectar con el SCM.
+        agent = Agent(
+            config,
+            SentraClient(config.api_url, config.request_timeout_seconds),
+            IdentityStore(config.state_dir),
+            stop_event=stop,
+        )
+        bootstrap_service_enrollment(agent, stop)
+        agent.run()
+
     try:
-        asset_id = agent.enroll()
-    except EnrollmentKeyMissingError:
-        # One result line on stdout (read by installers); details are in the log.
-        print("not enrolled and no enrollment token/key configured")
-        return EXIT_NO_CREDENTIAL
-    except CredentialsRejectedError as exc:
-        print(f"enrollment refused by the server: {exc.reason}")
-        return EXIT_REJECTED
-    except TransportError as exc:
-        print(f"server unreachable: {exc}")
-        return EXIT_UNREACHABLE
-    # Same token as before: nothing was enrolled (a supplied one-time token stays unused).
-    unchanged = before is not None and agent.identity.token == before
-    state = "already enrolled" if unchanged else "enrolled"
-    print(f"{state}: agent_id={agent.identity.agent_id} asset_id={asset_id}")
-    return EXIT_ENROLLED
+        return dispatch(body)
+    except NotRunningAsServiceError:
+        logging.getLogger("sentra_agent").error(
+            "--service is only for the Windows Service Control Manager"
+            " (Start-Service SentraAgent); run without --service in a console"
+        )
+        return 2
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -79,6 +96,11 @@ def main(argv: list[str] | None = None) -> int:
         help="file holding a one-time enrollment token; deleted once the agent is enrolled",
     )
     parser.add_argument("--once", action="store_true", help="run a single cycle and exit")
+    parser.add_argument(
+        "--service",
+        action="store_true",
+        help="run under the Windows Service Control Manager (set by the Windows installer)",
+    )
     parser.add_argument(
         "--enroll",
         action="store_true",
@@ -102,9 +124,14 @@ def main(argv: list[str] | None = None) -> int:
         print(f"configuration error: {exc}", file=sys.stderr)
         return 2
 
-    log_file = configure_logging(config.state_dir, config.log_level, config.log_dir)
+    # Un servicio no tiene consola: solo el archivo de log rotado.
+    log_file = configure_logging(
+        config.state_dir, config.log_level, config.log_dir, console=not args.service
+    )
     logging.getLogger("sentra_agent").info("logging to file", extra={"path": str(log_file)})
     _warn_if_cleartext(config.api_url)
+    if args.service:
+        return _run_service(config)
 
     stop = threading.Event()
     # SIGTERM (Linux service managers) and SIGBREAK (Windows console close) stop the loop

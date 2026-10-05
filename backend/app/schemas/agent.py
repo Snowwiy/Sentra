@@ -14,6 +14,12 @@ class HostInfo(RequestModel):
     architecture: str = Field(min_length=1, max_length=32, examples=["x86_64"])
     primary_ip: IPvAnyAddress
     agent_version: str = Field(min_length=1, max_length=64, examples=["0.1.0"])
+    # Cómo se instaló el agente ("windows_service" desde la Fase 4F). Opcional: los agentes
+    # anteriores y los ejecutados a mano no lo envían. Patrón abierto en lugar de una lista
+    # cerrada para que un agente más nuevo con otro método no sea rechazado entero (422).
+    installation_method: str | None = Field(
+        default=None, pattern=r"^[a-z][a-z0-9_]{0,31}$", examples=["windows_service"]
+    )
 
 
 class AgentRegisterRequest(HostInfo):

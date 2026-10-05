@@ -49,6 +49,9 @@ class FakeApiState:
     enrollment_tokens: set[str] = field(default_factory=set)
     # When True the server stores telemetry but the connection drops before the response.
     lose_next_response: bool = False
+    # Campos de host que este servidor no conoce (simula un backend anterior a la Fase 4F):
+    # register y heartbeat responden 422 extra_forbidden si llegan.
+    unknown_host_fields: set[str] = field(default_factory=set)
 
     def paths(self) -> list[str]:
         return [path for path, _ in self.requests]
@@ -94,6 +97,8 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 return
 
             agent_id = body.get("agent_id", "")
+            if self._reject_unknown_host_fields(path, body):
+                return
             if path == "/agents/register":
                 one_time = self.headers.get("X-Enrollment-Token")
                 if one_time is not None:
@@ -163,6 +168,22 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 self._send(201, {"asset_id": state.agents[agent_id], "stored": stored})
             else:
                 self._send(404, {"error": {"code": "http_error", "message": "Not Found"}})
+
+        def _reject_unknown_host_fields(self, path: str, body: dict[str, Any]) -> bool:
+            if path == "/agents/register":
+                host, prefix = body, ["body"]
+            elif path == "/agents/heartbeat" and isinstance(body.get("host"), dict):
+                host, prefix = body["host"], ["body", "host"]
+            else:
+                return False
+            details = [
+                {"loc": [*prefix, name], "msg": "Extra inputs", "type": "extra_forbidden"}
+                for name in sorted(state.unknown_host_fields & set(host))
+            ]
+            if details:
+                error = {"code": "validation_error", "message": "bad", "details": details}
+                self._send(422, {"error": error})
+            return bool(details)
 
         def _reject_unknown_item_fields(self, body: dict[str, Any]) -> bool:
             details = [

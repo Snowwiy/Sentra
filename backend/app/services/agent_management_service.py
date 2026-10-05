@@ -119,6 +119,7 @@ class AgentManagementService:
             architecture=asset.architecture,
             platform=agent_platform(asset.os_name),
             agent_version=asset.agent_version,
+            installation_method=asset.agent_installation_method,
             monitoring_method=asset.monitoring_method,
             status=effective_status(asset, now, self._timeout),
             credential_status=credential_status(asset),

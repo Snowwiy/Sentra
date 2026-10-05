@@ -17,6 +17,7 @@ const AGENT: Agent = {
   architecture: "x86_64",
   platform: "linux",
   agent_version: "0.1.0",
+  installation_method: null,
   monitoring_method: "agent",
   status: "online",
   credential_status: "active",
@@ -70,6 +71,22 @@ describe("AgentPanel (asset detail)", () => {
     expect(panel).toHaveTextContent("Active");
     expect(panel).toHaveTextContent("No reportado");
     expect(within(panel).getByRole("button", { name: "Reiniciar agente" })).toBeDisabled();
+  });
+
+  it("shows the installation method reported by the agent", async () => {
+    agent = { ...AGENT, platform: "windows", os_name: "Windows", installation_method: "windows_service" };
+    render(
+      <MemoryRouter>
+        <AgentPanel assetId={AGENT.asset_id} />
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("region", { name: "Agent" });
+    await within(panel).findByText("Servicio Windows");
+    expect(panel).not.toHaveTextContent("No reportado");
+    expect(within(panel).getByRole("button", { name: "Reiniciar agente" })).toHaveAttribute(
+      "title",
+      expect.stringContaining("Restart-Service SentraAgent"),
+    );
   });
 
   it("revokes after confirmation and then shows the agent as revoked", async () => {

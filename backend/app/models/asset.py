@@ -78,6 +78,9 @@ class Asset(Base):
     # Validated as IPv4/IPv6 at the API boundary; 45 chars fits the longest IPv6 text form.
     primary_ip: Mapped[str] = mapped_column(String(45))
     agent_version: Mapped[str | None] = mapped_column(String(64))
+    # Método de instalación informado por el agente (p. ej. "windows_service"); null si el
+    # agente no lo informa (versiones anteriores, ejecución manual).
+    agent_installation_method: Mapped[str | None] = mapped_column(String(32))
 
     # --- Network view (discovery). Null until the asset is seen by a discovery run. ---------
     # Unicast MAC (aa:bb:cc:dd:ee:ff), only known on the server's own L2 segment.

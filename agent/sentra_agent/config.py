@@ -1,6 +1,7 @@
 """Agent configuration: defaults < TOML file < environment variables < CLI flags."""
 
 import os
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field, fields, replace
@@ -8,10 +9,13 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+INSTALLATION_METHOD = re.compile(r"[a-z][a-z0-9_]{0,31}")
+
 
 def default_state_dir() -> Path:
-    # Per-user locations so the agent runs without administrator rights. A future Windows
-    # service would use %ProgramData% instead; keeping this in one place eases that move.
+    # Per-user locations so the agent runs without administrator rights (manual runs).
+    # El servicio Windows no usa este valor: su agent.toml (generado por el instalador) fija
+    # state_dir en %ProgramData%\Sentra\Agent\state (ver sentra_agent/winsetup.py).
     if sys.platform == "win32":
         base = os.environ.get("LOCALAPPDATA") or str(Path.home() / "AppData" / "Local")
         return Path(base) / "Sentra" / "Agent"
@@ -47,6 +51,11 @@ class AgentConfig:
     # agent deletes once enrolled. It is used for enrollment only, never for other calls.
     enrollment_token: str | None = field(default=None, repr=False)
     enrollment_token_file: Path | None = None
+    # Cómo se instaló este agente (p. ej. "windows_service"), lo escribe el instalador en
+    # agent.toml y viaja con el registro y cada heartbeat para que el dashboard lo muestre.
+    # Sin valor (ejecución manual o instalaciones anteriores) no se envía nada: los
+    # servidores antiguos no conocen el campo.
+    installation_method: str | None = None
 
     def validate(self) -> "AgentConfig":
         parsed = urlparse(self.api_url)
@@ -67,6 +76,12 @@ class AgentConfig:
         # At least one slot: the current sample always goes through the buffer.
         if not 1 <= self.buffer_size <= 10_000:
             raise ValueError("buffer_size must be between 1 and 10000")
+        # Mismo patrón que valida el servidor (schemas/agent.py): un valor fuera de él haría
+        # que cada registro y heartbeat fuese rechazado con 422.
+        if self.installation_method is not None and not INSTALLATION_METHOD.fullmatch(
+            self.installation_method
+        ):
+            raise ValueError("installation_method must match [a-z][a-z0-9_]{0,31}")
         return self
 
 
@@ -79,7 +94,7 @@ def _coerce(name: str, value: Any) -> Any:
         return int(value)
     if target in (float, "float"):
         return float(value)
-    if name in ("enrollment_key", "enrollment_token"):
+    if name in ("enrollment_key", "enrollment_token", "installation_method"):
         return str(value).strip() or None
     if name in ("enrollment_token_file", "log_dir"):
         return Path(value).expanduser() if str(value) else None
