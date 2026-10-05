@@ -21,6 +21,7 @@ from app.services.background import (
     purge_old_data,
     sweep_offline_assets,
 )
+from app.services.discovery_runner import stop_discovery_runner
 from app.services.retention_service import RetentionPolicy
 
 logger = logging.getLogger(__name__)
@@ -43,7 +44,7 @@ def _log_schema_state() -> None:
 
 
 @asynccontextmanager
-async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     _log_schema_state()
     jobs: list[PeriodicJob] = []
@@ -61,21 +62,25 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
         # Only with an allowlist and an interval: by default nothing is ever probed.
         if settings.discovery_interval_minutes and settings.discovery_scope().enabled:
             stop = threading.Event()
-            jobs.append(
-                PeriodicJob(
-                    "discovery",
-                    settings.discovery_interval_minutes * 60,
-                    discovery_job(stop),
-                    stop=stop,
-                    # A fresh install shows the network soon, not one interval later.
-                    first_run_after=DISCOVERY_FIRST_RUN_SECONDS,
-                )
+            schedule = PeriodicJob(
+                "discovery",
+                settings.discovery_interval_minutes * 60,
+                discovery_job(stop),
+                stop=stop,
+                # A fresh install shows the network soon, not one interval later.
+                first_run_after=DISCOVERY_FIRST_RUN_SECONDS,
             )
+            # Para GET /discovery/schedule (próxima ejecución, en curso).
+            app.state.discovery_schedule = schedule
+            jobs.append(schedule)
     for job in jobs:
         job.start()
     yield
     for job in jobs:
         job.stop()
+    # Antes de cerrar el pool: el scan en curso del dashboard se cancela (resultado parcial,
+    # sin inferencias negativas) y los jobs en cola se cierran, sin dejar huérfanos.
+    stop_discovery_runner()
     get_engine().dispose()
 
 

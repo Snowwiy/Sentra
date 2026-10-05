@@ -1,13 +1,13 @@
-import { useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { sentraApi } from "../api/sentra";
-import type {
-  Asset,
-  DiscoveryJob,
-  DiscoveryJobStatus,
-  DiscoveryScope,
-  MonitoringMethod,
-} from "../api/types";
+import type { Asset, DiscoveryJob, MonitoringMethod } from "../api/types";
+import {
+  DISABLED_MESSAGE,
+  DISCOVERY_FEATURE,
+  DiscoveryModal,
+} from "../components/discovery/DiscoveryModal";
+import { JobsPanel, SchedulePanel, ScopePanel } from "../components/discovery/DiscoveryPanels";
 import { FilterSelect, Pager, SearchInput, SortHeader, Toolbar } from "../components/ListControls";
 import {
   DEVICE_TYPE_LABELS,
@@ -19,15 +19,24 @@ import {
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
+import { isActive } from "../lib/discovery";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { compareBy, listPage, matchesText } from "../lib/listing";
 import { inIpv4Network, ipSortKey } from "../lib/net";
+import { useConsole } from "../lib/useConsole";
 import { useListState } from "../lib/useListState";
 import { usePolling } from "../lib/usePolling";
 
 // Discovery runs every few minutes at most: no need to poll as often as live telemetry.
 const REFRESH_MS = Math.max(config.refreshIntervalMs, 60_000);
+// Polling controlado mientras hay un descubrimiento activo: el historial cada 2 s y la tabla
+// cada 5 s, para ver aparecer los activos sin recargar; en reposo se vuelve a REFRESH_MS.
+const ACTIVE_JOBS_MS = 2_000;
+const ACTIVE_ASSETS_MS = 5_000;
+const SCHEDULE_MS = 30_000;
 const PAGE_SIZE = 50;
+
+type ModalState = { jobId?: string } | undefined;
 
 type Key = "ip" | "name" | "type" | "status" | "method" | "first" | "last" | "ports";
 
@@ -44,30 +53,65 @@ const SORTERS: Record<Key, (a: Asset) => string | number | null> = {
 
 const METHODS: MonitoringMethod[] = ["discovered", "agentless", "agent"];
 
-const JOB_STATUS: Record<DiscoveryJobStatus, string> = {
-  running: "En curso",
-  completed: "Completado",
-  cancelled: "Parcial",
-  failed: "Fallido",
-};
-
 function inSubnet(asset: Asset, subnet: string): boolean {
   return asset.discovery_network === subnet || inIpv4Network(asset.primary_ip, subnet);
 }
 
 export function NetworkPage() {
+  // Si hay algún job en cola o en curso, según la última respuesta del historial. Se
+  // actualiza dentro del fetcher (no en un efecto) para elegir el intervalo de polling.
+  const [discovering, setDiscovering] = useState(false);
+  const fetchJobs = useCallback(async (signal: AbortSignal) => {
+    const result = await sentraApi.discoveryJobs(10, signal);
+    setDiscovering(result.items.some(isActive));
+    return result;
+  }, []);
+  const jobs = usePolling(fetchJobs, discovering ? ACTIVE_JOBS_MS : REFRESH_MS);
   const fetchAssets = useCallback((signal: AbortSignal) => sentraApi.listAssets(signal), []);
-  const assets = usePolling(fetchAssets, REFRESH_MS);
+  const assets = usePolling(fetchAssets, discovering ? ACTIVE_ASSETS_MS : REFRESH_MS);
   const fetchScope = useCallback((signal: AbortSignal) => sentraApi.discoveryScope(signal), []);
   const scope = usePolling(fetchScope, 10 * REFRESH_MS);
-  const fetchJobs = useCallback((signal: AbortSignal) => sentraApi.discoveryJobs(10, signal), []);
-  const jobs = usePolling(fetchJobs, REFRESH_MS);
+  const fetchSchedule = useCallback((signal: AbortSignal) => sentraApi.discoverySchedule(signal), []);
+  const schedule = usePolling(fetchSchedule, SCHEDULE_MS);
+  const consoleState = useConsole(DISCOVERY_FEATURE);
+  const [modal, setModal] = useState<ModalState>();
+  const tableRef = useRef<HTMLElement>(null);
   const navigate = useNavigate();
+
+  // Al terminar el último descubrimiento activo, la tabla se refresca en el acto con los
+  // activos nuevos o actualizados, sin esperar al siguiente intervalo.
+  const wasDiscovering = useRef(false);
+  const refreshAssets = assets.refresh;
+  const refreshJobs = jobs.refresh;
+  const refreshSchedule = schedule.refresh;
+  useEffect(() => {
+    if (wasDiscovering.current && !discovering) {
+      refreshAssets();
+      refreshSchedule();
+    }
+    wasDiscovering.current = discovering;
+  }, [discovering, refreshAssets, refreshSchedule]);
+
+  const jobChanged = useCallback(
+    (job: DiscoveryJob) => {
+      // El modal ve antes que el historial que un job empezó o terminó.
+      refreshJobs();
+      if (!isActive(job)) refreshAssets();
+    },
+    [refreshJobs, refreshAssets],
+  );
 
   const list = useListState<Key, { method: string; status: string; type: string; subnet: string }>(
     { key: "ip", dir: "asc" },
     { method: "", status: "", type: "", subnet: "" },
   );
+  const showDevices = (target: string) => {
+    // La red del job y los descubiertos más recientes primero: los nuevos quedan arriba.
+    list.setFilter("subnet", target);
+    list.setSort({ key: "first", dir: "desc" });
+    setModal(undefined);
+    tableRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
+  };
   const items = useMemo(() => assets.data?.items ?? [], [assets.data]);
   const types = useMemo(() => {
     const seen = new Set(items.map((a) => a.device_type ?? "unknown"));
@@ -77,6 +121,13 @@ export function NetworkPage() {
     }));
   }, [items]);
   const subnets = scope.data?.allowed_networks ?? [];
+  const activeJobs = (jobs.data?.items ?? []).filter(isActive);
+  const scopeEnabled = scope.data?.enabled === true;
+  const startDisabledReason = !scope.data
+    ? "Cargando redes autorizadas…"
+    : !scopeEnabled
+      ? DISABLED_MESSAGE
+      : consoleState.reason;
   const counts = useMemo(() => {
     const result: Record<MonitoringMethod, number> = { discovered: 0, agentless: 0, agent: 0 };
     for (const asset of items) result[asset.monitoring_method] += 1;
@@ -129,9 +180,43 @@ export function NetworkPage() {
         ))}
       </section>
 
-      <ScopePanel scope={scope.data} error={scope.error} />
+      <div className="network-actions">
+        <button
+          type="button"
+          className="button button--primary"
+          disabled={!scopeEnabled || !consoleState.available}
+          title={startDisabledReason}
+          onClick={() => setModal({})}
+        >
+          Iniciar descubrimiento
+        </button>
+        {activeJobs.length > 0 && (
+          <span className="muted small" role="status">
+            <span className="spinner spinner--inline" aria-hidden="true" /> Descubrimiento{" "}
+            {activeJobs[0]?.status === "queued" ? "en cola" : "en curso"} en{" "}
+            <span className="mono">{activeJobs.map((j) => j.target).join(", ")}</span> ·{" "}
+            <button type="button" className="link-button" onClick={() => setModal({ jobId: activeJobs[0]?.job_id })}>
+              Ver progreso
+            </button>
+          </span>
+        )}
+      </div>
+      {scope.data && scopeEnabled && consoleState.reason && !consoleState.loading && (
+        <div className="banner" role="status">
+          {consoleState.reason} Puedes consultar el estado y el historial.
+        </div>
+      )}
 
-      <section className="panel">
+      <div className="panels-2">
+        <SchedulePanel schedule={schedule.data} error={schedule.error} />
+        <ScopePanel scope={scope.data} error={scope.error} />
+      </div>
+
+      <section className="panel" aria-label="Activos de red" ref={tableRef}>
+        <div className="panel__toolbar">
+          <h2>Activos de red</h2>
+          {discovering && <span className="muted small">Actualizando mientras dura el descubrimiento…</span>}
+        </div>
         <Toolbar>
           <SearchInput
             value={list.query}
@@ -160,7 +245,12 @@ export function NetworkPage() {
             <FilterSelect
               label="Subred"
               value={list.filters.subnet}
-              options={subnets}
+              // "Ver dispositivos" de un job sobre una subred (CLI) también debe verse elegido.
+              options={
+                list.filters.subnet && !subnets.includes(list.filters.subnet)
+                  ? [...subnets, list.filters.subnet]
+                  : subnets
+              }
               onChange={(v) => list.setFilter("subnet", v)}
               allLabel="Todas"
             />
@@ -168,8 +258,8 @@ export function NetworkPage() {
         </Toolbar>
         {items.length === 0 ? (
           <EmptyState title="Sin activos">
-            Configura DISCOVERY_ALLOWED_NETWORKS y ejecuta <code>python -m app.cli discover</code> en
-            el servidor, o instala el agente en un equipo.
+            Pulsa «Iniciar descubrimiento» para analizar una red autorizada, o instala el agente en
+            un equipo.
           </EmptyState>
         ) : page.total === 0 ? (
           <EmptyState title="Ningún activo coincide con el filtro" />
@@ -232,120 +322,25 @@ export function NetworkPage() {
         )}
       </section>
 
-      <JobsPanel jobs={jobs.data?.items} loading={jobs.loading} error={jobs.error} />
-    </div>
-  );
-}
+      <JobsPanel
+        jobs={jobs.data?.items}
+        loading={jobs.loading}
+        error={jobs.error}
+        onOpen={(job) => setModal({ jobId: job.job_id })}
+      />
 
-function ScopePanel({ scope, error }: { scope: DiscoveryScope | undefined; error: Error | undefined }) {
-  if (!scope) {
-    return error ? (
-      <div className="banner banner--warn" role="alert">
-        No se pudo leer la configuración de descubrimiento: {errorMessage(error)}
-      </div>
-    ) : null;
-  }
-  if (!scope.enabled) {
-    return (
-      <div className="banner" role="status">
-        Descubrimiento de red desactivado: define DISCOVERY_ALLOWED_NETWORKS en el servidor (solo
-        se exploran las redes que autorices).
-      </div>
-    );
-  }
-  return (
-    <section className="panel" aria-label="Alcance del descubrimiento">
-      <dl className="fields fields--inline">
-        <div className="field">
-          <dt>Redes autorizadas</dt>
-          <dd className="mono">{scope.allowed_networks.join(", ")}</dd>
-        </div>
-        {scope.excluded.length > 0 && (
-          <div className="field">
-            <dt>Excluidas</dt>
-            <dd className="mono">{scope.excluded.join(", ")}</dd>
-          </div>
-        )}
-        <div className="field">
-          <dt>Puertos TCP</dt>
-          <dd className="mono small">{scope.ports.join(", ")}</dd>
-        </div>
-        <div className="field">
-          <dt>Ejecución</dt>
-          <dd>
-            {scope.interval_minutes ? `cada ${scope.interval_minutes} min` : "manual"}
-            <span className="muted small"> · manual: python -m app.cli discover</span>
-          </dd>
-        </div>
-      </dl>
-    </section>
-  );
-}
-
-function JobsPanel({
-  jobs,
-  loading,
-  error,
-}: {
-  jobs: DiscoveryJob[] | undefined;
-  loading: boolean;
-  error: Error | undefined;
-}) {
-  return (
-    <section className="panel" aria-label="Ejecuciones de descubrimiento">
-      <div className="panel__toolbar">
-        <h2>Ejecuciones recientes</h2>
-      </div>
-      {jobs && jobs.length > 0 ? (
-        <div className="table-wrap">
-          <table className="table">
-            <thead>
-              <tr>
-                <th>Inicio</th>
-                <th>Red</th>
-                <th>Estado</th>
-                <th>Origen</th>
-                <th>Escaneados</th>
-                <th>Activos</th>
-                <th>Nuevos</th>
-                <th>Puertos</th>
-                <th>Duración</th>
-                <th>Errores</th>
-              </tr>
-            </thead>
-            <tbody>
-              {jobs.map((job) => (
-                <tr key={job.job_id}>
-                  <td title={formatDateTime(job.started_at)}>{formatRelative(job.started_at)}</td>
-                  <td className="mono">{job.target}</td>
-                  <td>
-                    {JOB_STATUS[job.status]}
-                    {job.baseline && <span className="badge" title="Primera ejecución completa: establece la línea base sin alertas"> baseline</span>}
-                  </td>
-                  <td className="muted">{job.trigger === "manual" ? "Manual" : "Programado"}</td>
-                  <td>{job.hosts_scanned}</td>
-                  <td>{job.hosts_alive}</td>
-                  <td>{job.hosts_new}</td>
-                  <td>{job.open_ports}</td>
-                  <td className="muted">{job.duration_seconds != null ? `${job.duration_seconds.toFixed(1)} s` : "—"}</td>
-                  <td className={job.error_count ? "text-crit" : "muted"} title={job.errors.join("\n")}>
-                    {job.error_count}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      ) : loading ? (
-        <LoadingState label="Cargando ejecuciones…" />
-      ) : error ? (
-        <ErrorState message={errorMessage(error)} />
-      ) : (
-        <EmptyState title="Sin ejecuciones">
-          El descubrimiento se lanza desde el servidor (<code>python -m app.cli discover</code>) o de
-          forma periódica con DISCOVERY_INTERVAL_MINUTES.
-        </EmptyState>
+      {modal && (
+        <DiscoveryModal
+          scope={scope.data}
+          activeJobs={activeJobs}
+          initialJobId={modal.jobId}
+          canAdminister={consoleState.available}
+          adminReason={consoleState.reason}
+          onClose={() => setModal(undefined)}
+          onShowDevices={showDevices}
+          onChanged={jobChanged}
+        />
       )}
-    </section>
+    </div>
   );
 }

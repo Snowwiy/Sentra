@@ -1,5 +1,10 @@
 """Dashboard console guard: agent administration without ADMIN_API_KEY in the browser.
 
+Fase 4D reutiliza esta misma guarda para iniciar y cancelar descubrimientos de red
+(routes/console_discovery.py): son operaciones activas sobre la red y, sin login, solo el
+operador sentado en el servidor puede lanzarlas. La lectura (GET /discovery/*) sigue
+abierta como el resto del dashboard.
+
 TEMPORARY, until the dashboard has login and roles (RBAC). Replace `require_local_console`
 with a session/role check then; the routes in routes/console.py stay the same.
 
@@ -73,8 +78,8 @@ def require_local_console(
 ) -> None:
     if not settings.dashboard_admin_enabled:
         raise ConsoleDisabledError(
-            "Agent management from the dashboard is disabled: set DASHBOARD_ADMIN_ENABLED=true"
-            " on the server"
+            "Administration from the dashboard (agents, network discovery) is disabled: set"
+            " DASHBOARD_ADMIN_ENABLED=true on the server"
         )
     peer = request.client.host if request.client else None
     origin = request.headers.get("origin")
@@ -85,6 +90,6 @@ def require_local_console(
         or (origin is not None and not _origin_allowed(origin, request, settings.cors_origin_list))
     ):
         raise ConsoleNotLocalError(
-            "Agent management is only available from a browser on the Sentra server"
-            " (http://localhost)"
+            "Administration from the dashboard is only available from a browser on the Sentra"
+            " server (http://localhost)"
         )

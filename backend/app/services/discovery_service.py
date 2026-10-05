@@ -15,22 +15,26 @@ One job per allowed network and run. Rules that keep the result quiet and trustw
 - Agent assets never get "disappeared" alerts (their agent says more); instead, an agent
   asset that answers on the network while its agent is silent gets "monitoring lost".
 - One running job per network, enforced by the database (unique partial index).
+- Jobs del dashboard: se crean en cola (queued) y los ejecuta DiscoveryRunner en segundo
+  plano; el navegador consulta el estado en lugar de mantener una petición abierta. La
+  cancelación se pide en la base de datos y el scan la recoge en su siguiente latido.
 """
 
 import ipaddress
 import logging
 import threading
+import uuid
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import exists, select, update
+from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
-from app.core.exceptions import ConflictError
+from app.core.exceptions import ConflictError, NotFoundError
 from app.discovery import probes
 from app.discovery.classify import classify
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS, parse_ports
@@ -41,11 +45,17 @@ from app.discovery.scanner import (
     ScanConfig,
     ScanResult,
 )
-from app.discovery.targets import DiscoveryScope, IPNetwork
+from app.discovery.targets import DiscoveryScope, IPNetwork, TargetError
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.asset import Asset, AssetStatus, MonitoringMethod
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
-from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrigger
+from app.models.discovery import (
+    ACTIVE_JOB_STATUSES,
+    DiscoveryJob,
+    DiscoveryJobStatus,
+    DiscoveryStopReason,
+    DiscoveryTrigger,
+)
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.services.alert_service import AlertService, AlertThresholds
@@ -55,10 +65,27 @@ logger = logging.getLogger(__name__)
 
 # Complete runs in a row that find an open port not open before it counts as closed.
 PORT_CLOSE_AFTER = 2
+# Activos nuevos que un job recuerda para su detalle; el contador hosts_new no tiene límite.
+MAX_NEW_ASSET_IDS = 500
 
 
 class DiscoveryBusyError(ConflictError):
-    """A job for this network is already running."""
+    """A job for this network is already queued or running."""
+
+    code = "discovery_busy"
+
+
+class DiscoveryJobFinishedError(ConflictError):
+    """Se pidió cancelar un job que ya terminó."""
+
+    code = "discovery_job_finished"
+
+
+# Sin latido durante este tiempo, un job en cola o en curso pertenece a un proceso que ya no
+# existe (caída, kill, reinicio): se marca como fallido para no bloquear su red para siempre.
+# Holgado frente al intervalo de latido (segundos) para tolerar pausas breves de la base de
+# datos sin declarar huérfano un scan que sigue vivo.
+JOB_STALE_AFTER = timedelta(minutes=5)
 
 
 @dataclass(frozen=True)
@@ -68,6 +95,8 @@ class DiscoveryConfig:
     offline_after_misses: int = 3
     job_timeout: timedelta = timedelta(minutes=30)
     heartbeat_timeout: timedelta = timedelta(seconds=90)
+    # Cada cuánto se escribe el progreso y se comprueba si un operador pidió cancelar.
+    progress_interval: float = 1.0
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "DiscoveryConfig":
@@ -101,6 +130,89 @@ class JobSummary:
     errors: list[str] = field(default_factory=list)
 
 
+class _AnySet:
+    """Señal de parada compuesta: el scanner se detiene si cualquiera está activa.
+
+    Combina la parada del proceso (shutdown del scheduler/runner) con la cancelación de
+    este job concreto, sin que una cancelación de operador afecte a otros jobs.
+    """
+
+    def __init__(self, *events: threading.Event) -> None:
+        self._events = events
+
+    def is_set(self) -> bool:
+        return any(event.is_set() for event in self._events)
+
+
+class _ProgressReporter:
+    """Hilo que publica el progreso real del scan y recoge la petición de cancelación.
+
+    Va en un hilo aparte, y no en el event loop del scan, porque escribir en la base de
+    datos bloquea: así una base lenta retrasa el progreso mostrado, nunca las sondas.
+    """
+
+    def __init__(
+        self,
+        sessions: sessionmaker[Session],
+        job_id: int,
+        scanner: NetworkScanner,
+        cancel: threading.Event,
+        interval: float,
+    ) -> None:
+        self._sessions = sessions
+        self._job_id = job_id
+        self._scanner = scanner
+        self._cancel = cancel
+        self._interval = interval
+        self._stop = threading.Event()
+        self._thread = threading.Thread(
+            target=self._loop, name=f"discovery-progress-{job_id}", daemon=True
+        )
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(timeout=10)
+
+    def _loop(self) -> None:
+        while not self._stop.wait(self._interval):
+            try:
+                self.tick()
+            except Exception:
+                # Un fallo al publicar progreso (base de datos caída un momento) no debe
+                # abortar el scan; el siguiente intento lo vuelve a publicar.
+                logger.warning("discovery progress not saved", exc_info=True)
+
+    def tick(self) -> None:
+        progress = self._scanner.progress()
+        with self._sessions() as session:
+            requested = session.execute(
+                update(DiscoveryJob)
+                .where(
+                    DiscoveryJob.id == self._job_id,
+                    DiscoveryJob.status == DiscoveryJobStatus.RUNNING,
+                )
+                .values(
+                    hosts_scanned=progress.hosts_checked,
+                    hosts_alive=progress.hosts_alive,
+                    error_count=progress.errors,
+                    probes=progress.probes,
+                    progress={
+                        "phase": progress.phase,
+                        "details_total": progress.details_total,
+                        "details_done": progress.details_done,
+                    },
+                    heartbeat_at=datetime.now(UTC),
+                )
+                .returning(DiscoveryJob.cancel_requested_at)
+            ).first()
+            session.commit()
+        if requested is not None and requested[0] is not None:
+            self._cancel.set()
+
+
 class DiscoveryService:
     def __init__(
         self,
@@ -117,10 +229,19 @@ class DiscoveryService:
         self._thresholds = thresholds
         self._prober_factory = prober_factory
         self._gateways = gateways
+        # Parada de todo el proceso (shutdown). La cancelación de un job concreto la pide un
+        # operador en la base de datos y la recoge _ProgressReporter.
         self._cancel = cancel or threading.Event()
 
+    @property
+    def scope(self) -> DiscoveryScope:
+        return self._config.scope
+
     def run(
-        self, target: str | None = None, trigger: DiscoveryTrigger = DiscoveryTrigger.MANUAL
+        self,
+        target: str | None = None,
+        trigger: DiscoveryTrigger = DiscoveryTrigger.MANUAL,
+        via: str | None = None,
     ) -> list[JobSummary]:
         """Scan one target (inside the allowlist) or every allowed network. Raises
         TargetError for anything outside the allowlist; busy networks are skipped."""
@@ -129,26 +250,183 @@ class DiscoveryService:
             if self._cancel.is_set():
                 break
             try:
-                summaries.append(self.run_network(network, trigger))
+                summaries.append(self.run_network(network, trigger, via))
             except DiscoveryBusyError:
                 logger.info("discovery already running for network", extra={"target": str(network)})
         return summaries
 
-    def run_network(self, network: IPNetwork, trigger: DiscoveryTrigger) -> JobSummary:
+    def run_network(
+        self, network: IPNetwork, trigger: DiscoveryTrigger, via: str | None = None
+    ) -> JobSummary:
+        """Ejecución síncrona (CLI y scheduler): crea el job ya en curso y escanea."""
+        hosts_total = sum(1 for _ in self._config.scope.hosts(network))
+        job_id, baseline = self._start(str(network), trigger, via, hosts_total)
+        return self._execute(job_id, network, baseline)
+
+    # --- jobs pedidos desde el dashboard (DiscoveryRunner) -------------------------------------
+
+    def enqueue(self, target: str, via: str) -> tuple[int, uuid.UUID]:
+        """Crea un job en cola para `target` y devuelve (id interno, public_id).
+
+        Valida el target con la misma allowlist que la CLI y el scheduler (TargetError si
+        está fuera); la red queda reservada desde ahora por el índice único parcial.
+        """
+        [network] = self._config.scope.resolve(target)
+        hosts_total = sum(1 for _ in self._config.scope.hosts(network))
+        now = datetime.now(UTC)
+        with self._sessions() as session:
+            expire_stale_jobs(session, now)
+            job = DiscoveryJob(
+                target=str(network),
+                trigger=DiscoveryTrigger.MANUAL,
+                status=DiscoveryJobStatus.QUEUED,
+                baseline=False,
+                started_at=now,
+                heartbeat_at=now,
+                requested_via=via,
+                hosts_total=hosts_total,
+                progress={"phase": "queued"},
+                parameters=self._parameters(),
+                **_ZERO_COUNTERS,
+            )
+            session.add(job)
+            try:
+                session.commit()
+            except IntegrityError as exc:
+                session.rollback()
+                raise DiscoveryBusyError(
+                    f"discovery of {network} is already queued or running"
+                ) from exc
+            return job.id, job.public_id
+
+    def run_job(self, job_id: int) -> JobSummary | None:
+        """Ejecuta un job en cola. None si ya no estaba en cola (cancelado o expirado)."""
+        now = datetime.now(UTC)
+        with self._sessions() as session:
+            job = session.scalar(
+                select(DiscoveryJob).where(DiscoveryJob.id == job_id).with_for_update()
+            )
+            if job is None or job.status != DiscoveryJobStatus.QUEUED:
+                return None
+            try:
+                # Se revalida al empezar: la allowlist es la del proceso que escanea.
+                [network] = self._config.scope.resolve(job.target)
+            except TargetError as exc:
+                job.status = DiscoveryJobStatus.FAILED
+                job.completed_at = now
+                job.stop_reason = DiscoveryStopReason.ERROR
+                job.errors = [str(exc)[:300]]
+                job.error_count = 1
+                session.commit()
+                return None
+            baseline = self._is_baseline(session, job.target)
+            job.status = DiscoveryJobStatus.RUNNING
+            # Desde aquí cuenta la duración; mientras estaba en cola era la hora de la petición.
+            job.started_at = now
+            job.heartbeat_at = now
+            job.baseline = baseline
+            job.progress = {"phase": "pending"}
+            session.commit()
+        return self._execute(job_id, network, baseline)
+
+    def touch(self, job_ids: Sequence[int]) -> None:
+        """Latido de jobs en cola de este proceso, para que no se tomen por huérfanos."""
+        if not job_ids:
+            return
+        with self._sessions() as session:
+            session.execute(
+                update(DiscoveryJob)
+                .where(
+                    DiscoveryJob.id.in_(list(job_ids)),
+                    DiscoveryJob.status == DiscoveryJobStatus.QUEUED,
+                )
+                .values(heartbeat_at=datetime.now(UTC))
+            )
+            session.commit()
+
+    def abandon(self, job_ids: Sequence[int], reason: str) -> None:
+        """Cierra jobs en cola que este proceso ya no ejecutará (apagado de la API)."""
+        if not job_ids:
+            return
+        now = datetime.now(UTC)
+        with self._sessions() as session:
+            session.execute(
+                update(DiscoveryJob)
+                .where(
+                    DiscoveryJob.id.in_(list(job_ids)),
+                    DiscoveryJob.status == DiscoveryJobStatus.QUEUED,
+                )
+                .values(
+                    status=DiscoveryJobStatus.CANCELLED,
+                    completed_at=now,
+                    stop_reason=DiscoveryStopReason.SHUTDOWN,
+                    errors=[reason],
+                )
+            )
+            session.commit()
+
+    # --- internals ---------------------------------------------------------------------------
+
+    def _parameters(self) -> dict[str, Any]:
+        scan = self._config.scan
+        return {
+            "ports": list(scan.ports),
+            "timeout_ms": int(scan.timeout * 1000),
+            "concurrency": scan.concurrency,
+            "max_probes_per_second": scan.max_rate,
+            "icmp": scan.icmp,
+            "reverse_dns": scan.reverse_dns,
+        }
+
+    @staticmethod
+    def _is_baseline(session: Session, target: str) -> bool:
+        # La primera ejecución COMPLETA de una red es la línea base. Un job cancelado o
+        # fallido no cuenta: el siguiente completo sigue siendo baseline y no genera ruido.
+        return not session.scalar(
+            select(
+                exists().where(
+                    DiscoveryJob.target == target,
+                    DiscoveryJob.status == DiscoveryJobStatus.COMPLETED,
+                )
+            )
+        )
+
+    def _execute(self, job_id: int, network: IPNetwork, baseline: bool) -> JobSummary:
         target = str(network)
-        job_id, baseline = self._start(target, trigger)
         hosts = list(self._config.scope.hosts(network))
         logger.info(
             "discovery started",
             extra={"target": target, "hosts": len(hosts), "baseline": baseline},
         )
+        operator_cancel = threading.Event()
         try:
             prober = self._prober_factory() if self._prober_factory else None
-            result = NetworkScanner(self._config.scan, prober, self._cancel).run(hosts)
+            scanner = NetworkScanner(
+                self._config.scan, prober, _AnySet(self._cancel, operator_cancel)
+            )
+            reporter = _ProgressReporter(
+                self._sessions, job_id, scanner, operator_cancel, self._config.progress_interval
+            )
+            reporter.start()
+            try:
+                result = scanner.run(hosts)
+            finally:
+                # Parado antes de aplicar el resultado: así no compite con la transacción
+                # final por la fila del job.
+                reporter.stop()
+            stop_reason = None
+            if result.timed_out:
+                stop_reason = DiscoveryStopReason.TIMEOUT
+            elif result.cancelled:
+                stop_reason = (
+                    DiscoveryStopReason.OPERATOR
+                    if operator_cancel.is_set()
+                    else DiscoveryStopReason.SHUTDOWN
+                )
             with self._sessions() as session:
                 summary = ResultApplier(
                     session, self._config, self._thresholds, self._gateways()
-                ).apply(job_id, network, result, baseline)
+                ).apply(job_id, network, result, baseline, stop_reason)
                 session.commit()
         except Exception as exc:
             self._fail(job_id, exc)
@@ -165,48 +443,26 @@ class DiscoveryService:
         )
         return summary
 
-    def _start(self, target: str, trigger: DiscoveryTrigger) -> tuple[int, bool]:
+    def _start(
+        self, target: str, trigger: DiscoveryTrigger, via: str | None, hosts_total: int
+    ) -> tuple[int, bool]:
         now = datetime.now(UTC)
         with self._sessions() as session:
             # A job left "running" by a crashed process would block the network forever.
-            session.execute(
-                update(DiscoveryJob)
-                .where(
-                    DiscoveryJob.target == target,
-                    DiscoveryJob.status == DiscoveryJobStatus.RUNNING,
-                    DiscoveryJob.started_at < now - 2 * self._config.job_timeout,
-                )
-                .values(status=DiscoveryJobStatus.FAILED, completed_at=now, errors=["interrupted"])
-            )
-            baseline = not session.scalar(
-                select(
-                    exists().where(
-                        DiscoveryJob.target == target,
-                        DiscoveryJob.status == DiscoveryJobStatus.COMPLETED,
-                    )
-                )
-            )
-            scan = self._config.scan
+            expire_stale_jobs(session, now)
+            baseline = self._is_baseline(session, target)
             job = DiscoveryJob(
                 target=target,
                 trigger=trigger,
                 status=DiscoveryJobStatus.RUNNING,
                 baseline=baseline,
                 started_at=now,
-                hosts_scanned=0,
-                hosts_alive=0,
-                hosts_new=0,
-                open_ports=0,
-                probes=0,
-                error_count=0,
-                parameters={
-                    "ports": list(scan.ports),
-                    "timeout_ms": int(scan.timeout * 1000),
-                    "concurrency": scan.concurrency,
-                    "max_probes_per_second": scan.max_rate,
-                    "icmp": scan.icmp,
-                    "reverse_dns": scan.reverse_dns,
-                },
+                heartbeat_at=now,
+                requested_via=via,
+                hosts_total=hosts_total,
+                progress={"phase": "pending"},
+                parameters=self._parameters(),
+                **_ZERO_COUNTERS,
             )
             session.add(job)
             try:
@@ -220,12 +476,73 @@ class DiscoveryService:
         logger.exception("discovery failed", extra={"job": job_id})
         with self._sessions() as session:
             job = session.get(DiscoveryJob, job_id)
-            if job is not None and job.status == DiscoveryJobStatus.RUNNING:
+            if job is not None and job.status in ACTIVE_JOB_STATUSES:
                 job.status = DiscoveryJobStatus.FAILED
                 job.completed_at = datetime.now(UTC)
+                job.stop_reason = DiscoveryStopReason.ERROR
                 job.errors = [repr(exc)[:300]]
                 job.error_count = 1
                 session.commit()
+
+
+_ZERO_COUNTERS: dict[str, int] = {
+    "hosts_scanned": 0,
+    "hosts_alive": 0,
+    "hosts_new": 0,
+    "open_ports": 0,
+    "probes": 0,
+    "error_count": 0,
+    "ports_opened": 0,
+    "ports_closed": 0,
+}
+
+
+def expire_stale_jobs(session: Session, now: datetime) -> int:
+    """Marca como fallidos los jobs activos sin latido reciente (su proceso ya no existe).
+
+    Sin esto, un job que quedó "running" o "queued" tras una caída bloquearía su red para
+    siempre por el índice único. No hace commit: lo hace quien llama.
+    """
+    result = session.execute(
+        update(DiscoveryJob)
+        .where(
+            DiscoveryJob.status.in_(ACTIVE_JOB_STATUSES),
+            func.coalesce(DiscoveryJob.heartbeat_at, DiscoveryJob.started_at)
+            < now - JOB_STALE_AFTER,
+        )
+        .values(
+            status=DiscoveryJobStatus.FAILED,
+            completed_at=now,
+            stop_reason=DiscoveryStopReason.INTERRUPTED,
+            errors=["interrupted"],
+        )
+        .execution_options(synchronize_session=False)
+    )
+    return int(getattr(result, "rowcount", 0) or 0)
+
+
+def request_cancel(session: Session, public_id: uuid.UUID) -> DiscoveryJob:
+    """Pide cancelar un job. Un job en cola se cancela en el acto; uno en curso, en cuanto
+    su proceso lo lea (segundos). Lanza NotFoundError o DiscoveryJobFinishedError."""
+    now = datetime.now(UTC)
+    # FOR UPDATE: serializa con el runner, que reclama el job en cola con el mismo bloqueo,
+    # así un job no puede quedar a la vez "cancelado" y "en curso".
+    job = session.scalar(
+        select(DiscoveryJob).where(DiscoveryJob.public_id == public_id).with_for_update()
+    )
+    if job is None:
+        raise NotFoundError("Discovery job not found")
+    if job.status == DiscoveryJobStatus.QUEUED:
+        job.status = DiscoveryJobStatus.CANCELLED
+        job.completed_at = now
+        job.cancel_requested_at = now
+        job.stop_reason = DiscoveryStopReason.OPERATOR
+    elif job.status == DiscoveryJobStatus.RUNNING:
+        job.cancel_requested_at = job.cancel_requested_at or now
+    else:
+        raise DiscoveryJobFinishedError(f"Discovery job already {job.status.value}")
+    session.commit()
+    return job
 
 
 class AssetIndex:
@@ -288,13 +605,27 @@ class ResultApplier:
         self._config = config
         self._alerts = AlertService(session, thresholds)
         self._gateways = gateways
+        self._change_details: dict[str, Any] | None = None
+        self._ports_opened = 0
+        self._ports_closed = 0
 
     def apply(
-        self, job_id: int, network: IPNetwork, result: ScanResult, baseline: bool
+        self,
+        job_id: int,
+        network: IPNetwork,
+        result: ScanResult,
+        baseline: bool,
+        stop_reason: DiscoveryStopReason | None = None,
     ) -> JobSummary:
         now = datetime.now(UTC)
         job = self._session.get(DiscoveryJob, job_id)
         assert job is not None  # noqa: S101  (created by this run)
+        # Los cambios llevan el job que los detectó, para mostrarlos en su detalle ("Ver
+        # cambios") sin depender de coincidencias de fechas.
+        self._change_details = {"discovery_job_id": str(job.public_id)}
+        self._ports_opened = 0
+        self._ports_closed = 0
+        new_asset_ids: list[str] = []
         index = AssetIndex(self._session)
         seen: set[int] = set()
         new_assets = 0
@@ -307,6 +638,8 @@ class ResultApplier:
                 asset = self._create(obs, now)
                 index.add(asset)
                 new_assets += 1
+                if len(new_asset_ids) < MAX_NEW_ASSET_IDS:
+                    new_asset_ids.append(str(asset.public_id))
             matched.append((obs, asset, created))
         # Existing port rows of every matched asset, in batches (not one query per host).
         ports_by_asset = self._load_ports([asset.id for _, asset, _ in matched])
@@ -320,18 +653,33 @@ class ResultApplier:
             if created and not baseline:
                 self._announce(asset, open_ports, now)
             self._check_agent(asset, now)
+        # CRÍTICO: solo un scan completo permite conclusiones negativas (host desaparecido,
+        # puerto cerrado). Un scan cancelado, con timeout o fallido no sondeó todo, así que
+        # no ver un host no prueba que se haya ido.
         if result.complete:
             self._mark_missing(network, seen, now)
 
-        if result.cancelled:
+        if result.timed_out:
             job.status = DiscoveryJobStatus.CANCELLED
-        elif result.timed_out:
-            job.status = DiscoveryJobStatus.CANCELLED
+            job.stop_reason = DiscoveryStopReason.TIMEOUT
             result.errors.insert(0, "stopped at DISCOVERY_JOB_TIMEOUT_MINUTES (partial results)")
+        elif result.cancelled:
+            job.status = DiscoveryJobStatus.CANCELLED
+            job.stop_reason = stop_reason or DiscoveryStopReason.SHUTDOWN
         else:
             job.status = DiscoveryJobStatus.COMPLETED
+            job.stop_reason = None
         job.completed_at = datetime.now(UTC)
-        job.hosts_scanned = result.hosts_scanned
+        job.heartbeat_at = job.completed_at
+        # Hosts realmente evaluados: en un scan parcial son menos que el total. Un host que
+        # respondió a alguna sonda antes de la parada cuenta como evaluado aunque su fase de
+        # liveness no terminara, para que "encontrados" nunca supere a "evaluados".
+        checked = result.hosts_checked if result.hosts_checked is not None else result.hosts_scanned
+        job.hosts_scanned = max(checked, len(result.observations))
+        job.ports_opened = self._ports_opened
+        job.ports_closed = self._ports_closed
+        job.new_asset_ids = new_asset_ids or None
+        job.progress = {"phase": "done"}
         job.hosts_alive = len(result.observations)
         job.hosts_new = new_assets
         job.open_ports = open_total
@@ -450,8 +798,14 @@ class ResultApplier:
                     row.state = PortStateValue.CLOSED
                     row.closed_at = now
                     closed.append(port)
-        if obs.ports and first_scan:
+        # La línea base de exposición solo la fija un scan completo. Bug corregido en Fase 4D:
+        # un primer scan cancelado solo había sondeado los puertos de liveness, fijaba la
+        # base con datos incompletos y el siguiente scan completo alertaba como "puerto
+        # nuevo" de todos los demás puertos que ya estaban abiertos.
+        if obs.ports and first_scan and complete:
             asset.exposure_baseline_at = now
+        self._ports_opened += len(opened)
+        self._ports_closed += len(closed)
         for port in opened:
             self._change(asset, ChangeCategory.EXPOSURE, ChangeKind.PORT_OPENED, _label(port), now)
         for port in closed:
@@ -582,7 +936,7 @@ class ResultApplier:
                 category=category,
                 kind=kind,
                 item=item[:512],
-                details=None,
+                details=self._change_details,
                 collected_at=now,
                 detected_at=now,
             )

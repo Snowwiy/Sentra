@@ -13,7 +13,9 @@ import type {
   ChangeCategory,
   ChangeList,
   ConsoleInfo,
+  DiscoveryJobDetail,
   DiscoveryJobList,
+  DiscoverySchedule,
   DiscoveryScope,
   EventLevel,
   EnrollmentToken,
@@ -124,6 +126,10 @@ export const sentraApi = {
   discoveryScope: (signal?: AbortSignal) => apiGet<DiscoveryScope>("/discovery/scope", { signal }),
   discoveryJobs: (limit: number, signal?: AbortSignal) =>
     apiGet<DiscoveryJobList>(`/discovery/jobs${queryString({ limit })}`, { signal }),
+  discoveryJob: (jobId: string, signal?: AbortSignal) =>
+    apiGet<DiscoveryJobDetail>(`/discovery/jobs/${encodeURIComponent(jobId)}`, { signal }),
+  discoverySchedule: (signal?: AbortSignal) =>
+    apiGet<DiscoverySchedule>("/discovery/schedule", { signal }),
   getAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal }),
   listAgents: (signal?: AbortSignal) => apiGet<AgentList>("/agents", { signal }),
@@ -156,4 +162,14 @@ export const consoleApi = {
     apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`, undefined, {
       console: true,
     }),
+  // Descubrimiento de red: el backend vuelve a validar el target contra
+  // DISCOVERY_ALLOWED_NETWORKS; la lista del frontend es solo una comodidad.
+  startDiscovery: (target: string) =>
+    apiPost<DiscoveryJobDetail>("/console/discovery/jobs", { target }, { console: true }),
+  cancelDiscovery: (jobId: string) =>
+    apiPost<DiscoveryJobDetail>(
+      `/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`,
+      undefined,
+      { console: true },
+    ),
 };

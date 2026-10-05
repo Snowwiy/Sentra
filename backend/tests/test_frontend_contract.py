@@ -55,6 +55,12 @@ INTERFACES = {
     "EnrollmentToken": "EnrollmentTokenRead",
     "EnrollmentTokenList": "EnrollmentTokenList",
     "ConsoleInfo": "ConsoleInfo",
+    "DiscoveryNetwork": "DiscoveryNetworkRead",
+    "DiscoveryProgress": "DiscoveryProgressRead",
+    "DiscoveryAssetRef": "DiscoveryAssetRef",
+    "DiscoveryChange": "DiscoveryChangeRead",
+    "DiscoveryJobDetail": "DiscoveryJobDetail",
+    "DiscoverySchedule": "DiscoveryScheduleRead",
 }
 ENUMS = [
     "AssetStatus",
@@ -80,9 +86,13 @@ def _typescript() -> str:
 
 
 def _interface_fields(source: str, name: str) -> set[str]:
-    match = re.search(rf"export interface {name} \{{(.*?)\n\}}", source, re.DOTALL)
+    match = re.search(
+        rf"export interface {name}(?: extends (\w+))? \{{(.*?)\n\}}", source, re.DOTALL
+    )
     assert match, f"interface {name} not found in types.ts"
-    return set(re.findall(r"^\s+(\w+)\??:", match.group(1), re.MULTILINE))
+    fields = set(re.findall(r"^\s+(\w+)\??:", match.group(2), re.MULTILINE))
+    # `interface A extends B`: los campos heredados también forman parte del contrato.
+    return fields | (_interface_fields(source, match.group(1)) if match.group(1) else set())
 
 
 def _enum_values(source: str, name: str) -> list[str]:

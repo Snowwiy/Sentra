@@ -32,8 +32,10 @@ The agent-based flow is unchanged: agents use the same protocol and see no diffe
 - Load is bounded: `DISCOVERY_CONCURRENCY` probes in flight (default 64),
   `DISCOVERY_MAX_PROBES_PER_SECOND` started per second (default 200), a timeout per probe
   (`DISCOVERY_TIMEOUT_MS`, default 800) and per run (`DISCOVERY_JOB_TIMEOUT_MINUTES`).
-- Runs are started from the server (CLI) or by the periodic job, **never over HTTP**: the
-  dashboard has no authentication yet, and probing the network is an active operation.
+- Runs are started from the dashboard (**Red → Iniciar descubrimiento**, Fase 4D), by the
+  periodic job or from the server CLI. Starting and cancelling over HTTP only exist behind
+  the local console guard (`/api/v1/console/discovery`, see below): from another machine
+  of the LAN they answer 403. The public `/api/v1/discovery/*` routes are read-only.
 
 ## Configuration
 
@@ -61,7 +63,146 @@ DISCOVERY_EXCLUDED=192.168.1.250
 DISCOVERY_INTERVAL_MINUTES=60
 ```
 
-## Running it
+## Descubrimiento desde el dashboard (Fase 4D)
+
+El uso normal ya no necesita PowerShell: **Sentra → Red → Iniciar descubrimiento**.
+
+### Flujo
+
+1. La página Red muestra las redes autorizadas que devuelve el servidor (`GET
+   /api/v1/discovery/scope`, con el número de direcciones de cada una) y el estado del
+   descubrimiento automático (`GET /api/v1/discovery/schedule`).
+2. **Iniciar descubrimiento** abre un modal: redes autorizadas, red a analizar (lista
+   cerrada, sin texto libre), alcance (direcciones, puertos, ritmo máximo, exclusiones),
+   estado de esa red y la advertencia de que solo se analizan redes autorizadas.
+3. **Iniciar** llama a `POST /api/v1/console/discovery/jobs` con `{"target": "<red>"}`. La API
+   valida el target con la misma allowlist que la CLI, crea el job **en cola** y responde al
+   momento con `202` y el job. No hay ninguna petición HTTP abierta durante el scan.
+4. El scan corre en segundo plano en el proceso de la API (`DiscoveryRunner`, mismo
+   `DiscoveryService` que la CLI y el scheduler). La web consulta `GET
+   /api/v1/discovery/jobs/{job_id}` cada 1,5 s mientras el job está activo.
+5. Al terminar se muestra el resultado; el historial y la tabla Red se refrescan solos.
+
+Si `DISCOVERY_ALLOWED_NETWORKS` está vacío, la página dice: «El descubrimiento de red está
+desactivado. Configure DISCOVERY_ALLOWED_NETWORKS en el servidor.» y el botón queda
+deshabilitado. Las variables de entorno no se pueden cambiar desde el navegador.
+
+### Estados
+
+| Estado | Significado |
+|---|---|
+| `queued` | Pedido desde el dashboard, esperando al runner. Ya reserva su red. |
+| `running` | Escaneando. Avanzan los contadores reales. |
+| `completed` | Scan completo: el único que permite conclusiones negativas. |
+| `failed` | Error (`stop_reason=error`) o proceso desaparecido (`interrupted`). |
+| `cancelled` | Parado antes de terminar: `operator`, `shutdown` o `timeout`. Resultado parcial. |
+
+Los jobs del dashboard se ejecutan **de uno en uno** por proceso de la API: el segundo
+espera en cola, así la carga sobre la red nunca supera la de un scan. Una red solo puede
+tener un job en cola o en curso (índice único parcial): un segundo «Iniciar» sobre la misma
+red, la CLI o el scheduler reciben «ocupado» (`409 discovery_busy`) o la saltan.
+
+### Progreso
+
+Mientras corre, el job publica cada segundo valores reales: hosts evaluados / total
+(`hosts_scanned` / `hosts_total`), encontrados (`hosts_alive`), errores y fase (`progress`).
+
+- En la fase de **liveness** el total es exacto (todas las direcciones): se muestra barra.
+- En la fase de **detalle** (puertos y DNS de los hosts vivos) la barra usa como total los
+  hosts vivos encontrados.
+- Sin un total exacto (preparando, guardando) **no se inventa un porcentaje**: spinner y
+  contadores. Tampoco hay porcentaje global, porque el peso de cada fase depende de cuántos
+  hosts respondan.
+- Nuevos y actualizados solo se conocen al aplicar el resultado, al final.
+
+### Cancelación
+
+**Cancelar** llama a `POST /api/v1/console/discovery/jobs/{job_id}/cancel`.
+
+- Un job en cola se cancela en el acto y nunca se ejecuta.
+- En uno en curso se guarda `cancel_requested_at` en la base de datos; el hilo de progreso
+  lo lee en el siguiente latido (≈1 s) y el scanner deja de lanzar sondas. Al estar en la
+  base de datos funciona aunque la petición llegue a otro worker de la API.
+- Un job terminado responde `409 discovery_job_finished`.
+- **Un scan cancelado, fallido o incompleto nunca genera `asset_disappeared` ni
+  `port_closed`**, ni suma fallos (`network_misses`, `misses` de puerto). Lo que sí vio
+  (hosts nuevos, puertos abiertos) se guarda: es evidencia positiva.
+- Sin huérfanos: al apagar la API se cancela el scan en curso (`shutdown`) y los jobs en
+  cola se cierran como cancelados. Si el proceso muere sin apagarse, el latido
+  (`heartbeat_at`) deja de avanzar y a los 5 minutos el job pasa a `failed` / `interrupted`,
+  liberando la red.
+
+### Baseline
+
+Sin cambios de semántica: el **primer scan completo** de una red es la línea base y no
+genera alertas de nuevos activos ni puertos. Un primer scan cancelado no es línea base.
+
+Bug corregido en esta fase: un primer scan cancelado fijaba la línea base de exposición de
+los hosts con los pocos puertos de liveness que llegó a sondear, y el siguiente scan completo
+alertaba `port_exposed` de todos los demás puertos que ya estaban abiertos. Ahora la línea
+base de exposición de un activo solo la fija un scan completo.
+
+### Resultado e historial
+
+El resultado muestra hosts evaluados, dispositivos encontrados, nuevos, actualizados,
+nuevos puertos, puertos cerrados y duración, con las acciones **Ver dispositivos** (tabla
+Red filtrada por esa red, los más recientes primero), **Ver cambios** (activos nuevos y
+cambios de red/exposición de ese job) y **Ejecutar nuevamente**.
+
+**Ejecuciones recientes** lista fecha/hora, red, estado, encontrados, nuevos, actualizados,
+duración, perfil (puertos, ICMP, DNS) y origen (Dashboard, CLI, Programado). Cada fila abre
+su detalle. El historial no se puede borrar desde el navegador.
+
+### Descubrimiento automático
+
+Solo lectura: ON/OFF, intervalo, última ejecución y próxima ejecución prevista. Se configura
+con `DISCOVERY_INTERVAL_MINUTES` (y requiere redes autorizadas y tareas en segundo plano
+activas). La próxima ejecución es la estimación del proceso de la API que atiende la
+petición.
+
+### Seguridad
+
+- Iniciar y cancelar usan la consola local de la Fase 4C (`require_local_console`):
+  `DASHBOARD_ADMIN_ENABLED=true`, navegador en el propio servidor (peer y `Host` loopback),
+  `Origin` permitido y cabecera `X-Sentra-Console`. Desde otra PC de la LAN: `403
+  console_not_local`; la lectura (`GET /discovery/*`) sigue disponible.
+- `ADMIN_API_KEY` nunca llega al navegador; el frontend no guarda nada en `localStorage`,
+  `sessionStorage` ni cookies.
+- El target se valida siempre en el backend (`422 discovery_target_refused`): fuera de la
+  allowlist, `0.0.0.0/0`, Internet, multicast, broadcast, reservadas, demasiado grandes o
+  con bits de host. Antes de escanear, el runner vuelve a validar el target del job.
+- Cada petición queda en el log (`discovery requested`, `discovery cancel requested`) con
+  red, vía y job, sin cabeceras ni credenciales.
+- Mismo motor defensivo: sin fuerza bruta, evasión, paquetes raw, credenciales ni
+  fingerprinting agresivo.
+
+### API
+
+| Método y ruta | Acceso | Uso |
+|---|---|---|
+| `GET /api/v1/discovery/scope` | lectura | Redes autorizadas (`networks` con tamaño), puertos, límites |
+| `GET /api/v1/discovery/schedule` | lectura | Estado del scheduler |
+| `GET /api/v1/discovery/jobs` | lectura | Historial (campos nuevos: `requested_via`, `hosts_total`, `hosts_updated`, `ports_opened`, `ports_closed`, `cancel_requested`, `stop_reason`, `progress`, `parameters`) |
+| `GET /api/v1/discovery/jobs/{job_id}` | lectura | Estado, progreso, resultado, `new_assets`, `changes` |
+| `POST /api/v1/console/discovery/jobs` | consola local | Encola un job (`202`) |
+| `POST /api/v1/console/discovery/jobs/{job_id}/cancel` | consola local | Cancela |
+
+### Limitaciones
+
+- Una cola en memoria por proceso de la API; con varios workers cada uno tiene la suya
+  (la reserva por red en la base de datos evita escanear dos veces la misma red).
+- El progreso se publica cada segundo: lo mostrado puede ir un segundo por detrás.
+- La cancelación de un job en curso tarda hasta un latido más las sondas que ya estaban en
+  vuelo (como mucho `DISCOVERY_TIMEOUT_MS`).
+- La configuración (redes, intervalo, puertos) sigue en variables de entorno.
+
+### CLI como alternativa administrativa
+
+`python -m app.cli discover` queda como herramienta administrativa y de depuración: mismo
+servicio, misma allowlist, ejecuta en primer plano sin pasar por la cola de la API y aparece
+en el historial con origen CLI.
+
+## Running it (CLI)
 
 ```powershell
 cd backend
@@ -72,9 +213,10 @@ cd backend
 
 Each run over one network is a **job** (`GET /api/v1/discovery/jobs`): start/end time,
 network, hosts scanned/up/new, open ports, probes, errors, duration, whether it was the
-baseline. A database index allows only one running job per network, so two schedulers,
-API workers or a manual run cannot scan the same network at the same time. A job left
-"running" by a crashed process is marked failed after twice the job timeout.
+baseline. A database index allows only one queued or running job per network, so two
+schedulers, API workers or a manual run cannot scan the same network at the same time. A
+job left queued or running by a crashed process is marked failed (`interrupted`) once its
+heartbeat is 5 minutes old.
 
 A /24 with the `common` profile (27 ports) takes about 35 s at the default rate limit
 (6858 probes; measured on loopback, where every address answers). Dead addresses cost

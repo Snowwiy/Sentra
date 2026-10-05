@@ -865,6 +865,24 @@ def test_hybrid_read() -> None:
     check("discovery jobs limit 0 -> 422", call("GET", "/discovery/jobs?limit=0").status == 422)
     r = call("POST", "/discovery/jobs", {"target": "0.0.0.0/0"})
     check("no HTTP endpoint starts a scan", r.status in (404, 405), (r.status, r.body))
+    # Fase 4D: iniciar/cancelar solo por la consola local del dashboard. Sin la cabecera de
+    # consola (o con la consola desactivada) siempre 403, nunca un scan.
+    for path, body in (
+        ("/console/discovery/jobs", {"target": "0.0.0.0/0"}),
+        (f"/console/discovery/jobs/{uuid.uuid4()}/cancel", None),
+    ):
+        r = call("POST", path, body)
+        check(
+            f"{path.split('/')[-1]} discovery without console -> 403",
+            r.status == 403 and r.body["error"]["code"].startswith("console_"),
+            (r.status, r.body),
+        )
+    r = call("GET", "/discovery/schedule")
+    check("discovery schedule readable", r.status == 200 and "enabled" in r.body, r.body)
+    check(
+        "discovery job unknown -> 404",
+        call("GET", f"/discovery/jobs/{uuid.uuid4()}").status == 404,
+    )
 
 
 def test_enrollment_tokens() -> None:

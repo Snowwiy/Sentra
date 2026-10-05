@@ -7,24 +7,35 @@ cannot reach are reported too (bound to localhost or firewalled), which is as us
 as an unexpected open port.
 """
 
+import ipaddress
+from collections.abc import Sequence
+from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import Row, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
 from app.discovery.ports import SENSITIVE_PORTS, parse_ports
-from app.models.discovery import DiscoveryJob
+from app.models.asset import Asset
+from app.models.change import AssetChange
+from app.models.discovery import ACTIVE_JOB_STATUSES, DiscoveryJob, DiscoveryTrigger
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
 from app.repositories.asset_repository import AssetRepository
 from app.schemas.discovery import (
     AgentListener,
+    DiscoveryAssetRef,
+    DiscoveryChangeRead,
+    DiscoveryJobDetail,
     DiscoveryJobList,
     DiscoveryJobRead,
+    DiscoveryNetworkRead,
+    DiscoveryProgressRead,
+    DiscoveryScheduleRead,
     DiscoveryScopeRead,
     ExposedPort,
     ExposureRead,
@@ -123,27 +134,59 @@ class ExposureService:
             .order_by(DiscoveryJob.started_at.desc(), DiscoveryJob.id.desc())
             .limit(limit)
         ).all()
-        return DiscoveryJobList(
-            items=[
-                DiscoveryJobRead(
-                    job_id=job.public_id,
-                    target=job.target,
-                    trigger=job.trigger,
-                    status=job.status,
-                    baseline=job.baseline,
-                    started_at=job.started_at,
-                    completed_at=job.completed_at,
-                    duration_seconds=job.duration_seconds,
-                    hosts_scanned=job.hosts_scanned,
-                    hosts_alive=job.hosts_alive,
-                    hosts_new=job.hosts_new,
-                    open_ports=job.open_ports,
-                    probes=job.probes,
-                    error_count=job.error_count,
-                    errors=job.errors or [],
+        return DiscoveryJobList(items=[_job_read(job) for job in jobs])
+
+    def job(self, public_id: UUID) -> DiscoveryJobDetail:
+        job = self._session.scalar(select(DiscoveryJob).where(DiscoveryJob.public_id == public_id))
+        if job is None:
+            raise NotFoundError("Discovery job not found")
+        new_assets: list[DiscoveryAssetRef] = []
+        if job.new_asset_ids:
+            ids = [UUID(value) for value in job.new_asset_ids]
+            assets = self._session.scalars(select(Asset).where(Asset.public_id.in_(ids))).all()
+            # Puede haber menos que ids: un activo nuevo pudo fusionarse después con el
+            # registro de su agente (reconciliación) o borrarse.
+            new_assets = [
+                DiscoveryAssetRef(
+                    asset_id=a.public_id,
+                    display_name=a.display_name,
+                    primary_ip=a.primary_ip,
+                    mac_address=a.mac_address,
+                    device_type=a.device_type,
+                    monitoring_method=a.monitoring_method,
                 )
-                for job in jobs
+                for a in sorted(assets, key=lambda a: ipaddress_key(a.primary_ip))
             ]
+        rows: Sequence[Row[AssetChange, Asset]] = []
+        # Los cambios se escriben al terminar el job. La ventana de fechas usa el índice
+        # ix_asset_changes_detected y el id del job en details descarta los de otros jobs
+        # simultáneos; así el detalle, que la web consulta cada pocos segundos, es barato.
+        if job.completed_at is not None:
+            rows = self._session.execute(
+                select(AssetChange, Asset)
+                .join(Asset, Asset.id == AssetChange.asset_id)
+                .where(
+                    AssetChange.detected_at >= job.started_at,
+                    AssetChange.detected_at <= job.completed_at,
+                    AssetChange.details["discovery_job_id"].astext == str(job.public_id),
+                )
+                .order_by(AssetChange.id)
+                .limit(MAX_JOB_CHANGES)
+            ).all()
+        changes = [
+            DiscoveryChangeRead(
+                asset_id=asset.public_id,
+                display_name=asset.display_name,
+                primary_ip=asset.primary_ip,
+                category=change.category,
+                kind=change.kind,
+                item=change.item,
+                detected_at=change.detected_at,
+            )
+            for change, asset in rows
+        ]
+        return DiscoveryJobDetail(
+            **_job_read(job).model_dump(), new_assets=new_assets, changes=changes
         )
 
     def scope(self) -> DiscoveryScopeRead:
@@ -152,6 +195,11 @@ class ExposureService:
         return DiscoveryScopeRead(
             enabled=scope.enabled,
             allowed_networks=[str(n) for n in scope.allowed],
+            networks=[
+                DiscoveryNetworkRead(network=str(n), hosts=sum(1 for _ in scope.hosts(n)))
+                for n in scope.allowed
+            ],
+            max_hosts_per_network=scope.max_hosts,
             excluded=[str(n) for n in scope.excluded],
             ports=list(parse_ports(settings.discovery_ports)),
             interval_minutes=settings.discovery_interval_minutes,
@@ -161,3 +209,74 @@ class ExposureService:
             concurrency=settings.discovery_concurrency,
             max_probes_per_second=settings.discovery_max_probes_per_second,
         )
+
+    def schedule(self, next_run_at: datetime | None, running: bool) -> DiscoveryScheduleRead:
+        """Estado del scheduler. `next_run_at`/`running` los aporta el PeriodicJob de este
+        proceso (no se guardan en la base de datos)."""
+        settings = self._settings
+        reason = None
+        if not settings.discovery_scope().enabled:
+            reason = "no_networks"
+        elif not settings.discovery_interval_minutes:
+            reason = "no_interval"
+        elif not settings.background_jobs_enabled:
+            reason = "background_jobs_disabled"
+        last = self._session.scalar(
+            select(DiscoveryJob)
+            .where(DiscoveryJob.trigger == DiscoveryTrigger.SCHEDULED)
+            .order_by(DiscoveryJob.started_at.desc(), DiscoveryJob.id.desc())
+            .limit(1)
+        )
+        return DiscoveryScheduleRead(
+            enabled=reason is None,
+            disabled_reason=reason,
+            interval_minutes=settings.discovery_interval_minutes,
+            last_run_at=last.started_at if last else None,
+            last_run_status=last.status if last else None,
+            next_run_at=next_run_at if reason is None else None,
+            running=running,
+        )
+
+
+# Cambios que devuelve el detalle de un job; un scan normal produce muchos menos.
+MAX_JOB_CHANGES = 1000
+
+
+def ipaddress_key(address: str) -> tuple[int, int]:
+    try:
+        ip = ipaddress.ip_address(address)
+    except ValueError:
+        return (9, 0)
+    return (ip.version, int(ip))
+
+
+def _job_read(job: DiscoveryJob) -> DiscoveryJobRead:
+    finished = job.status not in ACTIVE_JOB_STATUSES
+    progress = job.progress if job.status in ACTIVE_JOB_STATUSES else None
+    return DiscoveryJobRead(
+        job_id=job.public_id,
+        target=job.target,
+        trigger=job.trigger,
+        status=job.status,
+        baseline=job.baseline,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        duration_seconds=job.duration_seconds,
+        hosts_scanned=job.hosts_scanned,
+        hosts_alive=job.hosts_alive,
+        hosts_new=job.hosts_new,
+        open_ports=job.open_ports,
+        probes=job.probes,
+        error_count=job.error_count,
+        errors=job.errors or [],
+        requested_via=job.requested_via,
+        hosts_total=job.hosts_total,
+        # Vistos y ya conocidos = vivos - nuevos; solo tiene sentido con el job terminado.
+        hosts_updated=max(job.hosts_alive - job.hosts_new, 0) if finished else None,
+        ports_opened=job.ports_opened,
+        ports_closed=job.ports_closed,
+        cancel_requested=job.cancel_requested_at is not None,
+        stop_reason=job.stop_reason,
+        progress=DiscoveryProgressRead.model_validate(progress) if progress else None,
+        parameters=job.parameters,
+    )

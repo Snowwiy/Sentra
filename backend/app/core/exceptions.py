@@ -59,6 +59,18 @@ class ConflictError(SentraError):
     code = "conflict"
 
 
+class DiscoveryDisabledError(ConflictError):
+    # DISCOVERY_ALLOWED_NETWORKS vacío: no hay nada que se pueda escanear.
+    code = "discovery_disabled"
+
+
+class DiscoveryTargetError(SentraError):
+    # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
+    # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "discovery_target_refused"
+
+
 def _error(status_code: int, code: str, message: str, details: object = None) -> JSONResponse:
     body: dict[str, object] = {"code": code, "message": message}
     if details is not None:

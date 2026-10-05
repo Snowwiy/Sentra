@@ -69,10 +69,38 @@ class ScanResult:
     probes: int = 0
     cancelled: bool = False
     timed_out: bool = False
+    # Direcciones cuya fase de liveness terminó. Igual a hosts_scanned en un scan completo;
+    # menor en uno cancelado, y es lo que se informa como "hosts evaluados".
+    hosts_checked: int | None = None
 
     @property
     def complete(self) -> bool:
         return not (self.cancelled or self.timed_out)
+
+
+@dataclass(frozen=True)
+class ScanProgress:
+    """Contadores reales del scan en curso, leídos desde otro hilo para informar progreso.
+
+    Solo la fase "liveness" tiene un total exacto conocido de antemano (todas las
+    direcciones); la fase "details" solo afecta a los hosts vivos, que no se conocen hasta
+    terminar la primera. Por eso la UI no debe inventar un porcentaje global.
+    """
+
+    phase: str
+    hosts_total: int
+    hosts_checked: int
+    hosts_alive: int
+    details_total: int
+    details_done: int
+    errors: int
+    probes: int
+
+
+class CancelSignal(Protocol):
+    """Cualquier objeto con is_set(): threading.Event o una combinación de varios."""
+
+    def is_set(self) -> bool: ...
 
 
 class Prober(Protocol):
@@ -139,14 +167,35 @@ class NetworkScanner:
         self,
         config: ScanConfig,
         prober: Prober | None = None,
-        cancel: threading.Event | None = None,
+        cancel: CancelSignal | None = None,
     ) -> None:
         self._config = config
         self._prober: Prober = prober or SystemProber()
-        self._cancel = cancel or threading.Event()
+        self._cancel: CancelSignal = cancel or threading.Event()
         self._errors: list[str] = []
         self._probes = 0
         self._timed_out = False
+        # Contadores de progreso. Los escribe solo el event loop del scan y los lee el hilo
+        # que reporta a la base de datos; en CPython leer un int es atómico, y un valor
+        # ligeramente atrasado es aceptable para mostrar progreso.
+        self._phase = "pending"
+        self._total = 0
+        self._checked = 0
+        self._alive = 0
+        self._details_total = 0
+        self._details_done = 0
+
+    def progress(self) -> ScanProgress:
+        return ScanProgress(
+            phase=self._phase,
+            hosts_total=self._total,
+            hosts_checked=self._checked,
+            hosts_alive=self._alive,
+            details_total=self._details_total,
+            details_done=self._details_done,
+            errors=len(self._errors),
+            probes=self._probes,
+        )
 
     def run(self, addresses: Sequence[IPAddress]) -> ScanResult:
         """Synchronous entry point (background thread, CLI)."""
@@ -164,16 +213,22 @@ class NetworkScanner:
         targets = list(addresses)
         found = {str(a): HostObservation(str(a)) for a in targets}
         live_ports = liveness_ports(self._config.ports)
+        self._total = len(targets)
         try:
+            self._phase = "liveness"
             for batch in _batches(targets, HOST_BATCH):
                 await asyncio.gather(*(self._liveness(a, found[str(a)], live_ports) for a in batch))
             self._from_neighbours(found)
             alive = [a for a in targets if found[str(a)].alive]
+            self._alive = len(alive)
+            self._phase = "details"
+            self._details_total = len(alive)
             remaining = tuple(p for p in self._config.ports if p not in live_ports)
             for batch in _batches(alive, HOST_BATCH):
                 await asyncio.gather(*(self._details(a, found[str(a)], remaining) for a in batch))
         except _StopScanError:
             pass
+        self._phase = "done"
         observations = [o for o in found.values() if o.alive]
         return ScanResult(
             hosts_scanned=len(targets),
@@ -182,6 +237,7 @@ class NetworkScanner:
             probes=self._probes,
             cancelled=self._cancel.is_set(),
             timed_out=self._timed_out,
+            hosts_checked=self._checked,
         )
 
     # --- phases ---------------------------------------------------------------------------
@@ -193,6 +249,11 @@ class NetworkScanner:
         if self._config.icmp:
             tasks.append(self._icmp(address, obs))
         await asyncio.gather(*tasks)
+        # Solo cuenta como evaluada si todas sus sondas terminaron: una parada (_StopScanError)
+        # sale por excepción antes de llegar aquí.
+        self._checked += 1
+        if obs.alive:
+            self._alive += 1
 
     def _from_neighbours(self, found: dict[str, HostObservation]) -> None:
         try:
@@ -214,6 +275,7 @@ class NetworkScanner:
         if self._config.reverse_dns:
             tasks.append(self._rdns(address, obs))
         await asyncio.gather(*tasks)
+        self._details_done += 1
 
     # --- probes ---------------------------------------------------------------------------
 

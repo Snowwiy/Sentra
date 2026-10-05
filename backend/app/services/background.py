@@ -8,6 +8,7 @@ A dedicated scheduler/worker process is the step up when that matters.
 import logging
 import threading
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
@@ -36,6 +37,10 @@ class PeriodicJob:
         # Shared with long jobs (discovery) so shutdown interrupts them instead of waiting.
         self._stop = stop or threading.Event()
         self._thread = threading.Thread(target=self._loop, name=name, daemon=True)
+        # Solo informativo (estado del scheduler en la web): próxima ejecución prevista y si
+        # hay una en curso. La espera se cuenta desde el final de la ejecución anterior.
+        self.next_run_at: datetime | None = None
+        self.running = False
 
     def start(self) -> None:
         self._thread.start()
@@ -46,14 +51,20 @@ class PeriodicJob:
 
     def _loop(self) -> None:
         delay = self._first
+        self.next_run_at = datetime.now(UTC) + timedelta(seconds=delay)
         while not self._stop.wait(delay):
             delay = self._interval
+            self.next_run_at = None
+            self.running = True
             try:
                 self._job()
             except Exception:
                 # A failing run (e.g. database briefly down) must not kill the thread;
                 # the next run retries.
                 logger.exception("background job failed", extra={"job": self._name})
+            finally:
+                self.running = False
+                self.next_run_at = datetime.now(UTC) + timedelta(seconds=delay)
 
 
 def sweep_offline_assets() -> None:
@@ -96,6 +107,6 @@ def discovery_job(stop: threading.Event) -> Callable[[], None]:
             AlertThresholds.from_settings(settings),
             cancel=stop,
         )
-        service.run(trigger=DiscoveryTrigger.SCHEDULED)
+        service.run(trigger=DiscoveryTrigger.SCHEDULED, via="scheduler")
 
     return run

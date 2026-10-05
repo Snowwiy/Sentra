@@ -1090,3 +1090,86 @@ td > .badge:first-child {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
+
+/* Descubrimiento de red (Fase 4D) */
+
+.badge--info {
+  color: var(--accent);
+  border-color: rgb(56 189 248 / 0.5);
+}
+
+.discovery-job__title {
+  margin: 0;
+  font-size: 1rem;
+}
+
+/* Barra solo para progreso con total exacto; sin total se usa spinner + contadores. */
+.progress {
+  height: 8px;
+  margin-top: 6px;
+  overflow: hidden;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+}
+
+.progress__bar {
+  height: 100%;
+  background: var(--accent);
+  transition: width 0.4s ease;
+}
+
+.code-block {
+  margin: 6px 0 0;
+  padding: 8px 10px;
+  max-height: 200px;
+  overflow: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+.plain-list {
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.network-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  align-items: center;
+}
+
+.panels-2 {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+@media (max-width: 900px) {
+  .panels-2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+.link-button {
+  padding: 0;
+  font: inherit;
+  color: var(--accent);
+  text-align: left;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+
+.link-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

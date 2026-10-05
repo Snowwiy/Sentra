@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-04.
+Last updated: 2026-10-04 (Fase 4D).
 
 ## Current state
 
@@ -12,13 +12,13 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0013 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0014 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (BFF, local browser only, `DASHBOARD_ADMIN_ENABLED`): temporary until dashboard login/RBAC |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
-| Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab |
+| Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab. Fase 4D: descubrimiento desde la página Red (iniciar, progreso real, cancelar, resultado, historial, estado del scheduler) sin terminal |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve via CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 336 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, console guard and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 70 tests (Vitest, incl. DOM tests of the Agentes page with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
+| Tests | Backend 372 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, console guard and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 91 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 147 contract checks |
 
 ## Architecture
 
@@ -51,7 +51,7 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
   status, discovery times).
 - `asset_ports`: TCP exposure per asset and port (open/closed, first/last seen), updated in
   place; history in `asset_changes` (category exposure/network).
-- `discovery_jobs`: one row per discovery run and network; one running job per network.
+- `discovery_jobs`: one row per discovery run and network; one queued or running job per network (0014: estado `queued`, progreso, latido, cancelación, origen y resultados del job).
 - `asset_inventories`: one JSONB snapshot per asset (interfaces, disks, listening/established
   connections, users, processes, services, software, accounts, network); newer snapshots
   replace older only.
@@ -89,10 +89,13 @@ Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
 `GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events` ·
 `GET /agents` · `GET /assets/{id}/agent`.
 Console (local dashboard): `GET /console` · `GET|POST /console/enrollment-tokens` ·
-`POST /console/enrollment-tokens/{id}/revoke` · `POST /console/agents/{id}/revoke|reinstate`.
+`POST /console/enrollment-tokens/{id}/revoke` · `POST /console/agents/{id}/revoke|reinstate` ·
+`POST /console/discovery/jobs` · `POST /console/discovery/jobs/{id}/cancel` (Fase 4D).
 Operator CLI (`python -m app.cli`): `list-agents`, `revoke-agent`, `reinstate-agent`,
 `ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`.
-Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/jobs`.
+Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/schedule` ·
+`GET /discovery/jobs` · `GET /discovery/jobs/{id}`. `discover` en la CLI queda como herramienta
+administrativa/debug: el uso normal es la página Red (docs/discovery.md).
 Details: `docs/agent-protocol.md`.
 
 ## Run
@@ -131,7 +134,8 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Free-text search over all events (no asset filter) scans the table: 0.8 s at 1M events.
   Per-asset search is 40 ms. A trigram index (pg_trgm) would fix it if it becomes a need.
 - Alert thresholds are global environment variables, not per asset.
-- Discovery: no OUI vendor database; `GET /assets` is not paginated (about 850 KB and 120 ms
+- Discovery: la cola del dashboard es en memoria por proceso (un job a la vez por worker);
+  la configuración sigue en variables de entorno. No OUI vendor database; `GET /assets` is not paginated (about 850 KB and 120 ms
   with 1000 assets); agentless collectors are contracts only (no credential store yet).
 - Local PostgreSQL listens on 5433 on the dev PC (setup detects it).
 
@@ -141,6 +145,10 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Token hashes with SHA-256 (tokens are 256-bit random; slow hashes add no security here).
 - Agent buffers up to 120 samples (memory + `telemetry_buffer.json`); backoff interval → 300 s with jitter.
 - Agent token at rest: DPAPI current-user scope via ctypes (no pywin32). Revocation via operator CLI (`python -m app.cli`) or the local dashboard console; no remote HTTP admin for it until dashboard auth exists.
+- Descubrimiento desde la web (Fase 4D): jobs en cola ejecutados por un runner en segundo
+  plano en el proceso de la API (uno a la vez), progreso y cancelación a través de la base
+  de datos (funciona con varios workers), latido para detectar jobs huérfanos. Iniciar y
+  cancelar reutilizan la consola local de la Fase 4C; sin worker ni cola externa (Redis).
 - Agent management in the browser without exposing ADMIN_API_KEY: backend-for-frontend
   console restricted to the server's own browser (docs/agent-management.md), chosen over
   typing the key into the page or a session scheme that would pre-empt the login design.

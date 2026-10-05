@@ -42,4 +42,19 @@ describe("frontend security", () => {
       );
     }
   });
+
+  // Fase 4D: iniciar/cancelar descubrimientos usa la misma consola local; tampoco aquí se
+  // persiste ni se registra nada en el navegador.
+  it("network discovery code never persists or logs anything", () => {
+    const files = sources(SRC).filter((f) =>
+      /components[\\/]discovery|NetworkPage|lib[\\/]discovery|useConsole/.test(f),
+    );
+    expect(files.length).toBeGreaterThanOrEqual(5);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /localStorage|sessionStorage|indexedDB|document\.cookie|console\.(log|info|debug|warn|error)/,
+      );
+    }
+  });
 });

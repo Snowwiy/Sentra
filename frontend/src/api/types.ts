@@ -302,13 +302,22 @@ export interface EventList {
 
 // --- Network discovery -----------------------------------------------------------------------
 
-export type DiscoveryJobStatus = "running" | "completed" | "cancelled" | "failed";
+export type DiscoveryJobStatus = "queued" | "running" | "completed" | "cancelled" | "failed";
 export type DiscoveryTrigger = "manual" | "scheduled";
 export type PortState = "open" | "closed";
+
+/** Una red autorizada y cuántas direcciones sondearía un descubrimiento en ella. */
+export interface DiscoveryNetwork {
+  network: string;
+  hosts: number;
+}
 
 export interface DiscoveryScope {
   enabled: boolean;
   allowed_networks: string[];
+  /** Mismo orden que `allowed_networks`, con el tamaño real de cada una. */
+  networks: DiscoveryNetwork[];
+  max_hosts_per_network: number;
   excluded: string[];
   ports: number[];
   interval_minutes: number | null;
@@ -336,6 +345,62 @@ export interface DiscoveryJob {
   probes: number;
   error_count: number;
   errors: string[];
+  /** "dashboard", "cli" o "scheduler"; null en jobs anteriores a la Fase 4D. */
+  requested_via: string | null;
+  /** Direcciones a sondear: denominador exacto de la fase de liveness. */
+  hosts_total: number;
+  /** Activos ya conocidos vistos de nuevo; null hasta que el job termina. */
+  hosts_updated: number | null;
+  ports_opened: number;
+  ports_closed: number;
+  cancel_requested: boolean;
+  /** operator, shutdown, timeout, interrupted o error cuando no fue un scan completo. */
+  stop_reason: string | null;
+  /** Solo mientras está en cola o en curso. */
+  progress: DiscoveryProgress | null;
+  parameters: Record<string, unknown> | null;
+}
+
+export interface DiscoveryProgress {
+  /** queued, pending, liveness, details, done. Solo liveness tiene un total exacto. */
+  phase: string;
+  details_total: number;
+  details_done: number;
+}
+
+export interface DiscoveryAssetRef {
+  asset_id: string;
+  display_name: string;
+  primary_ip: string;
+  mac_address: string | null;
+  device_type: string | null;
+  monitoring_method: MonitoringMethod;
+}
+
+export interface DiscoveryChange {
+  asset_id: string;
+  display_name: string;
+  primary_ip: string;
+  category: ChangeCategory;
+  kind: ChangeKind;
+  item: string;
+  detected_at: IsoDateTime;
+}
+
+export interface DiscoveryJobDetail extends DiscoveryJob {
+  new_assets: DiscoveryAssetRef[];
+  changes: DiscoveryChange[];
+}
+
+export interface DiscoverySchedule {
+  enabled: boolean;
+  /** no_networks, no_interval o background_jobs_disabled. */
+  disabled_reason: string | null;
+  interval_minutes: number | null;
+  last_run_at: IsoDateTime | null;
+  last_run_status: DiscoveryJobStatus | null;
+  next_run_at: IsoDateTime | null;
+  running: boolean;
 }
 
 export interface DiscoveryJobList {

@@ -17,18 +17,25 @@ export interface ConsoleState {
   refresh: () => void;
 }
 
-export function consoleUnavailableReason(error: Error | undefined): string | undefined {
+export function consoleUnavailableReason(
+  error: Error | undefined,
+  feature = "La gestión de agentes",
+): string | undefined {
   if (!error) return undefined;
   if (error instanceof ApiError && error.code === "console_disabled") {
-    return "La gestión de agentes desde el dashboard está desactivada. Añade DASHBOARD_ADMIN_ENABLED=true al .env del servidor y reinicia la API.";
+    return `${feature} desde el dashboard está desactivada. Añade DASHBOARD_ADMIN_ENABLED=true al .env del servidor y reinicia la API.`;
   }
   if (error instanceof ApiError && error.code === "console_not_local") {
-    return "La gestión de agentes solo está disponible desde un navegador en el propio servidor Sentra (http://localhost). Mientras no exista login, no se permite desde otros equipos.";
+    return `${feature} solo está disponible desde un navegador en el propio servidor Sentra (http://localhost). Mientras no exista login, no se permite desde otros equipos.`;
   }
-  return `No se pudo comprobar la gestión de agentes: ${error.message}`;
+  return `No se pudo comprobar la consola de administración: ${error.message}`;
 }
 
-export function useConsole(): ConsoleState {
+/**
+ * `feature` personaliza el motivo mostrado ("La gestión de agentes", "El descubrimiento de
+ * red"...): la guarda del servidor es la misma consola local para todas las acciones.
+ */
+export function useConsole(feature?: string): ConsoleState {
   const fetchInfo = useCallback((signal: AbortSignal) => consoleApi.info(signal), []);
   const { data, error, loading, refresh } = usePolling(fetchInfo, CHECK_MS);
   // A refusal by the server (disabled, not local) disables the actions at once; a passing
@@ -39,7 +46,7 @@ export function useConsole(): ConsoleState {
     info: data,
     loading,
     available,
-    reason: available ? undefined : consoleUnavailableReason(error),
+    reason: available ? undefined : consoleUnavailableReason(error, feature),
     refresh,
   };
 }

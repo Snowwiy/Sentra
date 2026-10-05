@@ -140,8 +140,9 @@ def _discovery_scope() -> int:
 
 
 def _discover(target: str | None) -> int:
-    # Manual run, here rather than over HTTP: probing the network is an active operation and
-    # the dashboard has no authentication yet. Same allowlist checks as the periodic job.
+    # Herramienta administrativa/debug: el uso normal es la página Red del dashboard
+    # (Fase 4D). Misma capa de servicio y mismas comprobaciones de allowlist que la web y
+    # el scheduler; ejecuta en primer plano y no pasa por la cola del runner de la API.
     settings = get_settings()
     service = DiscoveryService(
         get_sessionmaker(),
@@ -149,7 +150,7 @@ def _discover(target: str | None) -> int:
         AlertThresholds.from_settings(settings),
     )
     try:
-        summaries = service.run(target, DiscoveryTrigger.MANUAL)
+        summaries = service.run(target, DiscoveryTrigger.MANUAL, via="cli")
     except TargetError as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 2

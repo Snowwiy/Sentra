@@ -6,6 +6,7 @@ from app.api.v1.routes import (
     alerts,
     assets,
     console,
+    console_discovery,
     discovery,
     enrollment_tokens,
     events,
@@ -34,3 +35,4 @@ api_router.include_router(processes.router, responses=_COMMON)
 api_router.include_router(discovery.router, responses=_COMMON)
 api_router.include_router(enrollment_tokens.router, responses=_COMMON)
 api_router.include_router(console.router, responses=_COMMON)
+api_router.include_router(console_discovery.router, responses=_COMMON)

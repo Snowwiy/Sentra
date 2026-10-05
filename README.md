@@ -87,7 +87,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens |
 | `ENROLLMENT_TOKEN_TTL_MINUTES` | Default lifetime of one-time enrollment tokens (default 15, max 1440) |
 | `ADMIN_API_KEY` | Operator key (`X-Admin-Key`) for the administration API (enrollment tokens); unset = those endpoints disabled (403). The CLI works without it |
-| `DASHBOARD_ADMIN_ENABLED` | Agent management from the dashboard (`/api/v1/console`), only for a browser on the server itself; default off. Temporary until dashboard login: [docs/agent-management.md](docs/agent-management.md) |
+| `DASHBOARD_ADMIN_ENABLED` | Agent management and network discovery (start/cancel) from the dashboard (`/api/v1/console`), only for a browser on the server itself; default off. Temporary until dashboard login: [docs/agent-management.md](docs/agent-management.md) |
 | `AGENT_SERVER_URL` | URL agents use to reach this server, shown in the dashboard's install command (unset = suggested from local addresses) |
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
@@ -145,8 +145,10 @@ cd backend
 
 Alerts are acknowledged or resolved by an operator from the server, not over HTTP (the
 dashboard has no login yet): `python -m app.cli ack-alert <id>` / `resolve-alert <id>`.
-Network discovery runs the same way: `python -m app.cli discover` (or periodically with
-`DISCOVERY_INTERVAL_MINUTES`); there is no HTTP endpoint that starts a scan.
+Network discovery se lanza desde la página **Red → Iniciar descubrimiento** (consola local,
+`DASHBOARD_ADMIN_ENABLED=true`; desde otro equipo de la LAN solo lectura), de forma periódica
+con `DISCOVERY_INTERVAL_MINUTES`, o con `python -m app.cli discover` como herramienta
+administrativa: [docs/discovery.md](docs/discovery.md).
 
 Payloads and error format: [docs/agent-protocol.md](docs/agent-protocol.md). Interactive docs at
 `/docs` in development.
