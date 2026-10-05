@@ -13,6 +13,17 @@ def parse_name_list(value: str) -> list[str]:
     return [item.strip() for item in value.split(",") if item.strip()]
 
 
+def parse_risk_thresholds(value: str) -> tuple[int, int, int, int]:
+    """'20,40,60,80' -> límites inferiores de low, medium, high y critical."""
+    try:
+        parts = tuple(int(part.strip()) for part in value.split(","))
+    except ValueError:
+        raise ValueError("RISK_LEVEL_THRESHOLDS must be four integers, e.g. 20,40,60,80") from None
+    if len(parts) != 4 or not 0 < parts[0] < parts[1] < parts[2] < parts[3] <= 100:
+        raise ValueError("RISK_LEVEL_THRESHOLDS must be four increasing integers between 1 and 100")
+    return parts[0], parts[1], parts[2], parts[3]
+
+
 def parse_critical_events(value: str) -> list[tuple[str, int]]:
     """`Provider:EventID,...` into (provider, event id) pairs. Raises ValueError."""
     events = []
@@ -190,6 +201,39 @@ class Settings(BaseSettings):
     # reconocidas nunca. Sin valor (por defecto) no se borra nada.
     detection_retention_days: int | None = Field(default=None, ge=1)
 
+    # --- Fase 4I: Risk Engine (ver docs/risk-engine.md) ---
+    # Desactivarlo detiene el job de riesgo; las lecturas muestran el último valor calculado.
+    risk_enabled: bool = True
+    # Cada cuánto el job procesa la cola de recálculo (latencia tras una detección).
+    risk_eval_interval_seconds: int = Field(default=15, ge=1, le=3600)
+    # Cada cuánto se recalculan los activos con riesgo > 0 para aplicar el decay temporal.
+    risk_decay_interval_minutes: int = Field(default=15, ge=1, le=1440)
+    # Todo activo se recalcula al menos con esta frecuencia (cubre cambios sin aviso).
+    risk_full_refresh_hours: int = Field(default=6, ge=1, le=168)
+    # Activos por lote (una transacción por lote; cada activo en su SAVEPOINT).
+    risk_batch_size: int = Field(default=100, ge=1, le=1000)
+    # Límites inferiores de low, medium, high y critical (0-100, estrictamente crecientes).
+    risk_level_thresholds: str = "20,40,60,80"
+    # Decay: semivida de la actividad (last_seen de la detección) y de una detección
+    # resuelta (desde resolved_at); pasada la memoria, una resuelta deja de contar.
+    risk_activity_half_life_hours: float = Field(default=24, gt=0, le=720)
+    risk_resolved_half_life_hours: float = Field(default=12, gt=0, le=720)
+    risk_resolved_memory_hours: int = Field(default=72, ge=1, le=2160)
+    # Peso mínimo de una detección NO resuelta por antigüedad: sin resolver sigue contando.
+    risk_active_floor: float = Field(default=0.25, ge=0, le=1)
+    # Un puerto sensible abierto hace menos de esto pesa más (cambio reciente de exposición).
+    risk_exposure_recent_hours: int = Field(default=24, ge=1, le=720)
+    # Snapshot de historial cuando el score cambia al menos esto, o cada intervalo si cambió.
+    risk_snapshot_min_delta: int = Field(default=5, ge=1, le=100)
+    risk_snapshot_interval_minutes: int = Field(default=60, ge=1, le=10_080)
+    # Datos del agente más antiguos que esto restan confianza (evaluación incompleta).
+    risk_stale_data_hours: int = Field(default=24, ge=1, le=720)
+    # Alerta risk_critical al cruzar hacia critical, como mucho una por activo y cooldown.
+    risk_alert_enabled: bool = True
+    risk_alert_cooldown_hours: int = Field(default=6, ge=0, le=720)
+    # Snapshots de riesgo más antiguos se borran. Sin valor (por defecto) no se borra nada.
+    risk_history_retention_days: int | None = Field(default=None, ge=1)
+
     @field_validator("agent_server_url", mode="before")
     @classmethod
     def _blank_server_url(cls, value: object) -> object:
@@ -237,6 +281,13 @@ class Settings(BaseSettings):
                 "DETECTION_SIGNAL_RETENTION_HOURS must cover the longest detection window"
             )
         return self
+
+    @field_validator("risk_level_thresholds")
+    @classmethod
+    def _check_risk_thresholds(cls, value: str) -> str:
+        # Unos umbrales mal escritos pararían la API al arrancar, nunca se "arreglan" solos.
+        parse_risk_thresholds(value)
+        return value
 
     @model_validator(mode="after")
     def _check_discovery(self) -> "Settings":

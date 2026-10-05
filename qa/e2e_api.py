@@ -1037,6 +1037,197 @@ def test_detections() -> None:
     check("rule catalogue lists 23 rules", r.status == 200 and len(r.body["items"]) == 23, r.status)
 
 
+def test_risk() -> None:
+    """Fase 4I: activo limpio -> detección alta -> correlación -> criticidad -> resolver.
+
+    Necesita los jobs del motor de detección y del de riesgo con intervalos cortos
+    (DETECTION_EVAL_INTERVAL_SECONDS=2, RISK_EVAL_INTERVAL_SECONDS=2). El decaimiento por horas
+    no se espera aquí: lo cubren los tests de backend con reloj simulado.
+    """
+    agent_id, token, asset_id = enroll("qa-risk")
+    h = bearer(token)
+    security = {"channel": "Security", "provider": "Microsoft-Windows-Security-Auditing"}
+
+    def risk() -> dict[str, Any]:
+        r = call("GET", f"/risk/assets/{asset_id}")
+        return r.body if r.status == 200 else {}
+
+    def settled(previous: str | None = None) -> Callable[[dict[str, Any]], bool]:
+        # Evaluado, sin recálculo pendiente y (si se indica) con un cálculo posterior.
+        return lambda body: (
+            bool(body.get("evaluated"))
+            and not body.get("pending_recalculation")
+            and (previous is None or (body.get("calculated_at") or "") > previous)
+        )
+
+    def detections() -> dict[str, dict[str, Any]]:
+        r = call("GET", f"/detections?asset_id={asset_id}&active=true")
+        return {d["rule_id"]: d for d in r.body["items"]} if r.status == 200 else {}
+
+    def send(events: list[dict[str, Any]]) -> Response:
+        return call("POST", "/events", {"agent_id": agent_id, "events": events}, h)
+
+    # 1. Activo limpio: se evalúa solo (seed del job) y queda informativo, sin contribuciones.
+    clean = wait_for(risk, settled())
+    check(
+        "clean asset is evaluated as informational",
+        clean.get("level") == "informational" and clean.get("score", 99) < 20,
+        clean,
+    )
+    check(
+        "clean asset has no contributions",
+        clean.get("contributions") == [],
+        clean.get("contributions"),
+    )
+    check(
+        "score, level and confidence are separate",
+        clean.get("confidence") in ("low", "medium", "high"),
+    )
+    r = call("POST", "/telemetry", sample(agent_id), h)
+    check("telemetry accepted", r.status in (200, 201), r.status)
+    after_hb = risk()
+    check("telemetry leaves risk unchanged", not after_hb.get("pending_recalculation"), after_hb)
+
+    # 2. Detección alta (DEF-001): el riesgo sube y la contribución enlaza a la detección.
+    r = send([event(9501, event_code=1102, level="critical", message="QA risk log cleared",
+                    data={"SubjectUserName": "qa-user"}, **security)])  # fmt: skip
+    check("risk events accepted", r.status == 201, (r.status, r.body))
+    wait_for(detections, lambda found: "DEF-001" in found)
+    high = wait_for(
+        risk, lambda body: settled()(body) and body.get("score", 0) > clean.get("score", 0)
+    )
+    check("high detection raises the score", high.get("score", 0) >= 40, high)
+    contrib = {c["rule_id"]: c for c in high.get("contributions", []) if c.get("rule_id")}
+    check(
+        "contribution points to the detection",
+        "DEF-001" in contrib
+        and contrib["DEF-001"]["detection_id"] == detections()["DEF-001"]["detection_id"],
+        contrib,
+    )
+    check(
+        "why is explained",
+        bool(high.get("explanation", {}).get("reasons")),
+        high.get("explanation"),
+    )
+
+    # 3. Correlación (CORR-001): sube más, sin contar dos veces la ráfaga que la compone.
+    user = {"TargetUserName": "qa-risk", "TargetUserSid": "S-1-5-21-90-91-92-1501"}
+    failures = [
+        event(9600 + i, event_code=4625, level="warning", message="QA risk logon failure",
+              occurred_at=now_iso(timedelta(minutes=-3, seconds=i)),
+              data={**user, "IpAddress": "10.67.0.9", "LogonType": "3"}, **security)
+        for i in range(6)
+    ]  # fmt: skip
+    success = event(9700, event_code=4624, level="info", message="QA risk logon",
+                    occurred_at=now_iso(timedelta(minutes=-1)),
+                    data={**user, "LogonType": "10", "IpAddress": "10.67.0.9"},
+                    **security)  # fmt: skip
+    send([*failures, success])
+    wait_for(detections, lambda found: "CORR-001" in found)
+    corr = wait_for(
+        risk, lambda body: settled()(body) and body.get("score", 0) > high.get("score", 0)
+    )
+    check("correlation raises the score further", corr.get("score", 0) > high.get("score", 0), corr)
+    by_rule = {c["rule_id"]: c for c in corr.get("contributions", []) if c.get("rule_id")}
+    absorbed = by_rule.get("AUTH-001", {})
+    check(
+        "burst absorbed by the correlation (no double count)",
+        absorbed.get("points") == 0
+        and absorbed.get("details", {}).get("absorbed_by", {}).get("rule_id") == "CORR-001",
+        absorbed,
+    )
+    total = sum(c["points"] for c in corr.get("contributions", []))
+    check(
+        "contributions add up to the score",
+        abs(total - corr.get("score", -1)) <= 1,
+        (total, corr.get("score")),
+    )
+
+    # 4. Criticidad: solo admin, auditada, y recalcula al momento.
+    name = "qa-risk-viewer-" + uuid.uuid4().hex[:6]
+    password = "qa viewer password " + uuid.uuid4().hex[:8]
+    created = call("POST", "/users", {"username": name, "password": password, "role": "viewer"})
+    _, viewer = login(name, password)
+    check("viewer reads risk overview", call("GET", "/risk/overview", session=viewer).status == 200)
+    r = call(
+        "PATCH", f"/assets/{asset_id}/criticality", {"criticality": "critical"}, session=viewer
+    )
+    check(
+        "viewer cannot change criticality -> 403",
+        r.status == 403 and is_error_envelope(r, "permission_denied"),
+        r.status,
+    )
+    r = call("PATCH", f"/assets/{asset_id}/criticality", {"criticality": "extreme"})
+    check("invalid criticality -> 422", r.status == 422, r.status)
+    r = call("PATCH", f"/assets/{uuid.uuid4()}/criticality", {"criticality": "high"})
+    check("criticality of unknown asset -> 404", r.status == 404, r.status)
+    r = call("PATCH", f"/assets/{asset_id}/criticality", {"criticality": "critical"})
+    check(
+        "admin raises criticality and gets the recalculated risk",
+        r.status == 200
+        and r.body["criticality"] == "critical"
+        and r.body["score"] > corr.get("score", 0),
+        (r.status, r.body if r.status != 200 else r.body["score"]),
+    )
+    peak = r.body if r.status == 200 else {}
+    audit = call("GET", "/audit?action=asset_criticality_changed&limit=20").body["items"]
+    check("criticality change audited", any(a["target_id"] == asset_id for a in audit), audit[:2])
+    if peak.get("level") == "critical":
+        alerts = call("GET", f"/alerts?asset_id={asset_id}&rule=risk_critical&active=true").body[
+            "items"
+        ]
+        check("crossing into critical opens one risk_critical alert", len(alerts) == 1, alerts)
+
+    # 5. Resolver: baja (memoria con decaimiento, no cero) y la alerta de riesgo se cierra.
+    for rule_id, detection in detections().items():
+        r = call(
+            "POST",
+            f"/detections/{detection['detection_id']}/resolve",
+            {"note": f"QA risk {rule_id}"},
+        )
+        check(f"resolve {rule_id}", r.status == 200, (r.status, r.body))
+    calm = wait_for(
+        risk, lambda body: settled()(body) and body.get("score", 101) < peak.get("score", 0)
+    )
+    check("resolving lowers the score", calm.get("score", 101) < peak.get("score", 0), calm)
+    check(
+        "resolved detections keep a decaying memory",
+        any(
+            c.get("details", {}).get("status") == "resolved" and c["points"] > 0
+            for c in calm.get("contributions", [])
+        ),
+        calm.get("contributions"),
+    )
+    if peak.get("level") == "critical" and calm.get("level") != "critical":
+        alerts = call("GET", f"/alerts?asset_id={asset_id}&rule=risk_critical&active=true").body[
+            "items"
+        ]
+        check("leaving critical resolves the risk alert", alerts == [], alerts)
+
+    # 6. Historial, contribuciones por punto y resumen.
+    history = call("GET", f"/risk/assets/{asset_id}/history?range=24h").body
+    transitions = {p.get("transition") for p in history.get("points", [])}
+    check("history keeps the way up and down", {"up", "down"} <= transitions, history.get("points"))
+    first = history["points"][0]["snapshot_id"] if history.get("points") else None
+    r = call("GET", f"/risk/assets/{asset_id}/contributions?snapshot_id={first}")
+    check(
+        "contributions of a past snapshot",
+        r.status == 200 and r.body["snapshot_id"] == first,
+        r.status,
+    )
+    r = call("GET", "/risk/assets?sort=score&order=desc&limit=5")
+    scores = [item["score"] for item in r.body.get("items", []) if item["score"] is not None]
+    check(
+        "risk list sorted by score desc",
+        r.status == 200 and scores == sorted(scores, reverse=True),
+        scores,
+    )
+    r = call("GET", "/risk/assets?level=extreme")
+    check("invalid risk filter -> 422", r.status == 422, r.status)
+    if isinstance(created.body, dict) and created.body.get("user_id"):
+        call("PATCH", f"/users/{created.body['user_id']}", {"is_active": False})
+
+
 def test_auth() -> None:
     """Fase 4G: login, sesión, CSRF, permisos y separación de credenciales sobre HTTP real."""
     for path in ("/assets", "/alerts", "/events", "/agents", "/discovery/jobs", "/users"):
@@ -1129,6 +1320,7 @@ def main() -> int:
         test_hybrid_read,
         test_enrollment_tokens,
         test_detections,
+        test_risk,
         test_auth,
     ]
     if args.offline:

@@ -2,7 +2,8 @@ from datetime import datetime
 from uuid import UUID
 
 from app.discovery.device_types import ClassificationConfidence
-from app.models.asset import AssetStatus, MonitoringMethod
+from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
+from app.models.risk import RiskConfidence, RiskLevel
 from app.schemas.common import ResponseModel
 from app.schemas.telemetry import TelemetrySnapshot
 
@@ -68,6 +69,12 @@ class AssetRead(ResponseModel):
     last_network_seen_at: datetime | None
     # Open TCP ports reachable from the Sentra server.
     open_ports: list[int]
+    # Fase 4I: criticidad (la cambia un admin) y riesgo actual del Risk Engine; null hasta
+    # el primer cálculo. El detalle y la explicación están en /risk/assets/{id}.
+    criticality: AssetCriticality
+    risk_score: int | None
+    risk_level: RiskLevel | None
+    risk_confidence: RiskConfidence | None
 
 
 class AssetList(ResponseModel):

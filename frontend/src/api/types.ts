@@ -72,6 +72,11 @@ export interface Asset {
   last_network_seen_at: IsoDateTime | null;
   /** Open TCP ports reachable from the Sentra server. */
   open_ports: number[];
+  /** Fase 4I: criticidad (solo admin la cambia) y riesgo actual; null hasta el primer cálculo. */
+  criticality: AssetCriticality;
+  risk_score: number | null;
+  risk_level: RiskLevel | null;
+  risk_confidence: RiskConfidence | null;
 }
 
 export interface AssetList {
@@ -115,7 +120,8 @@ export type AlertRule =
   | "port_exposed"
   | "port_closed"
   | "monitoring_lost"
-  | "security_detection";
+  | "security_detection"
+  | "risk_critical";
 export type AlertSeverity = "info" | "warning" | "critical";
 /** "acknowledged": seen by an operator, still active (not resolved). */
 export type AlertStatus = "open" | "acknowledged" | "resolved";
@@ -569,6 +575,7 @@ export type Permission =
   | "monitoring:read"
   | "alerts:manage"
   | "detections:manage"
+  | "assets:manage"
   | "discovery:run"
   | "agents:manage"
   | "enrollment:manage"
@@ -709,4 +716,161 @@ export interface DetectionRuleList {
   items: DetectionRule[];
   windows: Record<string, number>;
   alert_min_severity: DetectionSeverity | null;
+}
+
+// --- Fase 4I: Risk Engine ----------------------------------------------------------------
+
+export type RiskLevel = "informational" | "low" | "medium" | "high" | "critical";
+export type RiskConfidence = "low" | "medium" | "high";
+export type AssetCriticality = "low" | "medium" | "high" | "critical";
+export type RiskRange = "24h" | "7d" | "30d";
+
+/** Una línea del ledger del riesgo: suma (o resta) puntos y explica por qué. */
+export interface RiskContribution {
+  /** detection, exposure, criticality, asset_type o saturation. */
+  factor: string;
+  category: string;
+  /** Texto determinista del backend (nunca IA). */
+  label: string;
+  /** Negativo si reduce; 0 si quedó absorbida por otra (sin doble conteo). */
+  points: number;
+  nominal_points: number | null;
+  detection_id: string | null;
+  rule_id: string | null;
+  port: number | null;
+  details: Record<string, unknown>;
+}
+
+export interface RiskExplanationItem {
+  label: string;
+  points: number;
+}
+
+export interface ConfidenceFactor {
+  effect: "+" | "-" | "=";
+  label: string;
+}
+
+export interface RiskExplanation {
+  /** "82 / Crítico — confianza baja". */
+  headline: string;
+  reasons: string[];
+  increased: RiskExplanationItem[];
+  reduced: RiskExplanationItem[];
+  confidence_factors: ConfidenceFactor[];
+}
+
+export interface RiskAssetSummary {
+  asset_id: string;
+  display_name: string;
+  device_name: string | null;
+  primary_ip: string;
+  device_type: string | null;
+  monitoring_method: MonitoringMethod;
+  status: AssetStatus;
+  criticality: AssetCriticality;
+  last_seen_at: IsoDateTime | null;
+  /** false hasta el primer cálculo: score, level y confidence son null. */
+  evaluated: boolean;
+  score: number | null;
+  level: RiskLevel | null;
+  confidence: RiskConfidence | null;
+  top_factor: string | null;
+  calculated_at: IsoDateTime | null;
+  changed_at: IsoDateTime | null;
+}
+
+export interface RiskAssetList {
+  items: RiskAssetSummary[];
+  total: number;
+}
+
+export interface RiskFactor {
+  category: string;
+  label: string;
+  assets: number;
+  points: number;
+}
+
+export interface RiskSnapshot {
+  snapshot_id: string;
+  calculated_at: IsoDateTime;
+  score: number;
+  level: RiskLevel;
+  confidence: RiskConfidence;
+  previous_score: number | null;
+  previous_level: RiskLevel | null;
+  transition: "up" | "down" | null;
+  reason: string;
+  top_factor: string | null;
+}
+
+export interface RiskTransition extends RiskSnapshot {
+  asset_id: string;
+  display_name: string;
+}
+
+export interface RiskLevelRange {
+  level: RiskLevel;
+  min: number;
+  max: number;
+}
+
+export interface RiskOverview {
+  total_assets: number;
+  evaluated: number;
+  pending: number;
+  by_level: Record<RiskLevel, number>;
+  by_confidence: Record<RiskConfidence, number>;
+  top_factors: RiskFactor[];
+  top_assets: RiskAssetSummary[];
+  recent_transitions: RiskTransition[];
+  thresholds: RiskLevelRange[];
+  last_calculated_at: IsoDateTime | null;
+}
+
+export interface RiskDetectionRef {
+  detection_id: string;
+  rule_id: string;
+  title: string;
+  category: string;
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  status: DetectionStatus;
+  occurrence_count: number;
+  last_seen_at: IsoDateTime;
+}
+
+export interface RiskAssetDetail extends RiskAssetSummary {
+  formula_version: number | null;
+  pending_recalculation: boolean;
+  explanation: RiskExplanation;
+  contributions: RiskContribution[];
+  active_detections: RiskDetectionRef[];
+  active_detections_total: number;
+  recent_changes: RiskSnapshot[];
+  /** Score actual menos el de hace 24 h. */
+  trend_24h: number | null;
+  breakdown: Record<string, unknown> | null;
+  thresholds: RiskLevelRange[];
+}
+
+export interface RiskHistory {
+  asset_id: string;
+  range: RiskRange;
+  since: IsoDateTime;
+  bucket_minutes: number | null;
+  start_score: number | null;
+  points: RiskSnapshot[];
+  current_score: number | null;
+  current_level: RiskLevel | null;
+  calculated_at: IsoDateTime | null;
+}
+
+export interface RiskContributionList {
+  asset_id: string;
+  snapshot_id: string | null;
+  calculated_at: IsoDateTime | null;
+  score: number | null;
+  items: RiskContribution[];
 }

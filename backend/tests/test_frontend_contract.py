@@ -74,6 +74,21 @@ INTERFACES = {
     "DetectionDetail": "DetectionDetail",
     "DetectionRule": "DetectionRuleRead",
     "DetectionRuleList": "DetectionRuleList",
+    "RiskContribution": "RiskContributionRead",
+    "RiskExplanationItem": "RiskExplanationItem",
+    "ConfidenceFactor": "ConfidenceFactorRead",
+    "RiskExplanation": "RiskExplanation",
+    "RiskAssetSummary": "RiskAssetSummary",
+    "RiskAssetList": "RiskAssetList",
+    "RiskFactor": "RiskFactorRead",
+    "RiskSnapshot": "RiskSnapshotRead",
+    "RiskTransition": "RiskTransitionRead",
+    "RiskLevelRange": "RiskLevelRange",
+    "RiskOverview": "RiskOverview",
+    "RiskDetectionRef": "RiskDetectionRef",
+    "RiskAssetDetail": "RiskAssetDetail",
+    "RiskHistory": "RiskHistory",
+    "RiskContributionList": "RiskContributionList",
 }
 ENUMS = [
     "AssetStatus",
@@ -93,6 +108,9 @@ ENUMS = [
     "DetectionSeverity",
     "DetectionConfidence",
     "DetectionStatus",
+    "RiskLevel",
+    "RiskConfidence",
+    "AssetCriticality",
 ]
 
 

@@ -16,6 +16,7 @@ from app.api.v1.routes import (
     health,
     inventory,
     processes,
+    risk,
     telemetry,
     users,
 )
@@ -37,6 +38,7 @@ api_router.include_router(assets.router, responses=_COMMON)
 api_router.include_router(telemetry.router, responses=_COMMON)
 api_router.include_router(alerts.router, responses=_COMMON)
 api_router.include_router(detections.router, responses=_COMMON)
+api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(inventory.router, responses=_COMMON)
 api_router.include_router(events.router, responses=_COMMON)
 api_router.include_router(processes.router, responses=_COMMON)

@@ -12,6 +12,7 @@ from app.core.exceptions import NotFoundError
 from app.discovery.targets import IPNetwork
 from app.models.asset import Asset, AssetStatus, MonitoringMethod
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.risk import AssetRisk
 from app.models.telemetry import TelemetrySample
 from app.repositories.asset_repository import AssetRepository
 from app.repositories.telemetry_repository import TelemetryRepository
@@ -94,6 +95,24 @@ def open_ports_by_asset(session: Session, asset_ids: Iterable[int]) -> dict[int,
     return {asset_id: sorted(ports) for asset_id, ports in rows}
 
 
+def risk_by_asset(session: Session, asset_ids: list[int]) -> dict[int, AssetRisk]:
+    """Riesgo ya calculado de varios activos en una consulta (sin N+1). Solo lectura: las
+    filas devueltas no están en la sesión (no se modifican ni se guardan)."""
+    if not asset_ids:
+        return {}
+    rows = session.execute(
+        select(AssetRisk.asset_id, AssetRisk.score, AssetRisk.level, AssetRisk.confidence).where(
+            AssetRisk.asset_id.in_(asset_ids), AssetRisk.calculated_at.is_not(None)
+        )
+    ).all()
+    return {
+        row.asset_id: AssetRisk(
+            asset_id=row.asset_id, score=row.score, level=row.level, confidence=row.confidence
+        )
+        for row in rows
+    }
+
+
 def evidence_items(raw: Any) -> list[ClassificationEvidence]:
     """Evidencias guardadas → API, descartando entradas mal formadas.
 
@@ -127,8 +146,11 @@ class AssetService:
         ]
         latest = self._telemetry.latest_by_asset(asset.id for asset in assets)
         ports = open_ports_by_asset(self._session, (asset.id for asset in assets))
+        risks = risk_by_asset(self._session, [asset.id for asset in assets])
         items = [
-            self._to_read(asset, latest.get(asset.id), now, ports.get(asset.id, []))
+            self._to_read(
+                asset, latest.get(asset.id), now, ports.get(asset.id, []), risks.get(asset.id)
+            )
             for asset in assets
         ]
         return AssetList(items=items, total=len(items))
@@ -139,7 +161,8 @@ class AssetService:
             raise NotFoundError("Asset not found")
         latest = self._telemetry.latest_by_asset([asset.id]).get(asset.id)
         ports = open_ports_by_asset(self._session, [asset.id]).get(asset.id, [])
-        return self._to_read(asset, latest, datetime.now(UTC), ports)
+        risk = risk_by_asset(self._session, [asset.id]).get(asset.id)
+        return self._to_read(asset, latest, datetime.now(UTC), ports, risk)
 
     def _to_read(
         self,
@@ -147,6 +170,7 @@ class AssetService:
         latest: TelemetrySample | None,
         now: datetime,
         open_ports: list[int],
+        risk: AssetRisk | None = None,
     ) -> AssetRead:
         agent_status = effective_status(asset, now, self._timeout) if asset.is_managed else None
         return AssetRead(
@@ -185,4 +209,8 @@ class AssetService:
             discovered_at=asset.discovered_at,
             last_network_seen_at=asset.last_network_seen_at,
             open_ports=open_ports,
+            criticality=asset.criticality,
+            risk_score=risk.score if risk else None,
+            risk_level=risk.level if risk else None,
+            risk_confidence=risk.confidence if risk else None,
         )

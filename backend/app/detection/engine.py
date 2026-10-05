@@ -46,6 +46,7 @@ from app.models.detection import (
     DetectionStatus,
 )
 from app.repositories.alert_repository import AlertRepository
+from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
 
 logger = logging.getLogger(__name__)
@@ -155,6 +156,9 @@ class DetectionEngine:
         self._config = config
         self._alerts = AlertService(session, thresholds) if thresholds is not None else None
         self._by_kind: dict[str, list[DetectionRule]] = {}
+        # Activos con detecciones nuevas o actualizadas en el lote: su riesgo se recalcula
+        # (Fase 4I). Se encolan una vez por lote, no por evidencia.
+        self._touched: set[int] = set()
         for rule in rules:
             if rule.meta.id in config.disabled_rules:
                 continue
@@ -181,6 +185,9 @@ class DetectionEngine:
                 self._evaluate(context, signal, run)
                 signal.evaluated_at = datetime.now(UTC)
             run.signals += len(signals)
+            if self._touched:
+                request_recalculation(self._session, self._touched)
+                self._touched.clear()
             self._session.commit()
             if len(signals) < batch_size:
                 break
@@ -240,7 +247,10 @@ class DetectionEngine:
                 .with_for_update()
             )
             if existing is not None:
-                return self._update(existing, rule, result, severity, confidence, now)
+                updated = self._update(existing, rule, result, severity, confidence, now)
+                if updated is not None:
+                    self._touched.add(asset_id)
+                return updated
             mitre = result.mitre or meta.mitre
             detection = Detection(
                 asset_id=asset_id,
@@ -270,6 +280,7 @@ class DetectionEngine:
                 continue
             self._add_evidence(detection, result, now)
             self._maybe_alert(detection, None)
+            self._touched.add(asset_id)
             logger.info(
                 "detection created",
                 extra={

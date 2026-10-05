@@ -25,6 +25,7 @@ export function Layout() {
           <Link to="/">Activos</Link>
           <Link to="/agents">Agentes</Link>
           <Link to="/network">Red</Link>
+          <Link to="/risk">Riesgo</Link>
           <Link to="/detections">Detecciones</Link>
           <Link to="/alerts">Alertas</Link>
           {/* Solo navegación: la página y la API exigen users:manage igualmente. */}

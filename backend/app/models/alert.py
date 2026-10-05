@@ -54,6 +54,9 @@ class AlertRule(enum.StrEnum):
     # superior a DETECTION_ALERT_MIN_SEVERITY). La alerta notifica; la evidencia y la
     # explicación están en la detección enlazada (details.detection_id).
     SECURITY_DETECTION = "security_detection"
+    # Fase 4I: el riesgo del activo cruzó hacia "critical" (Risk Engine). Solo al subir y
+    # con cooldown; se resuelve sola cuando el activo sale de critical.
+    RISK_CRITICAL = "risk_critical"
 
 
 class AlertSeverity(enum.StrEnum):

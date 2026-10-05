@@ -23,6 +23,7 @@ from app.services.background import (
     discovery_job,
     purge_old_data,
     run_detection_engine,
+    run_risk_engine,
     sweep_offline_assets,
 )
 from app.services.discovery_runner import stop_discovery_runner
@@ -66,6 +67,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     settings.detection_eval_interval_seconds,
                     run_detection_engine,
                 )
+            )
+        # Fase 4I: cola de recálculo y decay del Risk Engine, fuera de las peticiones.
+        if settings.risk_enabled:
+            jobs.append(
+                PeriodicJob("risk-engine", settings.risk_eval_interval_seconds, run_risk_engine)
             )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:

@@ -10,6 +10,7 @@ from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import MAX_CREDENTIAL_LENGTH, enrollment_key_matches
 from app.db.session import get_db
 from app.detection.config import DetectionConfig
+from app.risk.config import RiskConfig
 from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
@@ -20,6 +21,7 @@ from app.services.exposure_service import ExposureService
 from app.services.health_service import HealthService
 from app.services.inventory_service import InventoryService
 from app.services.process_service import ProcessService
+from app.services.risk_service import RiskService
 from app.services.telemetry_service import TelemetryService
 
 DbSession = Annotated[Session, Depends(get_db)]
@@ -128,3 +130,15 @@ def get_process_service(session: DbSession, detection: Detection) -> ProcessServ
 
 def get_exposure_service(session: DbSession, settings: AppSettings) -> ExposureService:
     return ExposureService(session, settings)
+
+
+def get_risk_config(settings: AppSettings) -> RiskConfig:
+    return RiskConfig.from_settings(settings)
+
+
+def get_risk_service(session: DbSession, settings: AppSettings) -> RiskService:
+    return RiskService(
+        session,
+        RiskConfig.from_settings(settings),
+        timedelta(seconds=settings.heartbeat_timeout_seconds),
+    )

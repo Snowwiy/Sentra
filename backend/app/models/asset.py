@@ -17,6 +17,20 @@ class AssetStatus(enum.StrEnum):
     UNKNOWN = "unknown"
 
 
+class AssetCriticality(enum.StrEnum):
+    """Importancia del activo para el negocio (Fase 4I, mínimo viable).
+
+    La fija un administrador; el Risk Engine la usa como modificador acotado del riesgo
+    (app/risk/config.py). No es un inventario organizacional: propietario, función o
+    entorno llegarán con Asset Context (Fase 4L).
+    """
+
+    LOW = "low"
+    MEDIUM = "medium"
+    HIGH = "high"
+    CRITICAL = "critical"
+
+
 class MonitoringMethod(enum.StrEnum):
     """How Sentra knows about an asset (the DISCOVERED → MONITORED → MANAGED path)."""
 
@@ -131,6 +145,15 @@ class Asset(Base):
     network_misses: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     # Set by the first port scan of the asset: later scans report changes against it.
     exposure_baseline_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+    # Fase 4I: criticidad para el Risk Engine. "medium" por defecto: un activo sin
+    # clasificar no se trata ni como prescindible ni como crítico. Solo admin la cambia
+    # (PATCH /assets/{id}/criticality, auditado como asset_criticality_changed).
+    criticality: Mapped[AssetCriticality] = mapped_column(
+        _enum(AssetCriticality, "asset_criticality"),
+        default=AssetCriticality.MEDIUM,
+        server_default=AssetCriticality.MEDIUM.value,
+    )
 
     # Last status set by agent activity. Staleness (offline) is resolved at read time.
     status: Mapped[AssetStatus] = mapped_column(

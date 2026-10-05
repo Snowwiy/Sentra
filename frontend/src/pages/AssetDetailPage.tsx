@@ -9,6 +9,7 @@ import { EventsTab } from "../components/asset/EventsTab";
 import { ExposureTab } from "../components/asset/ExposureTab";
 import { NetworkTab } from "../components/asset/NetworkTab";
 import { OverviewTab } from "../components/asset/OverviewTab";
+import { RiskPanel } from "../components/risk/RiskPanel";
 import { ProcessesTab } from "../components/asset/ProcessesTab";
 import { ServicesTab } from "../components/asset/ServicesTab";
 import { SoftwareTab } from "../components/asset/SoftwareTab";
@@ -23,6 +24,7 @@ import { usePolling } from "../lib/usePolling";
 
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "risk", label: "Riesgo" },
   { key: "processes", label: "Processes" },
   { key: "services", label: "Services" },
   { key: "software", label: "Software" },
@@ -36,7 +38,7 @@ const TABS = [
 type Tab = (typeof TABS)[number]["key"];
 
 // Without an agent only what the network shows exists: no inventory, telemetry or events.
-const NETWORK_TABS: Tab[] = ["overview", "exposure", "alerts"];
+const NETWORK_TABS: Tab[] = ["overview", "risk", "exposure", "alerts"];
 
 // Tabs fed by the inventory snapshot (sent every 15 min): polled only while one is visible.
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
@@ -222,6 +224,7 @@ export function AssetDetailPage() {
         {INVENTORY_TABS.includes(tab) && inventoryContent()}
         {tab === "events" && <EventsTab assetId={asset.asset_id} />}
         {tab === "exposure" && <ExposureTab assetId={asset.asset_id} managed={managed} />}
+        {tab === "risk" && <RiskPanel assetId={asset.asset_id} />}
         {tab === "alerts" && <AlertsView assetId={asset.asset_id} />}
       </div>
     </div>

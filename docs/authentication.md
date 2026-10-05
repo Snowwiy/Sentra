@@ -43,6 +43,8 @@ un permiso (`require_permission`), nunca un rol concreto.
 | `monitoring:read` | ✓ | ✓ | ✓ | Ver activos, telemetría, eventos, alertas, agentes, descubrimiento |
 | `alerts:manage` | | ✓ | ✓ | Reconocer y resolver alertas |
 | `discovery:run` | | ✓ | ✓ | Iniciar y cancelar descubrimientos (solo redes autorizadas) |
+| `detections:manage` | | ✓ | ✓ | Reconocer y resolver detecciones (Fase 4H) |
+| `assets:manage` | | | ✓ | Cambiar la criticidad de un activo, entrada del riesgo (Fase 4I) |
 | `agents:manage` | | | ✓ | Revocar y reactivar agentes |
 | `enrollment:manage` | | | ✓ | Crear, listar y revocar tokens de instalación |
 | `users:manage` | | | ✓ | Usuarios, roles, contraseñas y sesiones |
@@ -182,6 +184,7 @@ mutaciones denegadas por permiso. Se consulta en **Usuarios → Auditoría** (`a
 | POST | `/api/v1/users/{id}/sessions/revoke` | `users:manage` |
 | GET | `/api/v1/audit` | `audit:read` |
 | POST | `/api/v1/alerts/{id}/acknowledge`, `/resolve` | `alerts:manage` |
+| PATCH | `/api/v1/assets/{id}/criticality` | `assets:manage` |
 
 Todos los `GET` del dashboard (activos, eventos, alertas, agentes, descubrimiento) requieren
 sesión (`monitoring:read`). Siguen sin sesión: `GET /health` (sin datos) y los endpoints de

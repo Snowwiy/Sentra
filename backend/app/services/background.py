@@ -15,6 +15,8 @@ from app.db.session import get_sessionmaker
 from app.detection.config import DetectionConfig
 from app.detection.engine import DetectionEngine
 from app.models.discovery import DiscoveryTrigger
+from app.risk.config import RiskConfig
+from app.risk.engine import RiskEngine
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
@@ -106,6 +108,28 @@ def run_detection_engine() -> None:
                 logger.info("detection signals purged", extra={"count": purged})
 
 
+_last_risk_decay: list[datetime] = []
+
+
+def run_risk_engine() -> None:
+    """Fase 4I: crea filas de activos nuevos, procesa la cola de recálculo y aplica el decay.
+
+    Cola (dirty_at) en cada vuelta; decay como mucho cada RISK_DECAY_INTERVAL_MINUTES. Cada
+    pasada está acotada (lotes x MAX_BATCHES); lo que no cabe queda para la siguiente. Un
+    fallo aquí lo registra PeriodicJob y la API sigue sirviendo el último riesgo guardado.
+    """
+    settings = get_settings()
+    config = RiskConfig.from_settings(settings)
+    with get_sessionmaker()() as session:
+        engine = RiskEngine(session, config, AlertThresholds.from_settings(settings))
+        engine.seed_missing()
+        engine.process_dirty()
+        now = datetime.now(UTC)
+        if not _last_risk_decay or now - _last_risk_decay[0] >= config.decay_interval:
+            _last_risk_decay[:] = [now]
+            engine.process_decay(now)
+
+
 def purge_old_data() -> None:
     policy = RetentionPolicy.from_settings(get_settings())
     with get_sessionmaker()() as session:
@@ -119,6 +143,7 @@ def purge_old_data() -> None:
                 "asset_changes": result.asset_changes,
                 "alerts": result.alerts,
                 "detections": result.detections,
+                "risk_snapshots": result.risk_snapshots,
             },
         )
 

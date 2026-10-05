@@ -74,6 +74,16 @@ segundo borrado añade evidencia a la misma detección) y la resolución con not
 reconocer una resuelta y su registro en `audit_events`. Usa el job real del motor: arranca la
 API QA con `$env:DETECTION_EVAL_INTERVAL_SECONDS = "2"` para que tarde poco.
 
+Fase 4I (`test_risk`): el escenario completo del riesgo sobre un activo nuevo. Limpio
+(informativo, sin contribuciones), detección alta (sube y la contribución enlaza a la
+detección), correlación (sube más y la ráfaga queda absorbida, sin doble conteo; las
+contribuciones suman el score), criticidad (viewer 403, valor inválido 422, activo
+inexistente 404, admin recalcula al momento y queda auditado; cruzar a crítico abre una sola
+alerta `risk_critical`) y resolver (baja, las resueltas conservan memoria y la alerta se
+resuelve al salir de crítico), además del historial con subida y bajada. Arranca la API QA
+también con `$env:RISK_EVAL_INTERVAL_SECONDS = "2"`. El decay por horas no se espera aquí: lo
+cubren los tests de backend con reloj simulado.
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell
@@ -87,6 +97,20 @@ histórico) mide la extracción de señales por lote, las señales/s del job, lo
 detalle (con el número de sentencias SQL) y muestra los planes de PostgreSQL. Borra lo que
 crea. Ejecútalo contra la base QA con la API QA parada, para que su job no evalúe las señales
 antes. Resultados de referencia en [docs/detection-engine.md](../docs/detection-engine.md).
+
+### Rendimiento del Risk Engine
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_risk.py   # --assets 1000 --detections 20000 --history-per-asset 200
+```
+
+Con datos sintéticos mide la primera evaluación, un recálculo completo sin cambios y una
+pasada de decay (activos/s y sentencias SQL por activo), y después el resumen, el listado,
+el detalle, la tendencia y las contribuciones con un historial grande. Borra lo que crea.
+Ejecútalo con la API QA parada. Resultados de referencia en
+[docs/risk-engine.md](../docs/risk-engine.md).
 
 ## 5. Real agent and dashboard against the QA API
 

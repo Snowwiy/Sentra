@@ -59,6 +59,7 @@ from app.models.discovery import (
 )
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
+from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.identification import oui_database, record_observation, refresh_identity
 from app.services.reconciliation import interface_identity
@@ -816,6 +817,10 @@ class ResultApplier:
             asset.exposure_baseline_at = now
         self._ports_opened += len(opened)
         self._ports_closed += len(closed)
+        if opened or closed:
+            # La exposición es entrada del Risk Engine (Fase 4I): abrir o cerrar un puerto
+            # cambia el riesgo del activo aunque no genere ninguna detección.
+            request_recalculation(self._session, [asset.id])
         for port in opened:
             self._change(asset, ChangeCategory.EXPOSURE, ChangeKind.PORT_OPENED, _label(port), now)
         for port in closed:

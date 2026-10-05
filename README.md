@@ -113,6 +113,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` | Delete inventory changes / **resolved** alerts older than N days (unset = keep forever; active alerts are never deleted) |
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
 | `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
+| `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
 | `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](docs/discovery.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
@@ -159,6 +160,10 @@ cd backend
 | GET | `/api/v1/detections/{detection_id}` | Detalle: qué pasó, por qué importa, evidencias (timeline), MITRE, recomendaciones |
 | POST | `/api/v1/detections/{detection_id}/acknowledge`, `/resolve` | Reconocer / resolver (roles admin y analyst; auditado). `resolve` acepta `{"note": "…"}` |
 | GET | `/api/v1/detection-rules` | Catálogo de reglas, ventanas y umbral de alerta |
+| GET | `/api/v1/risk/overview` | Riesgo (Fase 4I): activos por nivel y confianza, factores principales, transiciones recientes |
+| GET | `/api/v1/risk/assets?level=&confidence=&device_type=&status=&criticality=&min_score=&q=&sort=&order=&limit=&offset=` | Activos por riesgo, el más alto primero |
+| GET | `/api/v1/risk/assets/{asset_id}`, `/history?range=24h\|7d\|30d`, `/contributions?snapshot_id=` | Detalle explicable, tendencia y contribuciones |
+| PATCH | `/api/v1/assets/{asset_id}/criticality` | Criticidad del activo (solo admin, `assets:manage`; auditado) |
 | POST | `/api/v1/auth/login`, `/auth/logout`; GET `/auth/me` | Sesión del dashboard (cookie HttpOnly + `X-CSRF-Token` en mutaciones). Todos los GET del dashboard requieren sesión; usuarios, auditoría y acciones por rol: [docs/authentication.md](docs/authentication.md) |
 
 Las alertas se reconocen o resuelven desde el dashboard (roles admin y analyst) o con
@@ -212,6 +217,10 @@ El dashboard exige login con roles y sesiones de servidor ([docs/authentication.
 eventos, inventario, procesos y descubrimiento en detecciones con severidad y confianza
 separadas, evidencias y recomendaciones; las graves abren una alerta
 ([docs/detection-engine.md](docs/detection-engine.md)).
+**Riesgo** (Fase 4I): cada activo tiene un score 0-100 determinista con nivel y confianza
+separados, calculado a partir de sus detecciones, su exposición, su criticidad y su tipo, con
+contribuciones explicables, historial de cambios y tendencia; página Riesgo y sección Riesgo
+del activo ([docs/risk-engine.md](docs/risk-engine.md)).
 Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap

@@ -24,10 +24,12 @@ from sqlalchemy.orm import Session
 
 from app.discovery.probes import normalize_mac
 from app.models.alert import Alert, AlertStatus
-from app.models.asset import Asset
+from app.models.asset import Asset, AssetCriticality
 from app.models.change import AssetChange
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.risk import RiskSnapshot
 from app.repositories.alert_repository import AlertRepository
+from app.risk.queue import request_recalculation
 from app.services.identification import refresh_identity
 
 logger = logging.getLogger(__name__)
@@ -149,6 +151,15 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     # depende de ellos.
     refresh_identity(target)
     target.first_seen_at = min(target.first_seen_at, source.first_seen_at)
+    # Fase 4I: la criticidad que un admin fijó en el activo descubierto no se pierde al
+    # instalar el agente (salvo que el activo del agente ya tenga una no por defecto), y el
+    # historial de riesgo sigue al activo superviviente.
+    if target.criticality == AssetCriticality.MEDIUM:
+        target.criticality = source.criticality
+    session.execute(
+        update(RiskSnapshot).where(RiskSnapshot.asset_id == source.id).values(asset_id=target.id)
+    )
+    request_recalculation(session, [target.id])
     logger.info(
         "discovered asset merged into agent asset",
         extra={"from": str(source.public_id), "into": str(target.public_id)},

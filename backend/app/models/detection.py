@@ -97,6 +97,13 @@ class Detection(Base):
             "resolved_at",
             postgresql_where=text("status = 'resolved'"),
         ),
+        # Risk Engine (Fase 4I): resueltas recientes de un activo (memoria de resolución).
+        Index(
+            "ix_detections_asset_resolved",
+            "asset_id",
+            "resolved_at",
+            postgresql_where=text("status = 'resolved'"),
+        ),
         # FK hacia alerts (ON DELETE SET NULL al purgar alertas).
         Index("ix_detections_alert", "alert_id", postgresql_where=text("alert_id IS NOT NULL")),
     )

@@ -28,6 +28,9 @@ from app.discovery.targets import TargetError
 from app.models.asset import Asset
 from app.models.discovery import DiscoveryTrigger
 from app.models.user import User
+from app.risk.config import RiskConfig
+from app.risk.engine import RiskEngine, RiskRun
+from app.risk.queue import request_recalculation
 from app.schemas.auth import UserCreate
 from app.schemas.enrollment import EnrollmentTokenCreate
 from app.services import audit_service
@@ -60,7 +63,8 @@ def _purge_old_data(session: Session) -> int:
     if not policy.enabled:
         print(
             "no retention configured: set TELEMETRY_RETENTION_DAYS, EVENT_RETENTION_DAYS,"
-            " CHANGE_RETENTION_DAYS, ALERT_RETENTION_DAYS or DETECTION_RETENTION_DAYS",
+            " CHANGE_RETENTION_DAYS, ALERT_RETENTION_DAYS, DETECTION_RETENTION_DAYS or"
+            " RISK_HISTORY_RETENTION_DAYS",
             file=sys.stderr,
         )
         return 1
@@ -68,7 +72,7 @@ def _purge_old_data(session: Session) -> int:
     print(
         f"deleted {result.telemetry_samples} telemetry samples, {result.system_events} events,"
         f" {result.asset_changes} inventory changes, {result.alerts} resolved alerts and"
-        f" {result.detections} resolved detections"
+        f" {result.detections} resolved detections and {result.risk_snapshots} risk snapshots"
     )
     return 0
 
@@ -100,6 +104,33 @@ def _detections(session: Session, reevaluate_hours: int | None) -> int:
         f" {total.updated} updated, {total.rule_errors} rule errors"
     )
     return 1 if total.rule_errors else 0
+
+
+def _risk(session: Session, everything: bool) -> int:
+    """Fase 4I: procesa ahora la cola de riesgo (y con --all recalcula todos los activos).
+
+    Útil con la API parada o tras cambiar RISK_* (umbrales, decay). Recalcular es
+    idempotente: solo añade snapshots si el riesgo cambia de forma material.
+    """
+    settings = get_settings()
+    engine = RiskEngine(
+        session, RiskConfig.from_settings(settings), AlertThresholds.from_settings(settings)
+    )
+    engine.seed_missing(limit=1_000_000)
+    if everything:
+        request_recalculation(session, session.scalars(select(Asset.id)).all())
+        session.commit()
+    total = RiskRun()
+    while True:
+        run = engine.process_dirty()
+        total.add(run)
+        if run.assets + run.errors == 0 or run.errors == run.assets + run.errors:
+            break
+    print(
+        f"{total.assets} assets evaluated: {total.snapshots} history points,"
+        f" {total.transitions} level changes, {total.alerts} alerts, {total.errors} errors"
+    )
+    return 1 if total.errors else 0
 
 
 def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
@@ -391,6 +422,12 @@ def main(argv: list[str] | None = None) -> int:
         type=int,
         help="queue again the signals of the last N hours before evaluating (safe to repeat)",
     )
+    risk = commands.add_parser(
+        "run-risk", help="process the risk recalculation queue now (Fase 4I)"
+    )
+    risk.add_argument(
+        "--all", action="store_true", help="recalculate every asset, not only the queued ones"
+    )
     discover = commands.add_parser(
         "discover", help="run network discovery now over the allowed networks (or one target)"
     )
@@ -421,6 +458,8 @@ def main(argv: list[str] | None = None) -> int:
             return _reclassify_assets(session)
         if args.command == "run-detections":
             return _detections(session, args.reevaluate_hours)
+        if args.command == "run-risk":
+            return _risk(session, args.all)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

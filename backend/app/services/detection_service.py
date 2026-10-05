@@ -28,6 +28,7 @@ from app.models.detection import (
 )
 from app.repositories.alert_repository import escape_like
 from app.repositories.asset_repository import AssetRepository
+from app.risk.queue import request_recalculation
 from app.schemas.detection import (
     DetectionDetail,
     DetectionEvidenceRead,
@@ -192,6 +193,8 @@ class DetectionService:
             detection.acknowledged_at = now
             detection.acknowledged_by = username[:64]
             detection.updated_at = now
+            # Reconocer no mitiga, pero cambia el peso de la detección en el riesgo (4I).
+            request_recalculation(self._session, [detection.asset_id])
         self._session.commit()
         return detection
 
@@ -206,6 +209,8 @@ class DetectionService:
             detection.resolution_note = note[:500] if note else None
             detection.updated_at = now
             resolve_detection_alert(self._session, detection, now)
+            # El riesgo no cae a cero al resolver: decae desde ahora (memoria reciente, 4I).
+            request_recalculation(self._session, [detection.asset_id])
         self._session.commit()
         return detection
 

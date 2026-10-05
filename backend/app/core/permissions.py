@@ -26,6 +26,9 @@ class Permission(enum.StrEnum):
     ALERTS_MANAGE = "alerts:manage"
     # Reconocer y resolver detecciones del motor (Fase 4H). Leerlas es monitoring:read.
     DETECTIONS_MANAGE = "detections:manage"
+    # Cambiar datos de contexto de un activo que alteran el riesgo (criticidad, Fase 4I).
+    # Solo admin: un viewer o analyst no puede rebajar el riesgo de un activo a mano.
+    ASSETS_MANAGE = "assets:manage"
     # Iniciar y cancelar descubrimientos de red (siempre dentro de la allowlist del servidor).
     DISCOVERY_RUN = "discovery:run"
     # Revocar y rehabilitar agentes.

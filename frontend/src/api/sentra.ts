@@ -36,6 +36,15 @@ import type {
   Inventory,
   MonitoringMethod,
   ProcessSnapshot,
+  AssetCriticality,
+  RiskAssetDetail,
+  RiskAssetList,
+  RiskConfidence,
+  RiskContributionList,
+  RiskHistory,
+  RiskLevel,
+  RiskOverview,
+  RiskRange,
   Role,
   TelemetryHistory,
   User,
@@ -67,6 +76,22 @@ export interface DetectionQuery {
   since?: string;
   until?: string;
   q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export type RiskSortKey = "score" | "changed_at" | "last_seen" | "name" | "criticality";
+
+export interface RiskQuery {
+  level?: RiskLevel;
+  confidence?: RiskConfidence;
+  /** Un tipo de dispositivo o "unknown". */
+  deviceType?: string;
+  status?: AssetStatus;
+  criticality?: AssetCriticality;
+  q?: string;
+  sort?: RiskSortKey;
+  order?: "asc" | "desc";
   limit?: number;
   offset?: number;
 }
@@ -225,6 +250,40 @@ export const detectionsApi = {
     apiPost<DetectionDetail>(`/detections/${encodeURIComponent(detectionId)}/resolve`, {
       note: note?.trim() ? note.trim() : null,
     }),
+};
+
+/** Risk Engine (Fase 4I): solo lectura salvo la criticidad del activo (admin). */
+export const riskApi = {
+  overview: (signal?: AbortSignal) => apiGet<RiskOverview>("/risk/overview", { signal }),
+  list: (query: RiskQuery, signal?: AbortSignal) =>
+    apiGet<RiskAssetList>(
+      `/risk/assets${queryString({
+        level: query.level,
+        confidence: query.confidence,
+        device_type: query.deviceType,
+        status: query.status,
+        criticality: query.criticality,
+        q: query.q,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  get: (assetId: string, signal?: AbortSignal) =>
+    apiGet<RiskAssetDetail>(`/risk/assets/${encodeURIComponent(assetId)}`, { signal }),
+  history: (assetId: string, range: RiskRange, signal?: AbortSignal) =>
+    apiGet<RiskHistory>(`/risk/assets/${encodeURIComponent(assetId)}/history${queryString({ range })}`, {
+      signal,
+    }),
+  contributions: (assetId: string, snapshotId?: string, signal?: AbortSignal) =>
+    apiGet<RiskContributionList>(
+      `/risk/assets/${encodeURIComponent(assetId)}/contributions${queryString({ snapshot_id: snapshotId })}`,
+      { signal },
+    ),
+  setCriticality: (assetId: string, criticality: AssetCriticality) =>
+    apiPatch<RiskAssetDetail>(`/assets/${encodeURIComponent(assetId)}/criticality`, { criticality }),
 };
 
 /**

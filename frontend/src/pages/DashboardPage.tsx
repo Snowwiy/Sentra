@@ -7,6 +7,7 @@ import { EventTable } from "../components/EventTable";
 import { AssetName } from "../components/DeviceIdentity";
 import { MethodBadge } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
+import { RiskCell } from "../components/risk/RiskBadges";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
@@ -157,6 +158,7 @@ export function DashboardPage() {
                   <th>Método</th>
                   <th>OS / tipo</th>
                   <th>IP</th>
+                  <th>Riesgo</th>
                   <th>CPU</th>
                   <th>RAM</th>
                   <th>Disco</th>
@@ -195,6 +197,13 @@ export function DashboardPage() {
                         )}
                       </td>
                       <td className="mono">{asset.primary_ip}</td>
+                      <td>
+                        <RiskCell
+                          score={asset.risk_score}
+                          level={asset.risk_level}
+                          confidence={asset.risk_confidence}
+                        />
+                      </td>
                       <td>
                         <MetricBar value={t?.cpu_percent} label="CPU" />
                       </td>

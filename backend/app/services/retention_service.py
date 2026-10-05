@@ -27,6 +27,7 @@ from app.models.asset import Asset
 from app.models.change import AssetChange
 from app.models.detection import Detection, DetectionStatus
 from app.models.event import SystemEvent
+from app.models.risk import RiskSnapshot
 from app.models.telemetry import TelemetrySample
 
 BATCH_SIZE = 5000
@@ -39,6 +40,7 @@ class RetentionPolicy:
     change_days: int | None = None
     alert_days: int | None = None
     detection_days: int | None = None
+    risk_history_days: int | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RetentionPolicy":
@@ -48,6 +50,7 @@ class RetentionPolicy:
             settings.change_retention_days,
             settings.alert_retention_days,
             settings.detection_retention_days,
+            settings.risk_history_retention_days,
         )
 
     @property
@@ -60,6 +63,7 @@ class RetentionPolicy:
                 self.change_days,
                 self.alert_days,
                 self.detection_days,
+                self.risk_history_days,
             )
         )
 
@@ -71,6 +75,7 @@ class PurgeResult:
     asset_changes: int = 0
     alerts: int = 0
     detections: int = 0
+    risk_snapshots: int = 0
 
     @property
     def total(self) -> int:
@@ -80,6 +85,7 @@ class PurgeResult:
             + self.asset_changes
             + self.alerts
             + self.detections
+            + self.risk_snapshots
         )
 
 
@@ -126,12 +132,18 @@ class RetentionService:
                 Detection.status == DetectionStatus.RESOLVED,
                 Detection.resolved_at < cutoff,
             )
+        snapshots = 0
+        if self._policy.risk_history_days is not None:
+            cutoff = now - timedelta(days=self._policy.risk_history_days)
+            # Las contribuciones se borran en cascada; el riesgo actual (asset_risk) nunca.
+            snapshots = self._purge(RiskSnapshot, RiskSnapshot.calculated_at < cutoff)
         return PurgeResult(
             telemetry_samples=samples,
             system_events=events,
             asset_changes=changes,
             alerts=alerts,
             detections=detections,
+            risk_snapshots=snapshots,
         )
 
     def _purge(
@@ -140,7 +152,8 @@ class RetentionService:
         | type[SystemEvent]
         | type[AssetChange]
         | type[Alert]
-        | type[Detection],
+        | type[Detection]
+        | type[RiskSnapshot],
         *where: ColumnElement[bool],
     ) -> int:
         deleted = 0

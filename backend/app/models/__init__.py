@@ -1,5 +1,5 @@
 from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
-from app.models.asset import Asset, AssetStatus, MonitoringMethod
+from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.audit import AuditEvent
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
 from app.models.detection import (
@@ -17,6 +17,13 @@ from app.models.event import EventLevel, SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
+from app.models.risk import (
+    AssetRisk,
+    RiskConfidence,
+    RiskContributionRecord,
+    RiskLevel,
+    RiskSnapshot,
+)
 from app.models.telemetry import TelemetrySample
 from app.models.user import User, UserSession
 
@@ -28,9 +35,11 @@ __all__ = [
     "AlertStatus",
     "Asset",
     "AssetChange",
+    "AssetCriticality",
     "AssetInventory",
     "AssetPort",
     "AssetProcessSnapshot",
+    "AssetRisk",
     "AssetStatus",
     "AuditEvent",
     "ChangeCategory",
@@ -49,6 +58,10 @@ __all__ = [
     "EventLevel",
     "MonitoringMethod",
     "PortStateValue",
+    "RiskConfidence",
+    "RiskContributionRecord",
+    "RiskLevel",
+    "RiskSnapshot",
     "SystemEvent",
     "TelemetrySample",
     "User",
