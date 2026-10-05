@@ -35,6 +35,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.config import Settings
 from app.core.exceptions import ConflictError, NotFoundError
+from app.detection.recorder import SignalRecorder
 from app.discovery import probes
 from app.discovery.names import IdentityProber
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS, parse_ports
@@ -610,6 +611,7 @@ class ResultApplier:
         self._session = session
         self._config = config
         self._alerts = AlertService(session, thresholds)
+        self._signals = SignalRecorder(session)
         self._gateways = gateways
         # Una sola carga (cacheada) de la base OUI por job, no una por host.
         self._oui = oui_database()
@@ -876,6 +878,8 @@ class ResultApplier:
             "device_vendor": asset.device_vendor,
             "open_ports": list(open_ports),
         }
+        # Fase 4H: mismo criterio de "nuevo" que la alerta (después de la línea base de la red).
+        self._signals.record_discovered_asset(asset.id, now, details)
         if asset.device_name or asset.device_type:
             self._alerts.raise_alert(
                 asset,
@@ -974,6 +978,9 @@ class ResultApplier:
                 detected_at=now,
             )
         )
+        # Fase 4H: los cambios de exposición y presencia son señales del motor; se reutiliza
+        # la línea base de discovery en vez de recalcular otra.
+        self._signals.record_discovery_change(asset.id, kind, item, now, details)
 
 
 def _label(port: int) -> str:

@@ -114,7 +114,8 @@ export type AlertRule =
   | "asset_disappeared"
   | "port_exposed"
   | "port_closed"
-  | "monitoring_lost";
+  | "monitoring_lost"
+  | "security_detection";
 export type AlertSeverity = "info" | "warning" | "critical";
 /** "acknowledged": seen by an operator, still active (not resolved). */
 export type AlertStatus = "open" | "acknowledged" | "resolved";
@@ -312,6 +313,8 @@ export interface SystemEvent {
   record_id: number;
   /** Host name recorded in the event (null for events from older agents). */
   computer: string | null;
+  /** Campos estructurados del evento (Fase 4H); null en agentes anteriores. */
+  data: Record<string, string> | null;
   occurred_at: IsoDateTime;
 }
 
@@ -565,6 +568,7 @@ export type Role = "admin" | "analyst" | "viewer";
 export type Permission =
   | "monitoring:read"
   | "alerts:manage"
+  | "detections:manage"
   | "discovery:run"
   | "agents:manage"
   | "enrollment:manage"
@@ -615,4 +619,94 @@ export interface AuditEvent {
 
 export interface AuditEventList {
   items: AuditEvent[];
+}
+
+// --- Fase 4H: motor de detección ---------------------------------------------------------
+
+/** Impacto si la detección es cierta. */
+export type DetectionSeverity = "informational" | "low" | "medium" | "high" | "critical";
+/** Cuánto respalda la evidencia la conclusión (independiente de la severidad). */
+export type DetectionConfidence = "low" | "medium" | "high";
+export type DetectionStatus = "open" | "acknowledged" | "resolved";
+
+export interface Detection {
+  detection_id: string;
+  asset_id: string;
+  hostname: string;
+  rule_id: string;
+  rule_version: number;
+  /** "single" o "correlation". */
+  kind: string;
+  category: string;
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  status: DetectionStatus;
+  title: string;
+  /** Texto plano generado con plantillas (datos del host saneados). Nunca HTML. */
+  summary: string;
+  mitre_tactic: string | null;
+  mitre_technique: string | null;
+  mitre_subtechnique: string | null;
+  occurrence_count: number;
+  first_seen_at: IsoDateTime;
+  last_seen_at: IsoDateTime;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  acknowledged_at: IsoDateTime | null;
+  acknowledged_by: string | null;
+  resolved_at: IsoDateTime | null;
+  resolved_by: string | null;
+  resolution_note: string | null;
+  alert_id: string | null;
+}
+
+export interface DetectionList {
+  items: Detection[];
+  total: number;
+}
+
+export interface DetectionEvidence {
+  signal_kind: string;
+  role: string | null;
+  source_type: string;
+  source_id: string | null;
+  occurred_at: IsoDateTime;
+  summary: string;
+  data: Record<string, unknown> | null;
+}
+
+export interface DetectionDetail extends Detection {
+  details: Record<string, unknown> | null;
+  description: string;
+  why: string;
+  recommendations: string[];
+  required_data: string[];
+  evidence: DetectionEvidence[];
+  evidence_total: number;
+}
+
+export interface DetectionRule {
+  rule_id: string;
+  version: number;
+  kind: string;
+  category: string;
+  title: string;
+  description: string;
+  why: string;
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  triggers: string[];
+  required_data: string[];
+  recommendations: string[];
+  mitre_tactic: string | null;
+  mitre_technique: string | null;
+  mitre_subtechnique: string | null;
+  cooldown_minutes: number;
+  enabled: boolean;
+}
+
+export interface DetectionRuleList {
+  items: DetectionRule[];
+  windows: Record<string, number>;
+  alert_min_severity: DetectionSeverity | null;
 }

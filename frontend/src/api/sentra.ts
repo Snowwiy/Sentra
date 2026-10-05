@@ -15,6 +15,12 @@ import type {
   ChangeCategory,
   ChangeList,
   ConsoleInfo,
+  DetectionConfidence,
+  DetectionDetail,
+  DetectionList,
+  DetectionRuleList,
+  DetectionSeverity,
+  DetectionStatus,
   DiscoveryJobDetail,
   DiscoveryJobList,
   DiscoverySchedule,
@@ -44,6 +50,22 @@ export interface AlertQuery {
   rule?: AlertRule;
   assetId?: string;
   /** Text in the message or hostname. */
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface DetectionQuery {
+  status?: DetectionStatus;
+  /** Abiertas o reconocidas; se ignora si se indica `status`. */
+  active?: boolean;
+  severity?: DetectionSeverity;
+  confidence?: DetectionConfidence;
+  ruleId?: string;
+  assetId?: string;
+  /** Rango (ISO) sobre la última actividad. */
+  since?: string;
+  until?: string;
   q?: string;
   limit?: number;
   offset?: number;
@@ -173,6 +195,36 @@ export const alertsApi = {
   acknowledge: (alertId: string) =>
     apiPost<Alert>(`/alerts/${encodeURIComponent(alertId)}/acknowledge`),
   resolve: (alertId: string) => apiPost<Alert>(`/alerts/${encodeURIComponent(alertId)}/resolve`),
+};
+
+/** Detecciones del motor (Fase 4H). Leer: monitoring:read; gestionar: detections:manage. */
+export const detectionsApi = {
+  list: (query: DetectionQuery, signal?: AbortSignal) =>
+    apiGet<DetectionList>(
+      `/detections${queryString({
+        status: query.status,
+        active: query.active,
+        severity: query.severity,
+        confidence: query.confidence,
+        rule_id: query.ruleId,
+        asset_id: query.assetId,
+        since: query.since,
+        until: query.until,
+        q: query.q,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  get: (detectionId: string, signal?: AbortSignal) =>
+    apiGet<DetectionDetail>(`/detections/${encodeURIComponent(detectionId)}`, { signal }),
+  rules: (signal?: AbortSignal) => apiGet<DetectionRuleList>("/detection-rules", { signal }),
+  acknowledge: (detectionId: string) =>
+    apiPost<DetectionDetail>(`/detections/${encodeURIComponent(detectionId)}/acknowledge`),
+  resolve: (detectionId: string, note?: string) =>
+    apiPost<DetectionDetail>(`/detections/${encodeURIComponent(detectionId)}/resolve`, {
+      note: note?.trim() ? note.trim() : null,
+    }),
 };
 
 /**

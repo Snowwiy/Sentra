@@ -1,9 +1,11 @@
 """Opt-in deletion of old telemetry samples and host events.
 
 Nothing is deleted unless a retention is set: TELEMETRY_RETENTION_DAYS, EVENT_RETENTION_DAYS,
-CHANGE_RETENTION_DAYS (inventory change history) and ALERT_RETENTION_DAYS (resolved alerts
-only: an active alert is never deleted, whatever its age). Process snapshots and inventory
-keep only the latest document per asset, so they never grow.
+CHANGE_RETENTION_DAYS (inventory change history), ALERT_RETENTION_DAYS (resolved alerts
+only: an active alert is never deleted, whatever its age) and DETECTION_RETENTION_DAYS
+(Fase 4H: solo detecciones resueltas, con su evidencia; una detección abierta o reconocida
+nunca se borra, y su evidencia es una copia que no depende de EVENT_RETENTION_DAYS).
+Process snapshots and inventory keep only the latest document per asset, so they never grow.
 
 Rows go in small batches, each committed on its own, so the purge never holds long locks on
 tables agents write to every few seconds, and a run interrupted halfway (restart, outage)
@@ -23,6 +25,7 @@ from app.core.config import Settings
 from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
 from app.models.change import AssetChange
+from app.models.detection import Detection, DetectionStatus
 from app.models.event import SystemEvent
 from app.models.telemetry import TelemetrySample
 
@@ -35,6 +38,7 @@ class RetentionPolicy:
     event_days: int | None
     change_days: int | None = None
     alert_days: int | None = None
+    detection_days: int | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RetentionPolicy":
@@ -43,13 +47,20 @@ class RetentionPolicy:
             settings.event_retention_days,
             settings.change_retention_days,
             settings.alert_retention_days,
+            settings.detection_retention_days,
         )
 
     @property
     def enabled(self) -> bool:
         return any(
             days is not None
-            for days in (self.telemetry_days, self.event_days, self.change_days, self.alert_days)
+            for days in (
+                self.telemetry_days,
+                self.event_days,
+                self.change_days,
+                self.alert_days,
+                self.detection_days,
+            )
         )
 
 
@@ -59,10 +70,17 @@ class PurgeResult:
     system_events: int = 0
     asset_changes: int = 0
     alerts: int = 0
+    detections: int = 0
 
     @property
     def total(self) -> int:
-        return self.telemetry_samples + self.system_events + self.asset_changes + self.alerts
+        return (
+            self.telemetry_samples
+            + self.system_events
+            + self.asset_changes
+            + self.alerts
+            + self.detections
+        )
 
 
 class RetentionService:
@@ -99,13 +117,30 @@ class RetentionService:
             alerts = self._purge(
                 Alert, Alert.status == AlertStatus.RESOLVED, Alert.resolved_at < cutoff
             )
+        detections = 0
+        if self._policy.detection_days is not None:
+            cutoff = now - timedelta(days=self._policy.detection_days)
+            # La evidencia se borra en cascada con su detección.
+            detections = self._purge(
+                Detection,
+                Detection.status == DetectionStatus.RESOLVED,
+                Detection.resolved_at < cutoff,
+            )
         return PurgeResult(
-            telemetry_samples=samples, system_events=events, asset_changes=changes, alerts=alerts
+            telemetry_samples=samples,
+            system_events=events,
+            asset_changes=changes,
+            alerts=alerts,
+            detections=detections,
         )
 
     def _purge(
         self,
-        model: type[TelemetrySample] | type[SystemEvent] | type[AssetChange] | type[Alert],
+        model: type[TelemetrySample]
+        | type[SystemEvent]
+        | type[AssetChange]
+        | type[Alert]
+        | type[Detection],
         *where: ColumnElement[bool],
     ) -> int:
         deleted = 0

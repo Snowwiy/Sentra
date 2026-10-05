@@ -1,14 +1,21 @@
+import re
 from datetime import UTC, datetime
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, field_validator
 
 from app.models.event import EventLevel
-from app.schemas.common import BIGINT_MAX, RequestModel, ResponseModel
+from app.schemas.common import BIGINT_MAX, NUL, RequestModel, ResponseModel
 from app.schemas.telemetry import MAX_FUTURE_SKEW
 
 MAX_EVENTS_PER_BATCH = 500
 MAX_MESSAGE_LENGTH = 4000
+# Campos estructurados por evento (Fase 4H). El agente envía una lista cerrada (unos pocos
+# campos por id); los límites protegen la API de un agente manipulado igualmente.
+MAX_DATA_FIELDS = 16
+MAX_DATA_VALUE_LENGTH = 512
+# Nombres de campo de Windows: "TargetUserName", "param1", "Threat Name"...
+_DATA_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9 _.\-]{0,63}$")
 
 
 class EventIn(RequestModel):
@@ -22,7 +29,27 @@ class EventIn(RequestModel):
     message: str = Field(max_length=MAX_MESSAGE_LENGTH)
     # Host name the event was recorded on (Windows <Computer>); optional for older agents.
     computer: str | None = Field(default=None, max_length=255)
+    # Opcional (agentes desde la Fase 4H): EventData/UserData de una lista cerrada por id.
+    data: dict[str, str] | None = Field(default=None, max_length=MAX_DATA_FIELDS)
     occurred_at: AwareDatetime
+
+    @field_validator("data")
+    @classmethod
+    def _check_data(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        # El validador común de NUL solo mira campos de texto, no claves ni valores de un
+        # diccionario: aquí se comprueba todo, porque acaba en una columna JSONB.
+        if not value:
+            return None
+        clean: dict[str, str] = {}
+        for key, item in value.items():
+            if not _DATA_KEY.match(key):
+                raise ValueError(f"invalid data field name: {key[:64]!r}")
+            if NUL in item:
+                raise ValueError("must not contain NUL (U+0000) characters")
+            if len(item) > MAX_DATA_VALUE_LENGTH:
+                raise ValueError(f"data value too long (max {MAX_DATA_VALUE_LENGTH})")
+            clean[key] = item.strip()
+        return clean
 
     @field_validator("occurred_at")
     @classmethod
@@ -56,6 +83,8 @@ class EventRead(ResponseModel):
     message: str
     record_id: int
     computer: str | None
+    # Campos estructurados enviados por el agente (Fase 4H); null en agentes anteriores.
+    data: dict[str, str] | None = None
     occurred_at: datetime
 
 

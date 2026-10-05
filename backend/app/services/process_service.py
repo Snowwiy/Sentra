@@ -6,6 +6,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
+from app.detection.config import DetectionConfig
+from app.detection.recorder import SignalRecorder
 from app.models.process import AssetProcessSnapshot
 from app.repositories.asset_repository import AssetRepository
 from app.schemas.process import (
@@ -17,9 +19,10 @@ from app.services.agent_service import authenticate_agent, record_contact
 
 
 class ProcessService:
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, detection: DetectionConfig | None = None) -> None:
         self._session = session
         self._assets = AssetRepository(session)
+        self._signals = SignalRecorder(session, detection)
 
     def ingest(self, data: ProcessSnapshotCreate, token: str | None) -> ProcessSnapshotAccepted:
         asset = authenticate_agent(self._assets, data.agent_id, token)
@@ -39,6 +42,10 @@ class ProcessService:
         ).returning(AssetProcessSnapshot.asset_id)
         stored = self._session.execute(upsert).first() is not None
         record_contact(self._session, asset, datetime.now(UTC))
+        if stored:
+            # Fase 4H: ejecutables nuevos respecto a la línea base del activo. Un snapshot
+            # atrasado (no guardado) no aporta nada nuevo.
+            self._signals.record_processes(asset.id, document["processes"], data.collected_at)
         self._session.commit()
         return ProcessSnapshotAccepted(
             asset_id=asset.public_id, collected_at=data.collected_at, stored=stored

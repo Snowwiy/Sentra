@@ -2,6 +2,15 @@ from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset, AssetStatus, MonitoringMethod
 from app.models.audit import AuditEvent
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
+from app.models.detection import (
+    Detection,
+    DetectionBaseline,
+    DetectionConfidence,
+    DetectionEvidence,
+    DetectionSeverity,
+    DetectionSignal,
+    DetectionStatus,
+)
 from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrigger
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
@@ -26,6 +35,13 @@ __all__ = [
     "AuditEvent",
     "ChangeCategory",
     "ChangeKind",
+    "Detection",
+    "DetectionBaseline",
+    "DetectionConfidence",
+    "DetectionEvidence",
+    "DetectionSeverity",
+    "DetectionSignal",
+    "DetectionStatus",
     "DiscoveryJob",
     "DiscoveryJobStatus",
     "DiscoveryTrigger",

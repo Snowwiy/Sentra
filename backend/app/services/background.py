@@ -12,6 +12,8 @@ from datetime import UTC, datetime, timedelta
 
 from app.core.config import get_settings
 from app.db.session import get_sessionmaker
+from app.detection.config import DetectionConfig
+from app.detection.engine import DetectionEngine
 from app.models.discovery import DiscoveryTrigger
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
@@ -80,6 +82,30 @@ def sweep_offline_assets() -> None:
         logger.info("quiet event alerts resolved", extra={"count": resolved})
 
 
+# Purga de señales: como mucho una vez cada SIGNAL_PURGE_EVERY (el job corre cada pocos s).
+SIGNAL_PURGE_EVERY = timedelta(minutes=10)
+_last_signal_purge: list[datetime] = []
+
+
+def run_detection_engine() -> None:
+    """Fase 4H: evalúa las señales que la ingesta dejó pendientes y purga las caducadas.
+
+    Fuera de las peticiones de agentes: si una regla es lenta o falla, el heartbeat y la
+    telemetría siguen igual (ver app/detection/engine.py).
+    """
+    settings = get_settings()
+    config = DetectionConfig.from_settings(settings)
+    with get_sessionmaker()() as session:
+        engine = DetectionEngine(session, config, AlertThresholds.from_settings(settings))
+        engine.process_pending()
+        now = datetime.now(UTC)
+        if not _last_signal_purge or now - _last_signal_purge[0] >= SIGNAL_PURGE_EVERY:
+            _last_signal_purge[:] = [now]
+            purged = engine.purge_signals(now)
+            if purged:
+                logger.info("detection signals purged", extra={"count": purged})
+
+
 def purge_old_data() -> None:
     policy = RetentionPolicy.from_settings(get_settings())
     with get_sessionmaker()() as session:
@@ -92,6 +118,7 @@ def purge_old_data() -> None:
                 "system_events": result.system_events,
                 "asset_changes": result.asset_changes,
                 "alerts": result.alerts,
+                "detections": result.detections,
             },
         )
 

@@ -9,6 +9,7 @@ from app.core.config import Settings, get_settings
 from app.core.exceptions import ForbiddenError, UnauthorizedError
 from app.core.security import MAX_CREDENTIAL_LENGTH, enrollment_key_matches
 from app.db.session import get_db
+from app.detection.config import DetectionConfig
 from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
@@ -30,6 +31,13 @@ def get_alert_thresholds(settings: AppSettings) -> AlertThresholds:
 
 
 Thresholds = Annotated[AlertThresholds, Depends(get_alert_thresholds)]
+
+
+def get_detection_config(settings: AppSettings) -> DetectionConfig:
+    return DetectionConfig.from_settings(settings)
+
+
+Detection = Annotated[DetectionConfig, Depends(get_detection_config)]
 
 
 def get_agent_service(session: DbSession, settings: AppSettings) -> AgentService:
@@ -102,16 +110,20 @@ def get_health_service(session: DbSession) -> HealthService:
     return HealthService(session)
 
 
-def get_inventory_service(session: DbSession, thresholds: Thresholds) -> InventoryService:
-    return InventoryService(session, thresholds)
+def get_inventory_service(
+    session: DbSession, thresholds: Thresholds, detection: Detection
+) -> InventoryService:
+    return InventoryService(session, thresholds, detection)
 
 
-def get_event_service(session: DbSession, thresholds: Thresholds) -> EventService:
-    return EventService(session, thresholds)
+def get_event_service(
+    session: DbSession, thresholds: Thresholds, detection: Detection
+) -> EventService:
+    return EventService(session, thresholds, detection)
 
 
-def get_process_service(session: DbSession) -> ProcessService:
-    return ProcessService(session)
+def get_process_service(session: DbSession, detection: Detection) -> ProcessService:
+    return ProcessService(session, detection)
 
 
 def get_exposure_service(session: DbSession, settings: AppSettings) -> ExposureService:

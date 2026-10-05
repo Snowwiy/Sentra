@@ -44,6 +44,8 @@ EVENT_RULES = (
     AlertRule.UNKNOWN_DEVICE,
     AlertRule.PORT_EXPOSED,
     AlertRule.PORT_CLOSED,
+    # Una detección es algo que ocurrió: su alerta se resuelve sola tras el periodo de calma.
+    AlertRule.SECURITY_DETECTION,
 )
 _SEVERITY_RANK = {AlertSeverity.INFO: 0, AlertSeverity.WARNING: 1, AlertSeverity.CRITICAL: 2}
 _BURST_LEVELS = (EventLevel.ERROR, EventLevel.CRITICAL)

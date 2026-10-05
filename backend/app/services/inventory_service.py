@@ -7,6 +7,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
+from app.detection.config import DetectionConfig
+from app.detection.recorder import SignalRecorder
 from app.models.asset import Asset
 from app.models.change import AssetChange, ChangeCategory
 from app.models.inventory import AssetInventory
@@ -30,11 +32,17 @@ BOOT_GRACE = timedelta(minutes=10)
 
 
 class InventoryService:
-    def __init__(self, session: Session, thresholds: AlertThresholds) -> None:
+    def __init__(
+        self,
+        session: Session,
+        thresholds: AlertThresholds,
+        detection: DetectionConfig | None = None,
+    ) -> None:
         self._session = session
         self._assets = AssetRepository(session)
         self._telemetry = TelemetryRepository(session)
         self._alerts = AlertService(session, thresholds)
+        self._signals = SignalRecorder(session, detection)
 
     def ingest(self, data: InventoryCreate, token: str | None) -> InventoryAccepted:
         asset = authenticate_agent(self._assets, data.agent_id, token)
@@ -111,6 +119,8 @@ class InventoryService:
             for change in changes
         )
         self._alerts.record_admin_changes(asset, admin_changes(changes))
+        # Fase 4H: reutiliza este mismo diff (y el de puertos en escucha) como señales.
+        self._signals.record_inventory(asset.id, changes, previous, current, collected_at)
 
     def get(self, asset_public_id: UUID) -> InventoryRead:
         asset = self._require_asset(asset_public_id)

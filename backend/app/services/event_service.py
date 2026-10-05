@@ -7,6 +7,8 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
+from app.detection.config import DetectionConfig
+from app.detection.recorder import SignalRecorder
 from app.models.asset import Asset
 from app.models.event import EventLevel, SystemEvent
 from app.repositories.alert_repository import escape_like
@@ -26,10 +28,16 @@ class EventFilter:
 
 
 class EventService:
-    def __init__(self, session: Session, thresholds: AlertThresholds) -> None:
+    def __init__(
+        self,
+        session: Session,
+        thresholds: AlertThresholds,
+        detection: DetectionConfig | None = None,
+    ) -> None:
         self._session = session
         self._assets = AssetRepository(session)
         self._alerts = AlertService(session, thresholds)
+        self._signals = SignalRecorder(session, detection)
 
     def ingest(self, batch: EventBatch, token: str | None) -> EventBatchAccepted:
         asset = authenticate_agent(self._assets, batch.agent_id, token)
@@ -47,6 +55,9 @@ class EventService:
         record_contact(self._session, asset, datetime.now(UTC))
         # Same transaction as the events: an alert never points at an event rolled back.
         self._alerts.evaluate_events(asset, stored)
+        # Fase 4H: solo se guardan señales (aisladas en un savepoint); las reglas las evalúa
+        # el job del motor, así esta petición no espera a ninguna correlación.
+        self._signals.record_events(asset.id, stored)
         self._session.commit()
         return EventBatchAccepted(asset_id=asset.public_id, received=len(rows), stored=len(stored))
 
@@ -97,6 +108,7 @@ class EventService:
                 message=event.message,
                 record_id=event.record_id,
                 computer=event.computer,
+                data=event.data,
                 occurred_at=event.occurred_at,
             )
             for event, asset in rows[:limit]

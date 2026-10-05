@@ -122,6 +122,11 @@ agent once per sample) makes retries idempotent: resending the same id answers 2
 `source` (`windows_eventlog`), `channel`, `record_id`, `event_code`, `provider`,
 `level` (`info|warning|error|critical`), `message` (≤ 4000 chars), `occurred_at`, and
 optionally `computer` (the `<Computer>` name recorded in the event, ≤ 255 chars).
+Opcional desde la Fase 4H: `data`, objeto con campos estructurados del evento (máximo 16; claves
+`[A-Za-z][A-Za-z0-9 _.-]{0,63}`; valores texto ≤ 512 sin NUL). El agente solo envía los campos de
+una lista permitida por canal y evento (`DATA_FIELDS` en `agent/sentra_agent/events.py`) y
+nunca el contenido de scripts. Los usa el motor de detección (docs/detection-engine.md). Un
+servidor anterior a la 4H rechaza `data` (422): actualizar el servidor antes que los agentes.
 Idempotent per (`asset`, `channel`, `record_id`): resending a batch stores nothing twice; the
 response reports `received` and `stored`. 201, 401, 422. Only newly stored events feed the
 event-based alerts (critical events, error bursts), so a resend never counts twice.
@@ -130,7 +135,10 @@ Channels read by the Windows agent: `System` and `Application` (warning and abov
 System 104 "log cleared" and 7045 "service installed"), `Security` (a fixed list of account,
 group, logon-failure and audit events; needs administrator rights, otherwise reported once in
 the agent log as unavailable and skipped) and `Microsoft-Windows-PowerShell/Operational`
-(warning and above, **without the message text**, which can contain script code).
+(warning and above, **without the message text**, which can contain script code) y, desde la
+Fase 4H, `Microsoft-Windows-Windows Defender/Operational` (1116–1119, 5001, 5010, 5012) y
+Security 4624 solo para inicios interactivos, RDP y con credenciales en caché (tipos 2, 10 y
+11; consulta con cursor propio `Security:4624`).
 
 ## POST /inventory
 

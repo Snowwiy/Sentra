@@ -1,6 +1,7 @@
 import enum
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     BigInteger,
@@ -15,6 +16,7 @@ from sqlalchemy import (
     Uuid,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -63,6 +65,10 @@ class SystemEvent(Base):
     # Host name recorded in the event itself (Windows <Computer>). Usually the asset's own
     # name; differs for forwarded events. Null for events sent by older agents.
     computer: Mapped[str | None] = mapped_column(String(255))
+    # Campos estructurados del evento (EventData/UserData) que el agente envía desde una
+    # lista cerrada por id (Fase 4H): cuenta, SID, tipo de logon, servicio... Datos NO
+    # confiables: el motor de detección los normaliza y acota antes de usarlos.
+    data: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     received_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()

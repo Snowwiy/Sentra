@@ -17,6 +17,7 @@ export const RULE_LABELS: Record<AlertRule, string> = {
   port_exposed: "Nuevo puerto expuesto",
   port_closed: "Puerto cerrado",
   monitoring_lost: "Monitorización perdida",
+  security_detection: "Detección de seguridad",
 };
 
 const SEVERITY_LABELS: Record<AlertSeverity, string> = {

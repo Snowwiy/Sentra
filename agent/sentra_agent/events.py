@@ -8,6 +8,12 @@ channel needs administrator rights: as a standard user it is reported once as un
 and skipped, never worked around (no privilege changes). PowerShell events are collected
 without their text, which can contain script code and credentials.
 
+Fase 4H: además del mensaje renderizado (que llega en el idioma del sistema), algunos eventos
+envían un diccionario `data` con campos estructurados de EventData/UserData, elegidos uno a
+uno por id de evento (DATA_FIELDS). El motor de detección necesita saber QUÉ cuenta falló o
+entró sin depender del idioma del mensaje. Nunca se envía el contenido de scripts ni ningún
+campo que no esté en la lista.
+
 🪟 VALIDACIÓN LOCAL EN WINDOWS: the queries, the Security/PowerShell channels and the
 <Computer> field can only be exercised on a real Windows host.
 
@@ -43,6 +49,7 @@ _LEVEL_FILTER = "Level=1 or Level=2 or Level=3"
 _SYSTEM_EXTRA = {104: "critical", 7045: "warning"}  # System log cleared, service installed
 _SECURITY_EVENTS = {
     1102: "critical",  # Security log cleared
+    4624: "info",  # successful logon (solo tipos interactivos, ver _LOGON_SUCCESS)
     4719: "warning",  # audit policy changed
     4625: "warning",  # failed logon
     4740: "warning",  # account locked out
@@ -59,8 +66,95 @@ _SECURITY_EVENTS = {
 }
 
 
+# Microsoft Defender Antivirus (Fase 4H): amenaza detectada/acción y protección desactivada.
+_DEFENDER_EVENTS = {
+    1116: "warning",  # malware detected
+    1117: "warning",  # action taken on malware
+    1118: "error",  # action failed (non critical)
+    1119: "critical",  # action failed (critical)
+    5001: "warning",  # real-time protection disabled
+    5010: "warning",  # antispyware scanning disabled
+    5012: "warning",  # antivirus scanning disabled
+}
+
+# Campos estructurados que se envían por id de evento (Fase 4H). Lista cerrada a propósito:
+# identidades (nombre, dominio, SID), tipo de logon, origen y nombres de servicio o amenaza.
+# Ninguno de estos campos contiene contraseñas; el contenido de scripts (4104
+# ScriptBlockText) NUNCA se lista.
+_ACCOUNT_FIELDS = (
+    "TargetUserName",
+    "TargetDomainName",
+    "TargetSid",
+    "SubjectUserName",
+    "SubjectUserSid",
+    "SubjectDomainName",
+)
+_GROUP_FIELDS = ("MemberName", "MemberSid", *_ACCOUNT_FIELDS)
+_LOGON_FIELDS = (
+    "TargetUserName",
+    "TargetDomainName",
+    "TargetUserSid",
+    "LogonType",
+    "IpAddress",
+    "WorkstationName",
+)
+_DEFENDER_FIELDS = (
+    "Threat Name",
+    "Severity Name",
+    "Category Name",
+    "Action Name",
+    "Path",
+    "Detection User",
+    "Process Name",
+)
+DATA_FIELDS: dict[str, dict[int, tuple[str, ...]]] = {
+    "System": {
+        104: ("SubjectUserName", "SubjectDomainName", "Channel"),
+        7045: ("ServiceName", "ImagePath", "ServiceType", "StartType", "AccountName"),
+        # Service Control Manager: param1 es el nombre visible del servicio.
+        7031: ("param1", "param2"),
+        7034: ("param1", "param2"),
+        41: ("BugcheckCode",),
+    },
+    "Security": {
+        1102: ("SubjectUserName", "SubjectUserSid", "SubjectDomainName"),
+        4624: _LOGON_FIELDS,
+        4625: (*_LOGON_FIELDS, "Status", "SubStatus"),
+        4719: (
+            "SubjectUserName",
+            "SubjectUserSid",
+            "SubjectDomainName",
+            "CategoryId",
+            "SubcategoryId",
+            "SubcategoryGuid",
+            "AuditPolicyChanges",
+        ),
+        4720: _ACCOUNT_FIELDS,
+        4722: _ACCOUNT_FIELDS,
+        4725: _ACCOUNT_FIELDS,
+        4726: _ACCOUNT_FIELDS,
+        4740: _ACCOUNT_FIELDS,
+        **dict.fromkeys((4728, 4729, 4732, 4733, 4756, 4757), _GROUP_FIELDS),
+    },
+    "Microsoft-Windows-Windows Defender/Operational": dict.fromkeys(
+        (1116, 1117, 1118, 1119), _DEFENDER_FIELDS
+    ),
+}
+DATA_VALUE_MAX = 512
+
+
 def _ids(events: dict[int, str]) -> str:
     return " or ".join(f"EventID={event_id}" for event_id in sorted(events))
+
+
+# 4624 solo para logons interactivos (2), remotos/RDP (10) e interactivos con credenciales
+# en caché (11). Los de red (3) y de servicio (5) son cientos por hora en un servidor y no
+# aportan a "acceso tras fallos" lo que cuestan en volumen.
+_LOGON_SUCCESS = (
+    "*[System[EventID=4624]] and "
+    "*[EventData[Data[@Name='LogonType']='2' or Data[@Name='LogonType']='10'"
+    " or Data[@Name='LogonType']='11']]"
+)
 
 
 @dataclass(frozen=True)
@@ -72,6 +166,16 @@ class Channel:
     levels_by_id: dict[int, str] = field(default_factory=dict)
     # False: the message text is replaced (may hold script code or secrets).
     collect_message: bool = True
+    # Clave propia del cursor cuando un canal se lee con varias consultas (Security y sus
+    # logons correctos): si una consulta falla, las demás siguen funcionando.
+    cursor_key: str = ""
+    # Condición XPath completa (con su propio System[...]) en lugar de `condition`, para
+    # filtrar también por EventData (tipo de logon de 4624).
+    query: str = ""
+
+    @property
+    def key(self) -> str:
+        return self.cursor_key or self.name
 
     def level(self, windows_level: int, event_id: int) -> str | None:
         return self.levels_by_id.get(event_id) or _LEVELS.get(windows_level)
@@ -80,12 +184,35 @@ class Channel:
 CHANNELS = (
     Channel("System", f"({_LEVEL_FILTER} or {_ids(_SYSTEM_EXTRA)})", _SYSTEM_EXTRA),
     Channel("Application", f"({_LEVEL_FILTER})"),
-    Channel("Security", f"({_ids(_SECURITY_EVENTS)})", _SECURITY_EVENTS),
+    Channel(
+        "Security",
+        f"({_ids({k: v for k, v in _SECURITY_EVENTS.items() if k != 4624})})",
+        _SECURITY_EVENTS,
+    ),
+    # 🪟 VALIDACIÓN LOCAL EN WINDOWS: consulta con filtro por EventData. Va aparte para que,
+    # si una versión de Windows la rechazara, el resto del canal Security siga leyéndose.
+    Channel(
+        "Security",
+        "EventID=4624",
+        _SECURITY_EVENTS,
+        cursor_key="Security:4624",
+        query=_LOGON_SUCCESS,
+    ),
     Channel(
         "Microsoft-Windows-PowerShell/Operational", f"({_LEVEL_FILTER})", collect_message=False
     ),
+    # Opcional: sin Defender (otro antivirus, Server Core) el canal no existe y se informa
+    # una vez como no disponible, igual que Security sin permisos.
+    Channel(
+        "Microsoft-Windows-Windows Defender/Operational",
+        f"({_ids(_DEFENDER_EVENTS)})",
+        _DEFENDER_EVENTS,
+    ),
 )
-_BY_NAME = {channel.name: channel for channel in CHANNELS}
+# Primera definición de cada canal: los niveles por id son los mismos en todas sus consultas.
+_BY_NAME: dict[str, Channel] = {}
+for _channel in CHANNELS:
+    _BY_NAME.setdefault(_channel.name, _channel)
 
 
 class EventLogError(Exception):
@@ -102,6 +229,29 @@ def _parse_time(value: str) -> str:
     head, _, frac = value.rstrip("Z").partition(".")
     stamp = f"{head}.{frac[:6]}" if frac else head
     return datetime.fromisoformat(stamp).replace(tzinfo=UTC).isoformat()
+
+
+def _event_data(node: ET.Element, fields: tuple[str, ...]) -> dict[str, str]:
+    """Campos permitidos de EventData (<Data Name=...>) o UserData (<LogFileCleared>...)."""
+    wanted = set(fields)
+    found: dict[str, str] = {}
+    for data in node.findall("e:EventData/e:Data", _NS):
+        name = data.get("Name")
+        if name in wanted and data.text:
+            found[name] = data.text
+    user_data = node.find("e:UserData", _NS)
+    if user_data is not None:
+        # UserData lleva un elemento propio del proveedor con su espacio de nombres.
+        for container in user_data:
+            for child in container:
+                name = child.tag.rsplit("}", 1)[-1]
+                if name in wanted and child.text:
+                    found.setdefault(name, child.text)
+    return {
+        name: " ".join(value.split())[:DATA_VALUE_MAX]
+        for name, value in found.items()
+        if value.strip() and value.strip() != "-"
+    }
 
 
 def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
@@ -126,6 +276,8 @@ def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
         else:
             message = f"{provider_name} event {event_code} (content not collected)"
         computer = (system.findtext("e:Computer", "", _NS) or "").strip()
+        fields = DATA_FIELDS.get(spec.name, {}).get(event_code)
+        data = _event_data(node, fields) if fields else {}
         events.append(
             {
                 "source": "windows_eventlog",
@@ -137,6 +289,8 @@ def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
                 "message": " ".join(message.split())[:MESSAGE_MAX],
                 "computer": computer[:255] or None,
                 "occurred_at": _parse_time(created.get("SystemTime", "")),
+                # Solo cuando hay algo: los eventos sin campos estructurados no lo llevan.
+                **({"data": data} if data else {}),
             }
         )
     return sorted(events, key=lambda event: event["record_id"])
@@ -144,6 +298,10 @@ def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
 
 def build_query(channel: Channel, after: int | None) -> tuple[str, list[str]]:
     """XPath query and extra wevtutil arguments for one read of a channel."""
+    if channel.query:
+        if after is None:
+            return channel.query, ["/rd:true", f"/c:{FIRST_RUN_MAX}"]
+        return f"{channel.query} and *[System[EventRecordID>{after}]]", [f"/c:{BATCH_MAX}"]
     if after is None:
         # First run: only the most recent matching events, newest first, not years of logs.
         return f"*[System[{channel.condition}]]", ["/rd:true", f"/c:{FIRST_RUN_MAX}"]
@@ -192,16 +350,16 @@ class EventCollector:
         events: list[dict[str, Any]] = []
         for channel in CHANNELS:
             try:
-                found = _query(channel, cursor.get(channel.name))
+                found = _query(channel, cursor.get(channel.key))
             except (EventLogError, subprocess.TimeoutExpired, ET.ParseError) as exc:
-                self._report_unavailable(channel.name, exc)
+                self._report_unavailable(channel.key, exc)
                 continue
-            if channel.name in self._unavailable:
-                self._unavailable.discard(channel.name)
-                logger.info("event log channel available again", extra={"channel": channel.name})
+            if channel.key in self._unavailable:
+                self._unavailable.discard(channel.key)
+                logger.info("event log channel available again", extra={"channel": channel.key})
             if found:
                 events.extend(found)
-                cursor[channel.name] = found[-1]["record_id"]
+                cursor[channel.key] = found[-1]["record_id"]
         return events, cursor
 
     def _report_unavailable(self, channel: str, exc: Exception) -> None:

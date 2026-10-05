@@ -24,6 +24,8 @@ class Permission(enum.StrEnum):
     MONITORING_READ = "monitoring:read"
     # Reconocer y resolver alertas.
     ALERTS_MANAGE = "alerts:manage"
+    # Reconocer y resolver detecciones del motor (Fase 4H). Leerlas es monitoring:read.
+    DETECTIONS_MANAGE = "detections:manage"
     # Iniciar y cancelar descubrimientos de red (siempre dentro de la allowlist del servidor).
     DISCOVERY_RUN = "discovery:run"
     # Revocar y rehabilitar agentes.
@@ -38,10 +40,15 @@ class Permission(enum.StrEnum):
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.VIEWER: frozenset({Permission.MONITORING_READ}),
-    # Analyst opera la seguridad (alertas, discovery dentro de la allowlist) pero no gestiona
-    # credenciales (agentes, tokens de enrollment) ni usuarios.
+    # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
+    # pero no gestiona credenciales (agentes, tokens de enrollment) ni usuarios.
     Role.ANALYST: frozenset(
-        {Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DISCOVERY_RUN}
+        {
+            Permission.MONITORING_READ,
+            Permission.ALERTS_MANAGE,
+            Permission.DETECTIONS_MANAGE,
+            Permission.DISCOVERY_RUN,
+        }
     ),
     Role.ADMIN: frozenset(Permission),
 }

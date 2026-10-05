@@ -112,6 +112,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `TELEMETRY_RETENTION_DAYS`, `EVENT_RETENTION_DAYS` | Delete telemetry samples / host events older than N days (unset = keep forever, the default) |
 | `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` | Delete inventory changes / **resolved** alerts older than N days (unset = keep forever; active alerts are never deleted) |
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
+| `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
 | `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](docs/discovery.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
@@ -154,6 +155,10 @@ cd backend
 | GET | `/api/v1/assets/{asset_id}/exposure` | Ports reachable from the Sentra server, correlated with the agent's listeners |
 | GET | `/api/v1/discovery/scope` | Networks and ports discovery may probe (configuration) |
 | GET | `/api/v1/discovery/jobs?limit=` | Recent discovery runs |
+| GET | `/api/v1/detections?status=&active=&severity=&min_severity=&confidence=&rule_id=&asset_id=&since=&until=&q=&limit=&offset=` | Detecciones del motor (Fase 4H), la actividad más reciente primero |
+| GET | `/api/v1/detections/{detection_id}` | Detalle: qué pasó, por qué importa, evidencias (timeline), MITRE, recomendaciones |
+| POST | `/api/v1/detections/{detection_id}/acknowledge`, `/resolve` | Reconocer / resolver (roles admin y analyst; auditado). `resolve` acepta `{"note": "…"}` |
+| GET | `/api/v1/detection-rules` | Catálogo de reglas, ventanas y umbral de alerta |
 | POST | `/api/v1/auth/login`, `/auth/logout`; GET `/auth/me` | Sesión del dashboard (cookie HttpOnly + `X-CSRF-Token` en mutaciones). Todos los GET del dashboard requieren sesión; usuarios, auditoría y acciones por rol: [docs/authentication.md](docs/authentication.md) |
 
 Las alertas se reconocen o resuelven desde el dashboard (roles admin y analyst) o con
@@ -203,6 +208,10 @@ reachable ports and changes; installing the agent (MANAGED) merges both views in
 asset ([docs/discovery.md](docs/discovery.md)). Monitoring only: no remote actions on hosts. See
 [docs/DEVELOPMENT_STATUS.md](docs/DEVELOPMENT_STATUS.md) for details and known issues.
 El dashboard exige login con roles y sesiones de servidor ([docs/authentication.md](docs/authentication.md)).
+**Detecciones** (Fase 4H): un motor determinista de reglas y correlaciones temporales convierte
+eventos, inventario, procesos y descubrimiento en detecciones con severidad y confianza
+separadas, evidencias y recomendaciones; las graves abren una alerta
+([docs/detection-engine.md](docs/detection-engine.md)).
 Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap

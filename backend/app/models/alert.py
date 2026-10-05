@@ -50,6 +50,10 @@ class AlertRule(enum.StrEnum):
     PORT_CLOSED = "port_closed"
     # The host answers on the network but its agent stopped reporting.
     MONITORING_LOST = "monitoring_lost"
+    # Fase 4H: el motor de detección concluyó algo grave en el activo (severidad igual o
+    # superior a DETECTION_ALERT_MIN_SEVERITY). La alerta notifica; la evidencia y la
+    # explicación están en la detección enlazada (details.detection_id).
+    SECURITY_DETECTION = "security_detection"
 
 
 class AlertSeverity(enum.StrEnum):

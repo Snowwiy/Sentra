@@ -7,6 +7,8 @@ import { AgentsPage } from "./pages/AgentsPage";
 import { AlertsPage } from "./pages/AlertsPage";
 import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { DetectionDetailPage } from "./pages/DetectionDetailPage";
+import { DetectionsPage } from "./pages/DetectionsPage";
 import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { UsersPage } from "./pages/UsersPage";
@@ -29,6 +31,8 @@ export function AppRoutes() {
           <Route path="agents" element={<AgentsPage />} />
           <Route path="network" element={<NetworkPage />} />
           <Route path="alerts" element={<AlertsPage />} />
+          <Route path="detections" element={<DetectionsPage />} />
+          <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
           <Route
             path="admin/users"
             element={

@@ -22,6 +22,7 @@ from app.services.background import (
     PeriodicJob,
     discovery_job,
     purge_old_data,
+    run_detection_engine,
     sweep_offline_assets,
 )
 from app.services.discovery_runner import stop_discovery_runner
@@ -57,6 +58,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 "offline-sweeper", settings.offline_sweep_interval_seconds, sweep_offline_assets
             )
         )
+        # Fase 4H: evaluación de señales del motor de detección, fuera de las peticiones.
+        if settings.detection_enabled:
+            jobs.append(
+                PeriodicJob(
+                    "detection-engine",
+                    settings.detection_eval_interval_seconds,
+                    run_detection_engine,
+                )
+            )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:
             jobs.append(

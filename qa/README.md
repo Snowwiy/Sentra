@@ -68,7 +68,27 @@ exposure, discovery scope and jobs, and that no HTTP endpoint starts a scan). Di
 runs themselves are covered by `backend/tests/test_discovery_*.py`, including real TCP
 probes against listeners on 127.0.0.0/8.
 
-## 4. Real agent and dashboard against the QA API
+Fase 4H (`test_detections`): una detección simple (registro borrado), una correlación
+(fallos de inicio de sesión seguidos de un acceso correcto, CORR-001), la deduplicación (un
+segundo borrado añade evidencia a la misma detección) y la resolución con nota, el 409 al
+reconocer una resuelta y su registro en `audit_events`. Usa el job real del motor: arranca la
+API QA con `$env:DETECTION_EVAL_INTERVAL_SECONDS = "2"` para que tarde poco.
+
+## 4. Rendimiento del motor de detección
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_detections.py --explain
+```
+
+Con datos sintéticos (por defecto 200 activos, 50 eventos por activo y 50 000 detecciones de
+histórico) mide la extracción de señales por lote, las señales/s del job, los listados y el
+detalle (con el número de sentencias SQL) y muestra los planes de PostgreSQL. Borra lo que
+crea. Ejecútalo contra la base QA con la API QA parada, para que su job no evalúe las señales
+antes. Resultados de referencia en [docs/detection-engine.md](../docs/detection-engine.md).
+
+## 5. Real agent and dashboard against the QA API
 
 ```powershell
 $env:SENTRA_AGENT_ENROLLMENT_KEY = "qa-enrollment-key-0123456789abcdef"

@@ -7,10 +7,11 @@ import { AuthContext, type AuthValue } from "../auth/AuthContext";
 // Igual que backend/app/core/permissions.py (ROLE_PERMISSIONS).
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
   viewer: ["monitoring:read"],
-  analyst: ["monitoring:read", "alerts:manage", "discovery:run"],
+  analyst: ["monitoring:read", "alerts:manage", "detections:manage", "discovery:run"],
   admin: [
     "monitoring:read",
     "alerts:manage",
+    "detections:manage",
     "discovery:run",
     "agents:manage",
     "enrollment:manage",

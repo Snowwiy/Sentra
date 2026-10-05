@@ -933,6 +933,110 @@ def test_enrollment_tokens() -> None:
     check("enrollment token is not an agent credential -> 401", r.status == 401, r.status)
 
 
+def wait_for(fetch: Callable[[], Any], ready: Callable[[Any], bool], timeout: float = 30) -> Any:
+    """Repite `fetch` hasta que `ready` o se agote el tiempo (el motor corre en un job)."""
+    deadline = time.monotonic() + timeout
+    value = fetch()
+    while not ready(value) and time.monotonic() < deadline:
+        time.sleep(1)
+        value = fetch()
+    return value
+
+
+def test_detections() -> None:
+    """Fase 4H: detección simple, correlación, deduplicación y resolución con auditoría.
+
+    Necesita el job del motor activo (DETECTION_ENABLED, por defecto) y conviene un intervalo
+    corto (DETECTION_EVAL_INTERVAL_SECONDS=2). Datos sintéticos: no son de ningún host real.
+    """
+    agent_id, token, asset_id = enroll("qa-detections")
+    h = bearer(token)
+    security = {"channel": "Security", "provider": "Microsoft-Windows-Security-Auditing"}
+
+    def send(events: list[dict[str, Any]]) -> None:
+        r = call("POST", "/events", {"agent_id": agent_id, "events": events}, h)
+        check("detection events accepted", r.status == 201, (r.status, r.body))
+
+    def detections() -> list[dict[str, Any]]:
+        r = call("GET", f"/detections?asset_id={asset_id}&active=true")
+        return r.body["items"] if r.status == 200 else []
+
+    def by_rule(items: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {d["rule_id"]: d for d in items}
+
+    # 1. Detección simple: borrado del registro de seguridad.
+    send([event(9001, event_code=1102, level="critical", message="QA log cleared",
+                data={"SubjectUserName": "qa-user"}, **security)])  # fmt: skip
+    found = wait_for(detections, lambda items: "DEF-001" in by_rule(items))
+    cleared = by_rule(found).get("DEF-001")
+    check("simple detection DEF-001 created", cleared is not None, found)
+    if cleared is None:
+        return
+    check(
+        "severity and confidence are separate fields",
+        cleared["severity"] == "high" and cleared["confidence"] in ("low", "medium", "high"),
+        cleared,
+    )
+
+    # 2. Deduplicación: otro borrado no abre una segunda detección activa.
+    send([event(9002, event_code=1102, level="critical", message="QA log cleared again",
+                **security)])  # fmt: skip
+    detail = wait_for(
+        lambda: call("GET", f"/detections/{cleared['detection_id']}").body,
+        lambda body: isinstance(body, dict) and body.get("evidence_total", 0) >= 2,
+    )
+    same = [d for d in detections() if d["rule_id"] == "DEF-001"]
+    check("dedup keeps one active detection per rule/key", len(same) == 1, same)
+    check("dedup adds evidence to the same detection", detail.get("evidence_total", 0) >= 2, detail)
+
+    # 3. Correlación: fallos repetidos y después un inicio de sesión correcto (CORR-001).
+    user = {"TargetUserName": "qa-analyst", "TargetUserSid": "S-1-5-21-90-91-92-1001"}
+    failures = [
+        event(9100 + i, event_code=4625, level="warning", message="QA logon failure",
+              occurred_at=now_iso(timedelta(minutes=-3, seconds=i)),
+              data={**user, "IpAddress": "10.66.0.9", "LogonType": "3"}, **security)
+        for i in range(6)
+    ]  # fmt: skip
+    success = event(9200, event_code=4624, level="info", message="QA logon",
+                    occurred_at=now_iso(timedelta(minutes=-1)),
+                    data={**user, "LogonType": "10", "IpAddress": "10.66.0.9"},
+                    **security)  # fmt: skip
+    send([*failures, success])
+    found = by_rule(wait_for(detections, lambda items: "CORR-001" in by_rule(items)))
+    check("failed logon burst AUTH-001 detected", "AUTH-001" in found, sorted(found))
+    corr = found.get("CORR-001")
+    check("correlation CORR-001 detected", corr is not None and corr["kind"] == "correlation", corr)
+    if corr:
+        body = call("GET", f"/detections/{corr['detection_id']}").body
+        roles = {item["role"] for item in body.get("evidence", [])}
+        check("correlation evidence keeps both sides", {"failure", "success"} <= roles, roles)
+        check(
+            "detail explains why and what to do",
+            bool(body.get("why") and body.get("recommendations")),
+        )
+
+    # 4. Resolver: queda en la auditoría y deja de estar activa.
+    r = call("POST", f"/detections/{cleared['detection_id']}/resolve", {"note": "QA: prueba"})
+    check(
+        "resolve detection",
+        r.status == 200
+        and r.body["status"] == "resolved"
+        and r.body["resolution_note"] == "QA: prueba",
+        (r.status, r.body),
+    )
+    r = call("POST", f"/detections/{cleared['detection_id']}/acknowledge")
+    check("acknowledge after resolve -> 409", r.status == 409 and is_error_envelope(r), r.status)
+    check("resolved detection leaves the active list", "DEF-001" not in by_rule(detections()))
+    audit = call("GET", "/audit?action=detection_resolved&limit=20").body["items"]
+    check(
+        "resolve written to audit_events",
+        any(a["target_id"] == cleared["detection_id"] and a["result"] == "success" for a in audit),
+        audit[:3],
+    )
+    r = call("GET", "/detection-rules")
+    check("rule catalogue lists 23 rules", r.status == 200 and len(r.body["items"]) == 23, r.status)
+
+
 def test_auth() -> None:
     """Fase 4G: login, sesión, CSRF, permisos y separación de credenciales sobre HTTP real."""
     for path in ("/assets", "/alerts", "/events", "/agents", "/discovery/jobs", "/users"):
@@ -972,6 +1076,7 @@ def test_auth() -> None:
         ("POST", "/console/enrollment-tokens", {}),
         ("POST", "/console/discovery/jobs", {"target": "0.0.0.0/0"}),
         ("POST", f"/alerts/{uuid.uuid4()}/resolve", None),
+        ("POST", f"/detections/{uuid.uuid4()}/resolve", None),
         ("GET", "/users", None),
     ):
         r = call(method, path, body, session=viewer)
@@ -1023,6 +1128,7 @@ def main() -> int:
         test_operational,
         test_hybrid_read,
         test_enrollment_tokens,
+        test_detections,
         test_auth,
     ]
     if args.offline:

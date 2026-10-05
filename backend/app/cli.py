@@ -10,7 +10,7 @@ import argparse
 import getpass
 import sys
 from collections.abc import Callable
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -22,6 +22,8 @@ from app.core.config import get_settings
 from app.core.exceptions import ConflictError, NotFoundError, PolicyError
 from app.core.permissions import Role
 from app.db.session import get_sessionmaker
+from app.detection.config import DetectionConfig
+from app.detection.engine import DetectionEngine, EngineRun
 from app.discovery.targets import TargetError
 from app.models.asset import Asset
 from app.models.discovery import DiscoveryTrigger
@@ -58,16 +60,46 @@ def _purge_old_data(session: Session) -> int:
     if not policy.enabled:
         print(
             "no retention configured: set TELEMETRY_RETENTION_DAYS, EVENT_RETENTION_DAYS,"
-            " CHANGE_RETENTION_DAYS or ALERT_RETENTION_DAYS",
+            " CHANGE_RETENTION_DAYS, ALERT_RETENTION_DAYS or DETECTION_RETENTION_DAYS",
             file=sys.stderr,
         )
         return 1
     result = RetentionService(session, policy).purge()
     print(
         f"deleted {result.telemetry_samples} telemetry samples, {result.system_events} events,"
-        f" {result.asset_changes} inventory changes and {result.alerts} resolved alerts"
+        f" {result.asset_changes} inventory changes, {result.alerts} resolved alerts and"
+        f" {result.detections} resolved detections"
     )
     return 0
+
+
+def _detections(session: Session, reevaluate_hours: int | None) -> int:
+    """Fase 4H: evalúa ahora las señales pendientes (y opcionalmente las recientes otra vez).
+
+    Útil tras activar una regla con DETECTION_DISABLED_RULES o con la API parada. Repetirlo
+    es seguro: la evidencia es idempotente por señal, no duplica detecciones.
+    """
+    settings = get_settings()
+    engine = DetectionEngine(
+        session, DetectionConfig.from_settings(settings), AlertThresholds.from_settings(settings)
+    )
+    if reevaluate_hours is not None:
+        since = datetime.now(UTC) - timedelta(hours=reevaluate_hours)
+        print(f"{engine.reevaluate(since)} signals queued again")
+    total = EngineRun()
+    while True:
+        run = engine.process_pending()
+        total.signals += run.signals
+        total.created += run.created
+        total.updated += run.updated
+        total.rule_errors += run.rule_errors
+        if run.signals == 0:
+            break
+    print(
+        f"{total.signals} signals evaluated: {total.created} detections created,"
+        f" {total.updated} updated, {total.rule_errors} rule errors"
+    )
+    return 1 if total.rule_errors else 0
 
 
 def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
@@ -351,6 +383,14 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "discovery-scope", help="show the networks and ports discovery may probe (no probing)"
     )
+    detect = commands.add_parser(
+        "run-detections", help="evaluate pending detection signals now (Fase 4H)"
+    )
+    detect.add_argument(
+        "--reevaluate-hours",
+        type=int,
+        help="queue again the signals of the last N hours before evaluating (safe to repeat)",
+    )
     discover = commands.add_parser(
         "discover", help="run network discovery now over the allowed networks (or one target)"
     )
@@ -379,6 +419,8 @@ def main(argv: list[str] | None = None) -> int:
             return _purge_old_data(session)
         if args.command == "reclassify-assets":
             return _reclassify_assets(session)
+        if args.command == "run-detections":
+            return _detections(session, args.reevaluate_hours)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

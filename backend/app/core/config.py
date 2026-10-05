@@ -160,6 +160,36 @@ class Settings(BaseSettings):
     # Complete runs without seeing a host before it is reported offline/disappeared.
     discovery_offline_after_misses: int = Field(default=3, ge=1, le=100)
 
+    # --- Fase 4H: motor de detección y correlación (ver docs/detection-engine.md) ---
+    # Desactivarlo deja de crear señales y detecciones; la ingesta sigue igual.
+    detection_enabled: bool = True
+    # Cada cuánto el job interno evalúa las señales pendientes (latencia de una detección).
+    detection_eval_interval_seconds: int = Field(default=5, ge=1, le=3600)
+    # AUTH-001: fallos de logon de la misma cuenta en el mismo activo dentro de la ventana.
+    detection_auth_failure_threshold: int = Field(default=5, ge=2, le=10_000)
+    detection_auth_failure_window_minutes: int = Field(default=5, ge=1, le=1440)
+    # Correlaciones de secuencia corta (CORR-001 fallos -> éxito, CORR-002 PowerShell ->
+    # persistencia) y de cambios administrativos (CORR-003 exposición, CORR-004 cuenta nueva).
+    detection_correlation_window_minutes: int = Field(default=15, ge=1, le=1440)
+    detection_change_window_minutes: int = Field(default=60, ge=1, le=1440)
+    # Patrones repetitivos (caídas del mismo servicio, apagados inesperados).
+    detection_repeat_threshold: int = Field(default=3, ge=2, le=1000)
+    detection_repeat_window_minutes: int = Field(default=1440, ge=1, le=10_080)
+    # Eventos más antiguos no generan señales: el primer envío de un agente recién instalado
+    # (o un backlog muy viejo) no debe convertir el pasado en detecciones nuevas.
+    detection_max_event_age_hours: int = Field(default=24, ge=1, le=720)
+    # Las señales son estado temporal para correlacionar; la evidencia útil queda copiada.
+    detection_signal_retention_hours: int = Field(default=48, ge=1, le=2160)
+    # Servicios de control de seguridad vigilados por DEF-003 (Windows y Linux).
+    detection_security_services: str = "WinDefend,mpssvc,EventLog,wscsvc,Sense,auditd,firewalld,ufw"
+    # Detecciones con esta severidad o más abren una alerta security_detection; "off" nunca.
+    detection_alert_min_severity: Literal["medium", "high", "critical", "off"] = "high"
+    # Reglas desactivadas por id (p. ej. "PROC-001,NET-004"); un id desconocido impide arrancar.
+    detection_disabled_rules: str = ""
+    # Detecciones RESUELTAS más antiguas se borran (con su evidencia). Las abiertas o
+    # reconocidas nunca. Sin valor (por defecto) no se borra nada.
+    detection_retention_days: int | None = Field(default=None, ge=1)
+
     @field_validator("agent_server_url", mode="before")
     @classmethod
     def _blank_server_url(cls, value: object) -> object:
@@ -185,6 +215,28 @@ class Settings(BaseSettings):
         # Fail at startup instead of silently ignoring a misspelled rule.
         parse_critical_events(value)
         return value
+
+    @model_validator(mode="after")
+    def _check_detection(self) -> "Settings":
+        # Import local: el catálogo de reglas importa modelos, que no deben cargarse al leer
+        # la configuración en contextos ligeros (alembic, CLI).
+        from app.detection.rules import RULE_IDS
+
+        unknown = set(parse_name_list(self.detection_disabled_rules)) - RULE_IDS
+        if unknown:
+            raise ValueError(f"DETECTION_DISABLED_RULES has unknown rule ids: {sorted(unknown)}")
+        longest = max(
+            self.detection_auth_failure_window_minutes,
+            self.detection_correlation_window_minutes,
+            self.detection_change_window_minutes,
+            self.detection_repeat_window_minutes,
+        )
+        # Una señal purgada antes de cerrar su ventana haría que la correlación no ocurriera.
+        if self.detection_signal_retention_hours * 60 < longest:
+            raise ValueError(
+                "DETECTION_SIGNAL_RETENTION_HOURS must cover the longest detection window"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_discovery(self) -> "Settings":

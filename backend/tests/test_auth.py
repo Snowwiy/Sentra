@@ -182,7 +182,9 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["user"]["username"] == "ana" and body["user"]["role"] == "analyst"
-    assert set(body["permissions"]) == {"monitoring:read", "alerts:manage", "discovery:run"}
+    assert set(body["permissions"]) == {
+        "monitoring:read", "alerts:manage", "detections:manage", "discovery:run",
+    }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
     assert "HttpOnly" in cookie and "SameSite=strict" in cookie and "Path=/" in cookie
@@ -452,7 +454,8 @@ def test_role_permissions_are_least_privilege() -> None:
     assert ROLE_PERMISSIONS[Role.VIEWER] == {Permission.MONITORING_READ}
     assert not writes & ROLE_PERMISSIONS[Role.VIEWER]
     assert ROLE_PERMISSIONS[Role.ANALYST] == {
-        Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DISCOVERY_RUN,
+        Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DETECTIONS_MANAGE,
+        Permission.DISCOVERY_RUN,
     }  # fmt: skip
     assert ROLE_PERMISSIONS[Role.ADMIN] == set(Permission)
     # Un rol desconocido (BD manipulada) o con otra capitalización no hereda nada.
@@ -472,6 +475,11 @@ def _matrix_requests(
         ("GET", f"{API}/discovery/jobs", None, Permission.MONITORING_READ),
         ("POST", f"{API}/alerts/{alert_id}/acknowledge", None, Permission.ALERTS_MANAGE),
         ("POST", f"{API}/alerts/{alert_id}/resolve", None, Permission.ALERTS_MANAGE),
+        ("GET", f"{API}/detections", None, Permission.MONITORING_READ),
+        ("GET", f"{API}/detection-rules", None, Permission.MONITORING_READ),
+        # Detección inexistente: con permiso responde 404, sin permiso 403 antes de buscarla.
+        ("POST", f"{API}/detections/{uuid4()}/acknowledge", None, Permission.DETECTIONS_MANAGE),
+        ("POST", f"{API}/detections/{uuid4()}/resolve", None, Permission.DETECTIONS_MANAGE),
         ("POST", f"{API}/console/discovery/jobs/{job_id}/cancel", None, Permission.DISCOVERY_RUN),
         ("GET", f"{API}/console", None, Permission.ENROLLMENT_MANAGE),
         ("POST", f"{API}/console/enrollment-tokens", {}, Permission.ENROLLMENT_MANAGE),
@@ -546,7 +554,7 @@ def _api_routes(client: TestClient) -> list[tuple[str, str]]:
 
 
 def _concrete(path: str) -> str:
-    for name in ("asset_id", "alert_id", "job_id", "token_id", "user_id"):
+    for name in ("asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id"):
         path = path.replace("{" + name + "}", str(uuid4()))
     assert "{" not in path, path
     return path

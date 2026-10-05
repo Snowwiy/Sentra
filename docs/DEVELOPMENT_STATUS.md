@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-05 (Fase 4G).
+Last updated: 2026-10-05 (Fase 4H).
 
 ## Current state
 
@@ -12,15 +12,16 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0017 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0018 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
+| Motor de detección | Fase 4H: señales normalizadas en la ingesta (sin bloquearla), job `detection-engine` con 19 reglas simples y 4 correlaciones (CORR-001..004), detecciones persistentes con severidad y confianza separadas, evidencias, explicación y recomendaciones por plantilla, deduplicación, cooldown y línea base; alerta `security_detection` solo desde `DETECTION_ALERT_MIN_SEVERITY`; páginas Detecciones y detalle con timeline; reconocer/resolver con `detections:manage` y auditoría. Agente: campos estructurados por lista permitida, 4624 interactivo/RDP y canal de Defender. Migración 0018. [detection-engine.md](detection-engine.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab. Fase 4D: descubrimiento desde la página Red (iniciar, progreso real, cancelar, resultado, historial, estado del scheduler) sin terminal |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve desde el dashboard o la CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 481 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 136 (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 137 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 170 contract checks |
+| Tests | Backend 556 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 222 (+21 skipped on Linux) (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 146 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 192 contract checks (incl. detección simple, correlación, deduplicación y resolución); `qa/perf_detections.py` mide el motor con datos sintéticos |
 
 ## Architecture
 
@@ -57,7 +58,8 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
 - `asset_inventories`: one JSONB snapshot per asset (interfaces, disks, listening/established
   connections, users, processes, services, software, accounts, network); newer snapshots
   replace older only.
-- `system_events`: host log events; unique `(asset_id, channel, record_id)` makes resends idempotent.
+- `system_events`: host log events; unique `(asset_id, channel, record_id)` makes resends idempotent. `data` (0018): campos estructurados de la lista permitida del agente.
+- `detection_signals` (estado de correlación, se purga tras `DETECTION_SIGNAL_RETENTION_HOURS`), `detections` (índice único parcial = una activa por activo+regla+clave), `detection_evidence` (máx. 100 por detección), `detection_baselines` (línea base de ejecutables por activo). Fase 4H.
 
 ## Key rules
 
@@ -90,12 +92,13 @@ Agent (token): `POST /agents/register` (one-time token or enrollment key) · `PO
 Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
 `GET /assets/{id}/telemetry` · `GET /assets/{id}/inventory` · `GET /assets/{id}/changes` ·
 `GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events` ·
-`GET /agents` · `GET /assets/{id}/agent`.
+`GET /agents` · `GET /assets/{id}/agent` · `GET /detections` · `GET /detections/{id}` ·
+`GET /detection-rules`; `POST /detections/{id}/acknowledge|resolve` (detections:manage).
 Console (local dashboard): `GET /console` · `GET|POST /console/enrollment-tokens` ·
 `POST /console/enrollment-tokens/{id}/revoke` · `POST /console/agents/{id}/revoke|reinstate` ·
 `POST /console/discovery/jobs` · `POST /console/discovery/jobs/{id}/cancel` (Fase 4D).
 Operator CLI (`python -m app.cli`): `list-agents`, `revoke-agent`, `reinstate-agent`,
-`ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`.
+`ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`, `run-detections`.
 Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/schedule` ·
 `GET /discovery/jobs` · `GET /discovery/jobs/{id}`. `discover` en la CLI queda como herramienta
 administrativa/debug: el uso normal es la página Red (docs/discovery.md).
@@ -137,6 +140,12 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Free-text search over all events (no asset filter) scans the table: 0.8 s at 1M events.
   Per-asset search is 40 ms. A trigram index (pg_trgm) would fix it if it becomes a need.
 - Alert thresholds are global environment variables, not per asset.
+- Motor de detección (Fase 4H): Linux no envía eventos (solo detecciones de inventario,
+  procesos y exposición); sin líneas de comando no hay detección de PowerShell codificado;
+  no se recogen tareas programadas (4698) ni el canal del firewall. El job evalúa unas 140
+  señales/s en el peor caso medido; la búsqueda de texto en detecciones recorre la tabla
+  (380 ms con 52 000). Pendiente validar en Windows real la consulta de 4624, los campos de
+  Defender y los `EventData`. Desplegar el servidor antes que los agentes 4H.
 - Discovery: la cola del dashboard es en memoria por proceso (un job a la vez por worker);
   la configuración sigue en variables de entorno. No OUI vendor database; `GET /assets` is not paginated (about 850 KB and 120 ms
   with 1000 assets); agentless collectors are contracts only (no credential store yet).
@@ -160,6 +169,11 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   datos) en vez de JWT, para poder revocarlas; Argon2id para contraseñas; política por
   longitud sin reglas de composición; permisos en una tabla central, no comprobaciones de
   rol; los usuarios se desactivan, no se borran; siempre queda al menos un admin activo.
+- Detección (Fase 4H): reglas en código y textos por plantilla (sin IA ni APIs externas);
+  la petición del agente solo escribe señales en un SAVEPOINT y un job evalúa las reglas,
+  cada una aislada en su SAVEPOINT; Detección = conclusión, Alerta = notificación (solo
+  severidad ≥ umbral); `GET /detection-rules` legible por cualquier rol (lo usa el filtro de
+  la UI); el agente envía solo campos de una lista permitida y nunca el texto de scripts.
 - Agent uses stdlib + psutil + built-in `wevtutil.exe` (no pywin32).
 - Inventory as JSONB snapshot; normalize a section when SQL queries over it are needed.
 - Retention opt-in and per data type (`services/retention_service.py`): batches of 5000 rows,

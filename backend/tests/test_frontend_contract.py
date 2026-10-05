@@ -68,6 +68,12 @@ INTERFACES = {
     "DiscoveryJobDetail": "DiscoveryJobDetail",
     "DiscoverySchedule": "DiscoveryScheduleRead",
     "ClassificationEvidence": "ClassificationEvidence",
+    "Detection": "DetectionRead",
+    "DetectionList": "DetectionList",
+    "DetectionEvidence": "DetectionEvidenceRead",
+    "DetectionDetail": "DetectionDetail",
+    "DetectionRule": "DetectionRuleRead",
+    "DetectionRuleList": "DetectionRuleList",
 }
 ENUMS = [
     "AssetStatus",
@@ -84,6 +90,9 @@ ENUMS = [
     "CredentialStatus",
     "EnrollmentTokenState",
     "ClassificationConfidence",
+    "DetectionSeverity",
+    "DetectionConfidence",
+    "DetectionStatus",
 ]
 
 
