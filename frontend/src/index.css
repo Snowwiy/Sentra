@@ -1770,3 +1770,90 @@ td > .badge:first-child {
   margin: 0;
   padding-left: 28px;
 }
+
+/* --- Fase 4J.2: gestor de modelos locales --- */
+
+.lai-header__fields {
+  grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+}
+
+.lai-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lai-hardware,
+.lai-estimate {
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+}
+
+.lai-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(320px, 100%), 1fr));
+  gap: 12px;
+  margin: 12px 0;
+}
+
+.lai-card {
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+  min-width: 0;
+}
+
+/* El modelo activo se distingue por el borde, no solo por el badge. */
+.lai-card--active {
+  border-color: var(--ok);
+}
+
+.lai-card__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 6px;
+}
+
+.lai-card__facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+  gap: 6px;
+  margin: 8px 0;
+}
+
+.lai-card__facts dt {
+  color: var(--text-muted);
+}
+
+.lai-card__facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.lai-reasons {
+  margin: 8px 0 0;
+  padding-left: 20px;
+}
+
+.lai-pick {
+  margin: 12px 0;
+}
+
+.lai-path {
+  flex: 1;
+  min-width: 240px;
+  font-family: var(--mono);
+}
+
+.lai-discovered {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 6px 0;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}

@@ -298,6 +298,9 @@ amplía su alcance. Un rol sin cualquiera de los dos permisos recibe `403`. Los 
 Las preguntas de Ask son privadas de quien las hizo (otros usuarios no las ven en el historial
 ni por id).
 
+El gestor de modelos locales (`/ai/local/*`, Fase 4J.2) se lee con los mismos permisos, pero
+cualquier cambio exige además `ai:manage`, que solo tiene admin: [local-model-manager.md](local-model-manager.md).
+
 ## Rate limiting y timeouts
 
 - Por usuario (`AI_RATE_LIMIT_PER_USER_PER_MINUTE`) y global (`AI_RATE_LIMIT_GLOBAL_PER_MINUTE`),

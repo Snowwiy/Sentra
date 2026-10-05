@@ -1,4 +1,5 @@
 from app.models.ai import AIInsight
+from app.models.ai_local import AILocalModel, AILocalSettings, AIModelBenchmark
 from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.audit import AuditEvent
@@ -30,6 +31,9 @@ from app.models.user import User, UserSession
 
 __all__ = [
     "AIInsight",
+    "AILocalModel",
+    "AILocalSettings",
+    "AIModelBenchmark",
     "AgentEnrollmentToken",
     "Alert",
     "AlertRule",

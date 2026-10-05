@@ -151,10 +151,11 @@ class AIInsightService:
         runtime: AIRuntime,
         provider_factory: ProviderFactory,
         requester: Requester,
+        config: AIConfig | None = None,
     ) -> None:
         self._session = session
         self._settings = settings
-        self._config = AIConfig.from_settings(settings)
+        self._config = config or AIConfig.from_settings(settings)
         self._runtime = runtime
         self._factory = provider_factory
         self._requester = requester

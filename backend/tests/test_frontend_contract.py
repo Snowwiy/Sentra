@@ -97,6 +97,21 @@ INTERFACES = {
     "Insight": "InsightRead",
     "InsightList": "InsightList",
     "AIStatus": "AIStatus",
+    # Fase 4J.2: gestor de modelos locales.
+    "LocalCPU": "CPURead",
+    "LocalGPU": "GPURead",
+    "LocalHardware": "HardwareRead",
+    "LocalRuntimeCapabilities": "RuntimeCapabilitiesRead",
+    "LocalActiveModel": "ActiveModelRead",
+    "LocalRuntimeStatus": "RuntimeStatusRead",
+    "LocalBenchmark": "BenchmarkRead",
+    "LocalModel": "LocalModelRead",
+    "DiscoveredModel": "DiscoveredModelRead",
+    "LocalModelList": "LocalModelList",
+    "ModelEstimate": "EstimateRead",
+    "ModelRecommendation": "RecommendationRead",
+    "RecommendationList": "RecommendationList",
+    "LocalModelDetail": "LocalModelDetail",
 }
 ENUMS = [
     "AssetStatus",

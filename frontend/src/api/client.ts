@@ -42,6 +42,19 @@ const AI_MESSAGES: Record<string, string> = {
   ai_provider_auth_failed: "El proveedor de IA rechazó las credenciales del servidor.",
   ai_invalid_response: "El modelo devolvió una respuesta no válida.",
   ai_ungrounded_response: "La respuesta del modelo no citaba evidencia válida de Sentra y se descartó.",
+  // Gestor de modelos locales (Fase 4J.2).
+  ai_benchmark_busy: "Ya hay un benchmark en curso. Espera a que termine o cancélalo.",
+  ai_runtime_operation_unsupported: "El runtime configurado no permite esa operación.",
+  local_model_runtime_mismatch: "El modelo pertenece a otro runtime; cambia de runtime o registra el modelo de nuevo.",
+  local_model_unavailable: "El modelo no está disponible en el runtime ni en disco.",
+};
+
+// Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
+// conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
+const AI_DETAIL_PREFIXES: Record<string, string> = {
+  local_model_path_rejected: "Ruta de modelo rechazada",
+  local_model_invalid_file: "Fichero de modelo no válido",
+  local_model_not_loaded: "El runtime no tiene cargado este modelo",
 };
 
 // Motivos de la política de usuarios/contraseñas (backend core/passwords.py), en español.
@@ -63,6 +76,7 @@ function translate(code: string, message: string): string {
   // ai_not_configured trae el motivo concreto del servidor (ya en español).
   if (code === "ai_not_configured") return message || "IA no configurada en el servidor.";
   if (AI_MESSAGES[code]) return AI_MESSAGES[code];
+  if (AI_DETAIL_PREFIXES[code]) return `${AI_DETAIL_PREFIXES[code]}: ${message}`;
   for (const [pattern, spanish] of POLICY_MESSAGES) {
     if (pattern.test(message)) return message.replace(pattern, spanish).replace(/^(.*?\.).*$/, "$1");
   }

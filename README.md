@@ -114,7 +114,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
 | `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
 | `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
-| `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) |
+| `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) Gestor de modelos locales (Fase 4J.2): `AI_RUNTIME`, `AI_MODEL_DIRECTORIES`, contexto, margen de memoria y benchmark en [docs/local-model-manager.md](docs/local-model-manager.md) |
 | `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](docs/discovery.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
@@ -165,6 +165,7 @@ cd backend
 | GET | `/api/v1/risk/assets?level=&confidence=&device_type=&status=&criticality=&min_score=&q=&sort=&order=&limit=&offset=` | Activos por riesgo, el más alto primero |
 | GET | `/api/v1/risk/assets/{asset_id}`, `/history?range=24h\|7d\|30d`, `/contributions?snapshot_id=` | Detalle explicable, tendencia y contribuciones |
 | GET | `/api/v1/ai/status` | AI Security Insights (Fase 4J): si la IA está disponible y con qué modelo (sin URL ni clave) |
+| GET/POST/PATCH | `/api/v1/ai/local/hardware`, `/runtime`, `/models`, `/recommendations`, `/settings`, `/models/{id}/select\|benchmark\|unregister`… | Gestor de modelos locales (Fase 4J.2): hardware, runtime, modelos GGUF, recomendaciones y benchmark (lectura `ai:use`, cambios solo admin `ai:manage`): [docs/local-model-manager.md](docs/local-model-manager.md) |
 | POST | `/api/v1/ai/assets/{asset_id}/analyze`, `/ai/detections/{detection_id}/analyze`, `/ai/risk/assets/{asset_id}/analyze`, `/ai/soc/analyze`, `/ai/ask` | Análisis de IA bajo demanda, grounded en datos de Sentra (`ai:use` + `monitoring:read`; rate limited) |
 | GET | `/api/v1/ai/insights?kind=&asset_id=&detection_id=`, `/ai/insights/{insight_id}` | Historial de análisis con estado actual/desactualizado |
 | PATCH | `/api/v1/assets/{asset_id}/criticality` | Criticidad del activo (solo admin, `assets:manage`; auditado) |
@@ -230,6 +231,11 @@ externo compatible con OpenAI interpreta los resultados de detección y riesgo b
 (resumen de activo, explicación de detección y de riesgo, resumen SOC y Ask Sentra AI), con
 cada hallazgo vinculado a evidencia real de Sentra, defensas frente a prompt injection, sin
 SQL ni herramientas y sin acciones automáticas ([docs/ai-security-insights.md](docs/ai-security-insights.md)).
+**Gestor de modelos locales** (Fase 4J.2): Configuración → IA local → Modelos detecta el
+hardware, habla con el runtime local (llama.cpp, Ollama, vLLM), registra modelos GGUF,
+estima su memoria, recomienda de forma determinista el más adecuado para Sentra, los activa
+con health check y mide su rendimiento con un benchmark local; sin descargas ni fallback
+cloud ([docs/local-model-manager.md](docs/local-model-manager.md)).
 Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap

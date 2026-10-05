@@ -581,7 +581,8 @@ export type Permission =
   | "enrollment:manage"
   | "users:manage"
   | "audit:read"
-  | "ai:use";
+  | "ai:use"
+  | "ai:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -975,4 +976,228 @@ export interface AIStatus {
   max_context_items: number;
   rate_limit_per_user_per_minute: number;
   prompt_versions: Record<string, string>;
+}
+
+// --- Fase 4J.2: gestor de modelos locales (backend/app/schemas/ai_local.py) ---
+
+export type LocalRuntimeKind = "llama_cpp" | "ollama" | "vllm" | "openai_compatible";
+export type ModelState =
+  | "available"
+  | "downloaded"
+  | "registered"
+  | "loaded"
+  | "active"
+  | "unavailable"
+  | "incompatible";
+export type CompatibilityStatus = "recommended" | "compatible" | "compatible_with_offload" | "slow" | "not_recommended";
+export type RecommendationProfile = "low_resource" | "balanced" | "quality" | "max_speed" | "sentra";
+export type SpeedClass = "fast" | "moderate" | "slow" | "unknown";
+export type ModelPlacement = "full_gpu" | "partial_offload" | "cpu_only" | "does_not_fit" | "unknown";
+export type PerformanceClass = "excellent" | "good" | "usable" | "slow";
+export type BenchmarkStatus = "running" | "completed" | "failed" | "cancelled";
+export type QualityLabel = "basic" | "medium" | "high" | "very_high";
+
+export interface LocalCPU {
+  model: string | null;
+  physical_cores: number | null;
+  logical_cores: number | null;
+}
+
+export interface LocalGPU {
+  index: number;
+  vendor: "nvidia" | "amd" | "intel" | "other";
+  model: string | null;
+  vram_total_bytes: number | null;
+  vram_free_bytes: number | null;
+  memory_kind: "dedicated" | "shared" | "unknown";
+  source: string;
+  driver: string | null;
+}
+
+export interface LocalHardware {
+  os: string;
+  os_version: string | null;
+  architecture: string;
+  cpu: LocalCPU;
+  ram_total_bytes: number | null;
+  ram_available_bytes: number | null;
+  gpus: LocalGPU[];
+  disk_free_bytes: number | null;
+  disk_total_bytes: number | null;
+  disk_scope: string;
+  detected_at: string;
+  duration_ms: number;
+  warnings: string[];
+}
+
+export interface LocalRuntimeCapabilities {
+  list_models: boolean;
+  load_model: boolean;
+  unload_model: boolean;
+  benchmark: "runtime_timings" | "end_to_end";
+  gpu_offload: boolean;
+  multi_gpu_split: boolean;
+  gguf_files: boolean;
+  notes: string[];
+}
+
+export interface LocalActiveModel {
+  model_id: string;
+  name: string;
+  runtime_model_id: string;
+  quantization: string | null;
+  parameter_count: number | null;
+  selected_at: string | null;
+}
+
+export interface LocalRuntimeStatus {
+  kind: LocalRuntimeKind;
+  label: string;
+  source: "settings" | "env";
+  capabilities: LocalRuntimeCapabilities;
+  available: boolean;
+  reason: string | null;
+  reachable: boolean | null;
+  health_detail: string | null;
+  health_latency_ms: number | null;
+  version: string | null;
+  detected_kind: LocalRuntimeKind | null;
+  loaded_models: string[];
+  configured_context: number | null;
+  active_model: LocalActiveModel | null;
+  effective_model: string | null;
+  external_ai: "blocked" | "allowed";
+  default_context_tokens: number;
+  slots: "default"[];
+}
+
+export interface LocalBenchmark {
+  benchmark_id: string;
+  model_id: string;
+  status: BenchmarkStatus;
+  runtime: string;
+  measurement: "runtime_timings" | "end_to_end" | null;
+  max_tokens: number;
+  configured_context: number | null;
+  load_ms: number | null;
+  ttft_ms: number | null;
+  prompt_tokens: number | null;
+  output_tokens: number | null;
+  prompt_tps: number | null;
+  generation_tps: number | null;
+  peak_ram_bytes: number | null;
+  peak_vram_bytes: number | null;
+  performance_class: PerformanceClass | null;
+  error: string | null;
+  requested_by: string;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface LocalModel {
+  model_id: string;
+  name: string;
+  family: string | null;
+  architecture: string | null;
+  parameter_count: number | null;
+  quantization: string | null;
+  file_size_bytes: number | null;
+  native_context: number | null;
+  runtime: string;
+  runtime_model_id: string;
+  file_name: string | null;
+  local_path: string | null;
+  split_count: number;
+  metadata_source: "gguf" | "runtime";
+  source: string | null;
+  license: string | null;
+  checksum_sha256: string | null;
+  checksum_status: "none" | "pending" | "ok" | "failed";
+  installed_at: string;
+  last_selected_at: string | null;
+  state: ModelState;
+  active: boolean;
+  loaded: boolean | null;
+  compatibility: CompatibilityStatus | null;
+  recommended_for_sentra: boolean;
+  latest_benchmark: LocalBenchmark | null;
+}
+
+export interface DiscoveredModel {
+  kind: "file" | "runtime";
+  name: string;
+  file_name: string | null;
+  path: string | null;
+  size_bytes: number | null;
+  runtime_model_id: string | null;
+  state: "downloaded" | "loaded";
+}
+
+export interface LocalModelList {
+  items: LocalModel[];
+  total: number;
+  discovered: DiscoveredModel[];
+}
+
+export interface ModelEstimate {
+  weights_bytes: number | null;
+  weights_source: "file" | "quantization_estimate" | null;
+  kv_cache_bytes: number | null;
+  overhead_bytes: number | null;
+  total_bytes: number | null;
+  context_tokens: number;
+  kv_type: string;
+  complete: boolean;
+  missing: string[];
+  placement: ModelPlacement;
+  vram_bytes: number | null;
+  ram_bytes: number | null;
+  gpu_fraction: number | null;
+  usable_vram_bytes: number;
+  usable_ram_bytes: number | null;
+  safety_margin_percent: number;
+}
+
+export interface ModelRecommendation {
+  key: string;
+  origin: "registered" | "catalog";
+  model_id: string | null;
+  catalog_id: string | null;
+  name: string;
+  family: string | null;
+  parameter_count: number | null;
+  quantization: string | null;
+  native_context: number | null;
+  license: string | null;
+  source: string | null;
+  status: CompatibilityStatus;
+  quality: QualityLabel | null;
+  speed: SpeedClass;
+  speed_source: "estimate" | "benchmark";
+  estimate: ModelEstimate;
+  reasons: string[];
+  warnings: string[];
+  limitations: string[];
+  recommended_for_sentra: boolean;
+  score: number | null;
+  observed_tps: number | null;
+  performance_class: PerformanceClass | null;
+}
+
+export interface RecommendationList {
+  profile: RecommendationProfile;
+  context_tokens: number;
+  runtime: LocalRuntimeKind;
+  hardware_detected_at: string;
+  items: ModelRecommendation[];
+  total: number;
+  sentra_pick: string | null;
+  profile_pick: string | null;
+}
+
+export interface LocalModelDetail {
+  model: LocalModel;
+  evaluation: ModelRecommendation;
+  benchmarks: LocalBenchmark[];
+  runtime_notes: string[];
 }

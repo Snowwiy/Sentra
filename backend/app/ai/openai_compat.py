@@ -59,8 +59,12 @@ class ProviderHealth:
 class OpenAICompatibleProvider:
     name = "openai_compatible"
 
-    def __init__(self, config: AIConfig) -> None:
-        if not config.base_url or not config.model:
+    def __init__(self, config: AIConfig, *, model: str | None = None) -> None:
+        # `model` permite al gestor de modelos (4J.2) hablar con el runtime sobre un modelo
+        # concreto. El destino sigue siendo SIEMPRE AI_BASE_URL con todas las comprobaciones
+        # de 4J.1: elegir modelo nunca cambia a dónde van los datos.
+        model = model or config.model
+        if not config.base_url or not model:
             raise ValueError("AI_BASE_URL and AI_MODEL are required")
         parts = urlsplit(config.base_url)
         if parts.scheme not in ("http", "https") or not parts.hostname:
@@ -70,7 +74,7 @@ class OpenAICompatibleProvider:
         blocked = config.destination_blocked_reason()
         if blocked:
             raise AIDestinationBlockedError(blocked)
-        self.model = config.model
+        self.model = model
         self.location = config.location
         self._local_networks = config.local_networks
         self._https = parts.scheme == "https"
@@ -134,10 +138,12 @@ class OpenAICompatibleProvider:
         body: bytes | None,
         connect_timeout: float,
         total_timeout: float,
+        read_timeout: float | None = None,
     ) -> tuple[int, bytes, int]:
         """Una petición HTTP acotada en tiempo y tamaño. Devuelve (status, cuerpo, ms)."""
         started = time.monotonic()
         deadline = started + total_timeout
+        read_limit = read_timeout or self._read_timeout
 
         def remaining() -> float:
             left = deadline - time.monotonic()
@@ -158,13 +164,13 @@ class OpenAICompatibleProvider:
                 conn.connect()
                 self._check_peer(conn)
                 if conn.sock is not None:
-                    conn.sock.settimeout(min(self._read_timeout, remaining()))
+                    conn.sock.settimeout(min(read_limit, remaining()))
                 conn.request(method, path, body=body, headers=headers)
                 response = conn.getresponse()
                 raw = bytearray()
                 while True:
                     if conn.sock is not None:
-                        conn.sock.settimeout(min(self._read_timeout, remaining()))
+                        conn.sock.settimeout(min(read_limit, remaining()))
                     chunk = response.read(_CHUNK)
                     if not chunk:
                         break
@@ -181,6 +187,41 @@ class OpenAICompatibleProvider:
         finally:
             conn.close()
         return response.status, bytes(raw), int((time.monotonic() - started) * 1000)
+
+    @property
+    def root_path(self) -> str:
+        """Ruta raíz del servidor (sin /v1): llama.cpp y Ollama exponen ahí su API nativa."""
+        return self._base_path.removesuffix("/v1")
+
+    @property
+    def base_path(self) -> str:
+        return self._base_path
+
+    def call_json(
+        self, method: str, path: str, payload: dict[str, Any] | None, total_timeout: float
+    ) -> tuple[int, Any, int]:
+        """Petición JSON al MISMO servidor (4J.2: API nativa del runtime). (status, json, ms).
+
+        Reutiliza `_exchange`: misma comprobación de IP real, sin redirecciones ni proxy y con
+        tope de tamaño. `path` lo construyen los adapters con constantes, nunca el cliente.
+        El JSON inválido se devuelve como None (el adapter decide qué significa).
+        """
+        body = json.dumps(payload).encode("utf-8") if payload is not None else None
+        status_code, raw, latency = self._exchange(
+            method,
+            path,
+            body,
+            min(self._connect_timeout, total_timeout),
+            total_timeout,
+            # Una generación de benchmark en CPU puede tardar más que AI_READ_TIMEOUT_SECONDS
+            # en devolver el primer byte (sin streaming): el plazo total sigue acotándola.
+            read_timeout=total_timeout,
+        )
+        try:
+            data = json.loads(raw) if raw else None
+        except ValueError:
+            data = None
+        return status_code, data, latency
 
     def complete(self, request: AIRequest) -> AIResponse:
         status_code, raw, latency = self._exchange(

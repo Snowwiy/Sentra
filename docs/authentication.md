@@ -49,6 +49,8 @@ un permiso (`require_permission`), nunca un rol concreto.
 | `enrollment:manage` | | | ✓ | Crear, listar y revocar tokens de instalación |
 | `users:manage` | | | ✓ | Usuarios, roles, contraseñas y sesiones |
 | `audit:read` | | | ✓ | Ver la auditoría |
+| `ai:use` | ✓ | ✓ | ✓ | Usar AI Security Insights y ver el estado de la IA local (Fase 4J) |
+| `ai:manage` | | | ✓ | Gestor de modelos locales: runtime, registrar, seleccionar, benchmark (Fase 4J.2) |
 
 Un cambio de rol se aplica en la siguiente petición (el permiso se calcula en cada una). Un
 admin no puede quitarse su propio rol ni desactivarse; y nunca puede quedar el sistema sin

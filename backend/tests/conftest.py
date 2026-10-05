@@ -155,7 +155,8 @@ def client(engine: Engine) -> Iterator[TestClient]:
         connection.execute(
             text(
                 "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
-                " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users"
+                " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
+                " ai_local_settings, ai_model_benchmarks, ai_local_models"
                 " RESTART IDENTITY CASCADE"
             )
         )

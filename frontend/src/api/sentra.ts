@@ -1,6 +1,15 @@
 import { apiGet, apiPatch, apiPost } from "./client";
 import type {
   AIStatus,
+  LocalBenchmark,
+  LocalHardware,
+  LocalModel,
+  LocalModelDetail,
+  LocalModelList,
+  LocalRuntimeKind,
+  LocalRuntimeStatus,
+  RecommendationList,
+  RecommendationProfile,
   AIWindow,
   Agent,
   AgentList,
@@ -355,4 +364,47 @@ export const aiApi = {
     ),
   get: (insightId: string, signal?: AbortSignal) =>
     apiGet<Insight>(`/ai/insights/${encodeURIComponent(insightId)}`, { signal }),
+};
+
+/**
+ * Gestor de modelos locales (Fase 4J.2). Las lecturas son para cualquier rol con ai:use; los
+ * cambios exigen ai:manage (admin). Nunca se envían comandos ni URLs: como mucho la ruta de
+ * un .gguf (el servidor la valida contra sus directorios de modelos permitidos) o el nombre de un modelo que
+ * el runtime ya lista.
+ */
+export const localAiApi = {
+  hardware: (signal?: AbortSignal) => apiGet<LocalHardware>("/ai/local/hardware", { signal }),
+  refreshHardware: () => apiPost<LocalHardware>("/ai/local/hardware/refresh"),
+  runtime: (signal?: AbortSignal) => apiGet<LocalRuntimeStatus>("/ai/local/runtime", { signal }),
+  setRuntime: (runtime: LocalRuntimeKind) => apiPatch<LocalRuntimeStatus>("/ai/local/settings", { runtime }),
+  models: (signal?: AbortSignal) => apiGet<LocalModelList>("/ai/local/models?limit=100", { signal }),
+  model: (modelId: string, query: { profile?: RecommendationProfile; context?: number }, signal?: AbortSignal) =>
+    apiGet<LocalModelDetail>(
+      `/ai/local/models/${encodeURIComponent(modelId)}${queryString({ profile: query.profile, context: query.context })}`,
+      { signal },
+    ),
+  registerPath: (path: string) => apiPost<LocalModel>("/ai/local/models/register", { path }),
+  registerRuntimeModel: (runtimeModel: string) =>
+    apiPost<LocalModel>("/ai/local/models/register", { runtime_model: runtimeModel }),
+  select: (modelId: string) =>
+    apiPost<LocalRuntimeStatus>(`/ai/local/models/${encodeURIComponent(modelId)}/select`),
+  unregister: (modelId: string) => apiPost<void>(`/ai/local/models/${encodeURIComponent(modelId)}/unregister`),
+  benchmark: (modelId: string) =>
+    apiPost<LocalBenchmark>(`/ai/local/models/${encodeURIComponent(modelId)}/benchmark`),
+  getBenchmark: (benchmarkId: string, signal?: AbortSignal) =>
+    apiGet<LocalBenchmark>(`/ai/local/benchmarks/${encodeURIComponent(benchmarkId)}`, { signal }),
+  cancelBenchmark: (benchmarkId: string) =>
+    apiPost<LocalBenchmark>(`/ai/local/benchmarks/${encodeURIComponent(benchmarkId)}/cancel`),
+  recommendations: (
+    query: { profile: RecommendationProfile; context: number; includeCatalog?: boolean },
+    signal?: AbortSignal,
+  ) =>
+    apiGet<RecommendationList>(
+      `/ai/local/recommendations${queryString({
+        profile: query.profile,
+        context: query.context,
+        include_catalog: query.includeCatalog === false ? "false" : undefined,
+      })}`,
+      { signal },
+    ),
 };

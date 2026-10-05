@@ -42,6 +42,10 @@ class Permission(enum.StrEnum):
     # AI Security Insights (Fase 4J): pedir análisis de IA sobre datos que el rol ya puede
     # leer (se exige junto con monitoring:read; nunca amplía lo que el rol ve).
     AI_USE = "ai:use"
+    # Gestor de modelos locales (Fase 4J.2): registrar, seleccionar y benchmarkear modelos,
+    # cambiar el runtime y refrescar el perfil de hardware. Solo admin: cambiar el modelo
+    # cambia lo que responde la IA a todos los usuarios.
+    AI_MANAGE = "ai:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {

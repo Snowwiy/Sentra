@@ -74,7 +74,7 @@ describe("frontend security", () => {
   // Fase 4J: el texto del modelo nunca se interpreta como HTML, la UI de IA no persiste ni
   // registra nada y ninguna clave o URL de proveedor de IA llega al bundle.
   it("AI insights code renders text only and never persists, logs or holds AI secrets", () => {
-    const files = sources(SRC).filter((f) => /components[\\/]ai|AIInsightsPage|lib[\\/]ai/.test(f));
+    const files = sources(SRC).filter((f) => /components[\\/](ai|localai)|AIInsightsPage|LocalAIPage|lib[\\/](ai|localAi)/.test(f));
     expect(files.length).toBeGreaterThanOrEqual(4);
     for (const file of files) {
       const text = readFileSync(file, "utf8");

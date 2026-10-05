@@ -29,6 +29,7 @@ from app.schemas.ai import (
 from app.schemas.common import ErrorResponse
 from app.services.ai_service import AIInsightService, Requester
 from app.services.audit_service import Actor
+from app.services.local_model_service import effective_ai_config
 
 router = APIRouter(
     prefix="/ai",
@@ -68,6 +69,9 @@ def get_ai_service(
         request.app.state.ai_runtime,
         request.app.state.ai_provider_factory,
         Requester(Actor.for_user(ctx.user, ctx.client_ip), ctx.user.id),
+        # Fase 4J.2: el modelo local activo (si lo hay) sustituye a AI_MODEL; el destino y
+        # todas las garantías de 4J.1 no cambian.
+        config=effective_ai_config(session, settings),
     )
 
 

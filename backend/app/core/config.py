@@ -1,4 +1,5 @@
 import ipaddress
+import os
 from functools import lru_cache
 from typing import Literal
 
@@ -42,6 +43,35 @@ def parse_ai_local_networks(value: str) -> tuple[AINetwork, ...]:
             raise ValueError(f"AI_LOCAL_NETWORKS only accepts private LAN networks, got {item!r}")
         networks.append(network)
     return tuple(networks)
+
+
+def parse_model_directories(value: str) -> tuple[str, ...]:
+    """'D:\\Models;E:\\IA' -> raíces autorizadas para importar modelos locales (Fase 4J.2).
+
+    Separador ';' (como PATH en Windows) porque las rutas de Windows llevan ':'. Solo rutas
+    absolutas: una relativa dependería del directorio de arranque de la API y podría acabar
+    autorizando una carpeta distinta de la que el admin cree.
+    """
+    roots: list[str] = []
+    for item in value.replace("\n", ";").split(";"):
+        item = item.strip()
+        if not item:
+            continue
+        if "\x00" in item or not os.path.isabs(item):
+            raise ValueError(f"AI_MODEL_DIRECTORIES only accepts absolute paths, got {item!r}")
+        roots.append(item)
+    return tuple(roots)
+
+
+def parse_performance_thresholds(value: str) -> tuple[float, float, float]:
+    """'30,15,7' -> tokens/s mínimos de Excellent, Good y Usable (por debajo: Slow)."""
+    try:
+        parts = tuple(float(part.strip()) for part in value.split(","))
+    except ValueError:
+        raise ValueError("AI_PERFORMANCE_THRESHOLDS must be three numbers, e.g. 30,15,7") from None
+    if len(parts) != 3 or not parts[0] > parts[1] > parts[2] > 0:
+        raise ValueError("AI_PERFORMANCE_THRESHOLDS must be three decreasing positive numbers")
+    return parts[0], parts[1], parts[2]
 
 
 def parse_risk_thresholds(value: str) -> tuple[int, int, int, int]:
@@ -311,6 +341,28 @@ class Settings(BaseSettings):
     # Reintentos ante JSON inválido (0 = ninguno).
     ai_max_retries: int = Field(default=1, ge=0, le=3)
 
+    # --- Fase 4J.2: gestor de modelos locales (ver docs/local-model-manager.md) ---
+    # Runtime inicial detrás de AI_BASE_URL. El admin puede cambiarlo desde la UI (se guarda
+    # en ai_local_settings); la URL nunca: sigue siendo configuración del servidor (4J.1).
+    ai_runtime: Literal["openai_compatible", "llama_cpp", "ollama", "vllm"] = "openai_compatible"
+    # Raíces autorizadas (separadas por ';') desde las que se pueden registrar ficheros
+    # GGUF. Vacío = no se puede importar ningún fichero (los modelos del runtime sí).
+    ai_model_directories: str = ""
+    # Tamaño máximo de un fichero de modelo registrado.
+    ai_model_max_file_gb: int = Field(default=256, ge=1, le=4096)
+    # Catálogo adicional (JSON) que amplía o actualiza el incluido en Sentra. Opcional.
+    ai_model_catalog_file: str | None = None
+    # Contexto operativo por defecto para recomendar modelos. Los análisis normales de
+    # Sentra no necesitan el máximo: el Context Builder ya limita la evidencia.
+    ai_default_context_tokens: int = Field(default=16384, ge=2048, le=1_048_576)
+    # Margen de seguridad sobre VRAM y RAM al estimar si un modelo cabe.
+    ai_memory_safety_margin_percent: int = Field(default=10, ge=0, le=50)
+    # Límites del benchmark local: tokens generados por pasada y duración total.
+    ai_benchmark_max_tokens: int = Field(default=128, ge=16, le=1024)
+    ai_benchmark_timeout_seconds: int = Field(default=180, ge=10, le=1800)
+    # tokens/s de generación para Excellent, Good y Usable (uso SOC interactivo).
+    ai_performance_thresholds: str = "30,15,7"
+
     @field_validator("ai_redact")
     @classmethod
     def _check_ai_redact(cls, value: str) -> str:
@@ -323,6 +375,25 @@ class Settings(BaseSettings):
     @classmethod
     def _check_ai_local_networks(cls, value: str) -> str:
         parse_ai_local_networks(value)
+        return value
+
+    @field_validator("ai_model_directories")
+    @classmethod
+    def _check_ai_model_directories(cls, value: str) -> str:
+        parse_model_directories(value)
+        return value
+
+    @field_validator("ai_performance_thresholds")
+    @classmethod
+    def _check_ai_performance_thresholds(cls, value: str) -> str:
+        parse_performance_thresholds(value)
+        return value
+
+    @field_validator("ai_model_catalog_file", mode="before")
+    @classmethod
+    def _blank_catalog_file(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
         return value
 
     @field_validator("ai_base_url", "ai_model", mode="before")

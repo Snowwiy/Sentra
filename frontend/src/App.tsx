@@ -10,6 +10,7 @@ import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
 import { DetectionDetailPage } from "./pages/DetectionDetailPage";
 import { DetectionsPage } from "./pages/DetectionsPage";
+import { LocalAIPage } from "./pages/LocalAIPage";
 import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RiskPage } from "./pages/RiskPage";
@@ -41,6 +42,14 @@ export function AppRoutes() {
             element={
               <RequirePermission permission="ai:use">
                 <AIInsightsPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="settings/ai"
+            element={
+              <RequirePermission permission="ai:use">
+                <LocalAIPage />
               </RequirePermission>
             }
           />

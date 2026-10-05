@@ -29,6 +29,7 @@ export function Layout() {
           <Link to="/detections">Detecciones</Link>
           <Link to="/alerts">Alertas</Link>
           {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
+          {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
           {/* Solo navegación: la página y la API exigen users:manage igualmente. */}
           {auth.can("users:manage") && <Link to="/admin/users">Usuarios</Link>}
         </nav>

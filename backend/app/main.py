@@ -29,6 +29,7 @@ from app.services.background import (
     sweep_offline_assets,
 )
 from app.services.discovery_runner import stop_discovery_runner
+from app.services.local_model_service import LocalAIState
 from app.services.retention_service import RetentionPolicy
 
 logger = logging.getLogger(__name__)
@@ -102,6 +103,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Antes de cerrar el pool: el scan en curso del dashboard se cancela (resultado parcial,
     # sin inferencias negativas) y los jobs en cola se cierran, sin dejar huérfanos.
     stop_discovery_runner()
+    # Fase 4J.2: sin esperar a un SHA-256 de GB en curso; el benchmark es un hilo daemon
+    # acotado por su plazo y el registro "running" se cierra como interrumpido al volver.
+    app.state.ai_local.shutdown()
     get_engine().dispose()
 
 
@@ -147,6 +151,9 @@ def create_app() -> FastAPI:
     # Nada se conecta al proveedor al arrancar: la IA solo actúa bajo demanda.
     app.state.ai_runtime = AIRuntime(AIConfig.from_settings(settings))
     app.state.ai_provider_factory = default_provider_factory
+    # Fase 4J.2: gestor de modelos locales. No detecta hardware ni contacta el runtime al
+    # arrancar ni lanza benchmarks: todo ocurre al abrir la página o por acción del admin.
+    app.state.ai_local = LocalAIState()
     app.include_router(api_router)
     return app
 

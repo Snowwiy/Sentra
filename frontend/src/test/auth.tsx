@@ -19,6 +19,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "users:manage",
     "audit:read",
     "ai:use",
+    "ai:manage",
   ],
 };
 

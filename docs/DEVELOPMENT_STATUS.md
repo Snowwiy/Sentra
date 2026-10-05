@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-05 (Fase 4J.1).
+Last updated: 2026-10-05 (Fase 4J.2).
 
 ## Current state
 
@@ -12,18 +12,19 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0020 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0021 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
 | Motor de detección | Fase 4H: señales normalizadas en la ingesta (sin bloquearla), job `detection-engine` con 19 reglas simples y 4 correlaciones (CORR-001..004), detecciones persistentes con severidad y confianza separadas, evidencias, explicación y recomendaciones por plantilla, deduplicación, cooldown y línea base; alerta `security_detection` solo desde `DETECTION_ALERT_MIN_SEVERITY`; páginas Detecciones y detalle con timeline; reconocer/resolver con `detections:manage` y auditoría. Agente: campos estructurados por lista permitida, 4624 interactivo/RDP y canal de Defender. Migración 0018. [detection-engine.md](detection-engine.md) |
 | Risk Engine | Fase 4I: score 0-100 por activo con nivel (umbrales `RISK_LEVEL_THRESHOLDS`) y confianza separados; fórmula determinista (severidad × confianza × ocurrencias × correlación × estado × antigüedad, sin doble conteo, rendimientos decrecientes, criticidad y tipo acotados, saturación) con ledger de contribuciones que suma el score; cola `dirty_at` alimentada por detecciones, ack/resolve, puertos y criticidad (nunca por heartbeat) y job `risk-engine` con decay; historial solo en cambios materiales; alerta `risk_critical` al cruzar hacia crítico con cooldown; criticidad de activo solo admin (`assets:manage`, auditada). Página Riesgo, sección Riesgo del activo con tendencia 24h/7d/30d y columna Riesgo en Activos. Migración 0019. [risk-engine.md](risk-engine.md) |
 | AI Security Insights | Fase 4J: capa de interpretación opcional (`AI_ENABLED=false` por defecto) sobre 4H/4I. Proveedor desacoplado (`AIProvider`) con implementación OpenAI-compatible por stdlib (local o externo; externos bloqueados salvo `AI_ALLOW_EXTERNAL`), context builder con lecturas cerradas y acotadas, plantillas versionadas, salida JSON validada, grounding con referencias cortas traducidas a ids reales (IDs inventados descartados; respuesta sin evidencia válida rechazada), redacción opcional reversible, caché con huella de datos y estado stale, rate limit por usuario/global y tope de concurrencia, auditoría `ai_analysis_*`. Permiso `ai:use` (todos los roles, junto a `monitoring:read`). UI: página AI Insights con Ask Sentra AI y resumen SOC, "Analizar con IA" en el activo, "Explicar con IA" en la detección, "Analizar riesgo" en Riesgo. Migración 0020. Fase 4J.1 (local-first): modo recomendado Local AI (Ollama, llama.cpp, vLLM...), LAN solo con `AI_LOCAL_NETWORKS`, verificación de la IP real antes de enviar, externos solo con `AI_ALLOW_EXTERNAL` y https, sin fallback cloud, estado del proveedor con health check (`state`, `mode_label`) en `/ai/status` y en la UI. [ai-security-insights.md](ai-security-insights.md) |
+| Gestor de modelos locales | Fase 4J.2: Configuración → IA local → Modelos. Perfil de hardware (CPU, RAM, GPU NVIDIA/AMD/Intel, VRAM, disco) bajo demanda; abstracción `LocalAIRuntime` (llama.cpp, Ollama, vLLM, genérico) que solo habla con `AI_BASE_URL` local; registro de GGUF dentro de `AI_MODEL_DIRECTORIES` con cabecera validada y SHA-256; estimación de memoria (pesos + KV cache + overhead, offload, margen); motor de recomendación determinista con perfiles y "Recommended for Sentra"; selección con health check sin fallback cloud; benchmark local acotado y cancelable. Permiso `ai:manage` (solo admin). Migración 0021. [local-model-manager.md](local-model-manager.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab. Fase 4D: descubrimiento desde la página Red (iniciar, progreso real, cancelar, resultado, historial, estado del scheduler) sin terminal |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve desde el dashboard o la CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 682 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 222 (+21 skipped on Linux) (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 173 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 227 contract checks (incl. detección simple, correlación, deduplicación y resolución; riesgo: activo limpio → detección alta → correlación → criticidad → resolver; IA: estado, 409 sin configurar, alcance y permisos); `qa/perf_detections.py`, `qa/perf_risk.py` y `qa/perf_ai.py` miden los motores con datos sintéticos |
+| Tests | Backend 779 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 222 (+21 skipped on Linux) (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 196 tests (Vitest, incl. DOM tests of the Agentes and Red pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 227 contract checks (incl. detección simple, correlación, deduplicación y resolución; riesgo: activo limpio → detección alta → correlación → criticidad → resolver; IA: estado, 409 sin configurar, alcance y permisos); `qa/perf_detections.py`, `qa/perf_risk.py` y `qa/perf_ai.py` miden los motores con datos sintéticos |
 
 ## Architecture
 
@@ -61,6 +62,7 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
   connections, users, processes, services, software, accounts, network); newer snapshots
   replace older only.
 - `system_events`: host log events; unique `(asset_id, channel, record_id)` makes resends idempotent. `data` (0018): campos estructurados de la lista permitida del agente.
+- `ai_local_models`, `ai_model_benchmarks`, `ai_local_settings` (Fase 4J.2): modelos locales registrados (metadata GGUF, ruta, checksum), resultados de benchmark y fila única con runtime elegido y modelo activo.
 - `ai_insights` (Fase 4J): análisis de IA validados con referencias de evidencia resueltas, huella de datos (`data_version`) para caché y stale, versión de prompt, modelo y métricas técnicas; sin prompts, contexto ni claves.
 - `asset_risk` (riesgo actual por activo, contribuciones JSONB y cola `dirty_at`), `risk_snapshots` (historial en cambios materiales), `risk_contributions` (contribuciones por snapshot); `assets.criticality` (low/medium/high/critical, por defecto medium). Fase 4I.
 - `detection_signals` (estado de correlación, se purga tras `DETECTION_SIGNAL_RETENTION_HOURS`), `detections` (índice único parcial = una activa por activo+regla+clave), `detection_evidence` (máx. 100 por detección), `detection_baselines` (línea base de ejecutables por activo). Fase 4H.
@@ -102,7 +104,7 @@ Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
 `PATCH /assets/{id}/criticality` (assets:manage, solo admin) ·
 `GET /ai/status` · `GET /ai/insights` · `GET /ai/insights/{id}`; `POST /ai/ask`,
 `/ai/assets/{id}/analyze`, `/ai/detections/{id}/analyze`, `/ai/risk/assets/{id}/analyze`,
-`/ai/soc/analyze` (ai:use, Fase 4J).
+`/ai/soc/analyze` (ai:use, Fase 4J) · `/ai/local/*` (gestor de modelos locales, Fase 4J.2: lectura con ai:use, cambios con ai:manage; docs/local-model-manager.md).
 Console (local dashboard): `GET /console` · `GET|POST /console/enrollment-tokens` ·
 `POST /console/enrollment-tokens/{id}/revoke` · `POST /console/agents/{id}/revoke|reinstate` ·
 `POST /console/discovery/jobs` · `POST /console/discovery/jobs/{id}/cancel` (Fase 4D).
@@ -167,6 +169,12 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   depende del modelo (la validación garantiza formato y referencias, no el acierto). No
   probado todavía con un modelo real en el PC de desarrollo (solo FakeAIProvider y servidor
   HTTP local de pruebas).
+- Gestor de modelos locales (Fase 4J.2): las cifras de memoria son estimaciones (el overhead
+  real depende del runtime y del backend de GPU); VRAM de AMD/Intel en Windows sale del
+  registro y puede faltar; el pico de memoria del benchmark es del sistema, no del proceso;
+  Sentra no arranca llama-server ni vLLM (cambiar de modelo ahí exige reiniciarlos con `-m`);
+  hardware, snapshot del runtime y cola de benchmark son en memoria por proceso. No probado
+  aún con runtimes reales en el PC de desarrollo (solo servidores falsos en loopback).
 - Discovery: la cola del dashboard es en memoria por proceso (un job a la vez por worker);
   la configuración sigue en variables de entorno. No OUI vendor database; `GET /assets` is not paginated (about 850 KB and 120 ms
   with 1000 assets); agentless collectors are contracts only (no credential store yet).
@@ -205,6 +213,11 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   (chat OpenAI-compatible) por stdlib en vez de SDKs por proveedor; local/externo por URL sin
   resolver DNS; insights persistidos (auditables, caché tras reinicios, stale por huella) en
   vez de caché en memoria; `ai:use` separado de `monitoring:read` para poder retirarlo por rol.
+- Gestor de modelos locales (Fase 4J.2): runtime (`LocalAIRuntime`) separado del proveedor
+  de análisis (`AIProvider`), reutilizando su cliente y su política de destinos; Sentra nunca
+  lanza procesos del runtime; recomendación determinista sin LLM, la medición del benchmark
+  pesa más que la estimación; sin descargas (solo diseño documentado); quitar registro nunca
+  borra el fichero; el modelo activo sustituye a `AI_MODEL` solo con destino local.
 - Agent uses stdlib + psutil + built-in `wevtutil.exe` (no pywin32).
 - Inventory as JSONB snapshot; normalize a section when SQL queries over it are needed.
 - Retention opt-in and per data type (`services/retention_service.py`): batches of 5000 rows,
@@ -216,7 +229,7 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 ## Recommended next phase
 
 Siguiente fase de producto: 4K (Incident Management) y 4L (Asset Context). Antes, probar la
-4J con un modelo local real y revisar los pesos del riesgo con datos reales.
+4J/4J.2 con un runtime y modelo local reales (benchmark y selección) y revisar los pesos del riesgo con datos reales.
 
 1. HTTPS de producción documentado y probado (proxy inverso) y validación física de la
    Fase 4F (servicio Windows).

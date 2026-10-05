@@ -557,6 +557,7 @@ def _api_routes(client: TestClient) -> list[tuple[str, str]]:
 def _concrete(path: str) -> str:
     for name in (
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
+        "model_id", "benchmark_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     assert "{" not in path, path
