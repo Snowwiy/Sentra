@@ -38,6 +38,7 @@ from app.models.incident import (
 )
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
+from app.models.rate_limit import RateLimitHit
 from app.models.risk import (
     AssetRisk,
     RiskConfidence,
@@ -98,6 +99,7 @@ __all__ = [
     "MonitoringMethod",
     "NetworkZone",
     "PortStateValue",
+    "RateLimitHit",
     "RiskConfidence",
     "RiskContributionRecord",
     "RiskLevel",

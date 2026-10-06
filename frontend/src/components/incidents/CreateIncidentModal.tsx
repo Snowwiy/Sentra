@@ -1,8 +1,9 @@
-import { useEffect, useState, type FormEvent } from "react";
-import { incidentsApi, sentraApi } from "../../api/sentra";
-import type { Asset, IncidentDetail, IncidentLevel } from "../../api/types";
+import { useState, type FormEvent } from "react";
+import { incidentsApi } from "../../api/sentra";
+import type { IncidentDetail, IncidentLevel } from "../../api/types";
 import { errorMessage } from "../../lib/format";
 import { LEVEL_LABELS, LEVEL_ORDER } from "../../lib/incidents";
+import { useAssetOptions } from "../../lib/useAssetOptions";
 import { Modal } from "../Modal";
 
 /**
@@ -21,18 +22,10 @@ export function CreateIncidentModal({
   const [severity, setSeverity] = useState<IncidentLevel>("medium");
   const [priority, setPriority] = useState<IncidentLevel>("medium");
   const [assetId, setAssetId] = useState("");
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [assetQuery, setAssetQuery] = useState("");
+  const assets = useAssetOptions(assetQuery, assetId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-
-  useEffect(() => {
-    const controller = new AbortController();
-    sentraApi
-      .listAssets(controller.signal)
-      .then((list) => setAssets(list.items))
-      .catch(() => undefined);
-    return () => controller.abort();
-  }, []);
 
   async function submit(event: FormEvent) {
     event.preventDefault();
@@ -112,6 +105,14 @@ export function CreateIncidentModal({
         </div>
         <label>
           <span className="muted small">Activo afectado (opcional)</span>
+          <input
+            className="input"
+            type="search"
+            value={assetQuery}
+            onChange={(e) => setAssetQuery(e.target.value)}
+            placeholder="Buscar por nombre o IP"
+            aria-label="Buscar activo"
+          />
           <select
             className="input input--select"
             value={assetId}

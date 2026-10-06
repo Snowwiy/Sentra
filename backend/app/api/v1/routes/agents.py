@@ -12,7 +12,7 @@ from app.api.deps import (
 )
 from app.api.responses import error_responses
 from app.core.exceptions import RateLimitedError
-from app.core.rate_limit import RateLimiter
+from app.core.rate_limit import Limiter
 from app.schemas.agent import (
     AgentRegisterRequest,
     AgentRegisterResponse,
@@ -34,12 +34,11 @@ def limit_registration(request: Request) -> None:
     telemetría, inventario y eventos no se limitan, para no dejar sin datos a agentes
     legítimos. El agente trata 429 como temporal y reintenta respetando Retry-After.
     """
-    limiter: RateLimiter = request.app.state.register_limiter
+    limiter: Limiter = request.app.state.register_limiter
     key = client_ip(request) or "unknown"
-    wait = limiter.blocked_for(key)
+    wait = limiter.acquire(key)
     if wait > 0:
-        raise RateLimitedError("Too many enrollment attempts, retry later", wait)
-    limiter.hit(key)
+        raise RateLimitedError("Too many enrollment attempts, retry later", wait, "agent_register")
 
 
 @router.post(

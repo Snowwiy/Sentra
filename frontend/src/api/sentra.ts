@@ -43,7 +43,8 @@ import type {
   EnrollmentTokenRequest,
   EventList,
   Exposure,
-  Health,
+  Readiness,
+  DashboardSummary,
   Inventory,
   MonitoringMethod,
   Insight,
@@ -151,8 +152,24 @@ export interface AssetQuery {
   internetExposed?: "true" | "false" | "unknown";
   department?: string;
   tag?: string;
-  sort?: "name" | "criticality";
+  sort?: AssetSortKey;
+  order?: "asc" | "desc";
+  /** Fase 4M: paginación en el servidor (por defecto 100, máximo 500). */
+  limit?: number;
+  offset?: number;
 }
+
+export type AssetSortKey =
+  | "name"
+  | "criticality"
+  | "ip"
+  | "type"
+  | "status"
+  | "method"
+  | "first_seen"
+  | "last_seen"
+  | "network_seen"
+  | "ports";
 
 export interface EventQuery {
   assetId?: string;
@@ -175,8 +192,11 @@ function queryString(params: Record<string, string | number | boolean | undefine
 }
 
 export const sentraApi = {
-  // /health answers 503 with a valid body when degraded; that is data, not a failure.
-  health: (signal?: AbortSignal) => apiGet<Health>("/health", { signal, acceptStatuses: [503] }),
+  // /health/ready answers 503 with a valid body when not ready; that is data, not a failure.
+  readiness: (signal?: AbortSignal) =>
+    apiGet<Readiness>("/health/ready", { signal, acceptStatuses: [503] }),
+  dashboardSummary: (signal?: AbortSignal) =>
+    apiGet<DashboardSummary>("/dashboard/summary", { signal }),
   listAssets: (signal?: AbortSignal, query: AssetQuery = {}) =>
     apiGet<AssetList>(
       `/assets${queryString({
@@ -193,6 +213,9 @@ export const sentraApi = {
         department: query.department,
         tag: query.tag,
         sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
       })}`,
       { signal },
     ),

@@ -1,8 +1,7 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { sentraApi, type AssetQuery } from "../api/sentra";
 import type {
-  Asset,
   AssetCriticality,
   AssetEnvironment,
   AssetRole,
@@ -17,11 +16,12 @@ import { AssetName } from "../components/DeviceIdentity";
 import { MethodBadge } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
 import { CriticalityBadge, RiskCell } from "../components/risk/RiskBadges";
+import { Pager } from "../components/ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
-import { deviceTypeLabel, typeWithConfidence } from "../lib/identity";
+import { typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 import { useDebounced } from "../lib/useDebounced";
 import { CRITICALITY_LABELS, CRITICALITY_ORDER } from "../lib/risk";
@@ -43,26 +43,9 @@ const STAT_CARDS: { key: Filter; label: string }[] = [
   { key: "unknown", label: "Unknown" },
 ];
 
-// Counts are derived from the full list because GET /assets is not paginated yet.
-// If pagination is added, these must come from a backend summary endpoint instead.
-function countByStatus(assets: Asset[]): Record<Filter, number> {
-  const counts: Record<Filter, number> = { all: assets.length, online: 0, offline: 0, unknown: 0 };
-  for (const asset of assets) counts[asset.status] += 1;
-  return counts;
-}
-
-function matches(asset: Asset, query: string): boolean {
-  if (!query) return true;
-  const q = query.toLowerCase();
-  return [
-    asset.display_name,
-    asset.primary_ip,
-    asset.os_name,
-    asset.device_type,
-    asset.device_type ? deviceTypeLabel(asset.device_type) : null,
-    asset.device_vendor,
-  ].some((field) => (field ?? "").toLowerCase().includes(q));
-}
+// Fase 4M: el listado se pagina, filtra y ordena en el servidor. Nunca se descargan todos
+// los activos (con 10 000 eran ~1,5 s por refresco); los contadores llegan agregados.
+const PAGE_SIZE = 50;
 
 /** Filtros de contexto (Fase 4L) del listado; se aplican en el servidor. */
 interface ContextFilters {
@@ -228,16 +211,31 @@ export function ContextFilterBar({
 
 export function DashboardPage() {
   const [contextFilters, setContextFilters] = useState<ContextFilters>(NO_FILTERS);
+  const [filter, setFilter] = useState<Filter>("all");
+  const [query, setQuery] = useState("");
+  const [page, setPage] = useState(1);
   // Los campos de texto esperan a que se deje de escribir antes de consultar.
   const debouncedFilters = useDebounced(contextFilters, 300);
+  const q = useDebounced(query.trim(), 300);
   const fetchAssets = useCallback(
-    (signal: AbortSignal) => sentraApi.listAssets(signal, toQuery(debouncedFilters)),
-    [debouncedFilters],
+    (signal: AbortSignal) =>
+      sentraApi.listAssets(signal, {
+        ...toQuery(debouncedFilters),
+        status: filter === "all" ? undefined : filter,
+        q: q || undefined,
+        limit: PAGE_SIZE,
+        offset: (page - 1) * PAGE_SIZE,
+      }),
+    [debouncedFilters, filter, q, page],
   );
   const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
     fetchAssets,
     config.refreshIntervalMs,
+    true,
+    true,
   );
+  const fetchSummary = useCallback((signal: AbortSignal) => sentraApi.dashboardSummary(signal), []);
+  const summary = usePolling(fetchSummary, config.refreshIntervalMs);
   const fetchOpenAlerts = useCallback(
     (signal: AbortSignal) => sentraApi.listAlerts({ active: true, limit: 5 }, signal),
     [],
@@ -248,25 +246,34 @@ export function DashboardPage() {
     [],
   );
   const activity = usePolling(fetchActivity, config.refreshIntervalMs);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [query, setQuery] = useState("");
   const navigate = useNavigate();
 
-  // Orden por criticidad: lo decide el backend y se conserva; si no, por nombre como siempre.
-  const byCriticality = debouncedFilters.sort === "criticality";
-  const assets = useMemo(
-    () =>
-      byCriticality
-        ? (data?.items ?? [])
-        : [...(data?.items ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name)),
-    [data, byCriticality],
-  );
-  const counts = useMemo(() => countByStatus(assets), [assets]);
-  // Con filtros de contexto activos, los contadores son los del subconjunto filtrado.
+  // Cualquier cambio de filtro, búsqueda u orden vuelve a la primera página.
+  const changeFilters = (next: ContextFilters) => {
+    setContextFilters(next);
+    setPage(1);
+  };
+  const changeStatus = (next: Filter) => {
+    setFilter(next);
+    setPage(1);
+  };
+  const changeQuery = (next: string) => {
+    setQuery(next);
+    setPage(1);
+  };
+
+  const assets = data?.items ?? [];
+  // Tarjetas: recuento por estado del servidor con los demás filtros aplicados (como antes,
+  // los filtros de contexto acotan los contadores; el filtro de estado no).
+  const statusCounts = data?.status_counts ?? { online: 0, offline: 0, unknown: 0 };
+  const counts: Record<Filter, number> = {
+    all: statusCounts.online + statusCounts.offline + statusCounts.unknown,
+    ...statusCounts,
+  };
   const contextFiltered = Object.values(toQuery(debouncedFilters)).some((v) => v !== undefined);
-  const visible = assets.filter(
-    (asset) => (filter === "all" || asset.status === filter) && matches(asset, query.trim()),
-  );
+  const total = data?.total ?? 0;
+  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  const kpis = summary.data;
 
   if (loading) return <LoadingState label="Cargando activos…" />;
   if (!data && error) return <ErrorState message={errorMessage(error)} onRetry={refresh} />;
@@ -299,13 +306,22 @@ export function DashboardPage() {
             type="button"
             className={`stat stat--${key}${filter === key ? " stat--active" : ""}`}
             aria-pressed={filter === key}
-            onClick={() => setFilter(filter === key ? "all" : key)}
+            onClick={() => changeStatus(filter === key ? "all" : key)}
           >
             <span className="stat__label">{label}</span>
             <span className="stat__value">{counts[key]}</span>
           </button>
         ))}
       </section>
+
+      {kpis && (
+        <p className="muted small" aria-label="Resumen de la plataforma">
+          {kpis.assets.by_method.agent} gestionados con agente · {kpis.assets.by_method.discovered}{" "}
+          descubiertos · riesgo crítico {kpis.risk.by_level.critical ?? 0} · riesgo alto{" "}
+          {kpis.risk.by_level.high ?? 0} · {kpis.detections.active} detecciones activas ·{" "}
+          {kpis.active_alerts} alertas activas
+        </p>
+      )}
 
       <IncidentsOverviewPanel />
 
@@ -325,28 +341,28 @@ export function DashboardPage() {
         <div className="panel__toolbar">
           <h2>
             {filter === "all" ? "Todos los activos" : `Activos ${filter}`}
-            <span className="muted"> ({visible.length})</span>
+            <span className="muted"> ({total})</span>
           </h2>
           <input
             type="search"
             className="input"
-            placeholder="Buscar nombre, IP, OS o tipo"
+            placeholder="Buscar nombre, IP, MAC o fabricante"
             value={query}
-            onChange={(event) => setQuery(event.target.value)}
+            onChange={(event) => changeQuery(event.target.value)}
             aria-label="Buscar activos"
           />
         </div>
-        <ContextFilterBar filters={contextFilters} onChange={setContextFilters} />
+        <ContextFilterBar filters={contextFilters} onChange={changeFilters} />
 
         {assets.length === 0 && contextFiltered ? (
           <EmptyState title="Ningún activo coincide con los filtros de contexto" />
+        ) : assets.length === 0 && (filter !== "all" || q) ? (
+          <EmptyState title="Ningún activo coincide con el filtro" />
         ) : assets.length === 0 ? (
           <EmptyState title="No hay activos registrados">
             Los activos aparecerán aquí cuando un agente se registre en la API o cuando el
             descubrimiento de red encuentre equipos en las redes autorizadas.
           </EmptyState>
-        ) : visible.length === 0 ? (
-          <EmptyState title="Ningún activo coincide con el filtro" />
         ) : (
           <div className="table-wrap">
             <table className="table">
@@ -365,7 +381,7 @@ export function DashboardPage() {
                 </tr>
               </thead>
               <tbody>
-                {visible.map((asset) => {
+                {assets.map((asset) => {
                   const t = asset.latest_telemetry;
                   return (
                     <tr
@@ -434,6 +450,7 @@ export function DashboardPage() {
             </table>
           </div>
         )}
+        {total > 0 && <Pager page={page} pages={pages} total={total} onPage={setPage} noun="activos" />}
       </section>
 
       {activity.data && activity.data.items.length > 0 && (

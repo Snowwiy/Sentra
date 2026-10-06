@@ -3,7 +3,7 @@ import os
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from app.discovery.ports import parse_ports
@@ -41,6 +41,24 @@ def parse_ai_local_networks(value: str) -> tuple[AINetwork, ...]:
             for lan in _LAN_RANGES
         ):
             raise ValueError(f"AI_LOCAL_NETWORKS only accepts private LAN networks, got {item!r}")
+        networks.append(network)
+    return tuple(networks)
+
+
+def parse_networks(value: str, setting: str) -> tuple[AINetwork, ...]:
+    """'127.0.0.1,10.0.0.0/24' -> redes. Rechaza comodines y redes /0 (Fase 4M).
+
+    Se usa para TRUSTED_PROXIES y METRICS_ALLOWED_NETWORKS: confiar en "todo Internet" es
+    exactamente el error que estas listas existen para evitar, así que nunca se acepta.
+    """
+    networks: list[AINetwork] = []
+    for item in parse_name_list(value):
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"{setting} has an invalid address or network: {item!r}") from None
+        if network.prefixlen == 0:
+            raise ValueError(f"{setting} must not trust every address ({item!r})")
         networks.append(network)
     return tuple(networks)
 
@@ -99,7 +117,11 @@ def parse_critical_events(value: str) -> list[tuple[str, int]]:
 class Settings(BaseSettings):
     """Application settings. Every value comes from environment variables or a `.env` file."""
 
-    model_config = SettingsConfigDict(env_file=(".env", "../.env"), extra="ignore")
+    # hide_input_in_errors: un valor inválido nunca se copia al mensaje de error (podría ser
+    # DATABASE_URL con la contraseña o una clave), solo el nombre del campo y el motivo.
+    model_config = SettingsConfigDict(
+        env_file=(".env", "../.env"), extra="ignore", hide_input_in_errors=True
+    )
 
     app_name: str = "Sentra API"
     environment: Literal["development", "test", "production"] = "development"
@@ -363,6 +385,73 @@ class Settings(BaseSettings):
     # tokens/s de generación para Excellent, Good y Usable (uso SOC interactivo).
     ai_performance_thresholds: str = "30,15,7"
 
+    # --- Fase 4M: despliegue central en producción (ver docs/production-deployment.md) ---
+    # Reverse proxies (IPs o CIDR) cuyas cabeceras X-Forwarded-For/-Proto se aceptan. Desde
+    # cualquier otra dirección se ignoran, así un cliente no puede falsificar su IP (rate
+    # limiting, auditoría) ni el esquema. Por defecto loopback: Caddy/nginx en el mismo
+    # servidor, o el proxy de Vite en desarrollo. Vacío: no se confía en ninguno.
+    trusted_proxies: str = "127.0.0.1,::1"
+    # Dónde viven los contadores de rate limiting. memory: por proceso (desarrollo, un único
+    # worker). database: tabla rate_limit_hits en PostgreSQL, compartida entre workers y
+    # persistente tras reiniciar. auto: database en producción, memory en el resto.
+    rate_limit_backend: Literal["auto", "memory", "database"] = "auto"
+    # Peticiones mutables (POST/PATCH...) del dashboard por usuario y minuto: frena scripts
+    # o UI manipulada que abusen de incidentes, discovery, IA... Un operador real no llega.
+    api_mutations_per_user_per_minute: int = Field(default=120, ge=1, le=100_000)
+    # Búsquedas de texto libre (parámetro q, ILIKE en SQL) por usuario y minuto.
+    api_searches_per_user_per_minute: int = Field(default=120, ge=1, le=100_000)
+
+    # Pool de conexiones de la API (SQLAlchemy). Acotado: nunca conexiones ilimitadas. El
+    # máximo por worker es DB_POOL_SIZE + DB_MAX_OVERFLOW; con varios workers se multiplica y
+    # debe quedar por debajo de max_connections de PostgreSQL.
+    db_pool_size: int = Field(default=10, ge=1, le=200)
+    db_max_overflow: int = Field(default=10, ge=0, le=200)
+    # Espera máxima por una conexión libre; agotada, la petición recibe 503 (reintentable).
+    db_pool_timeout_seconds: int = Field(default=10, ge=1, le=300)
+    # Renovar conexiones con más de esta edad (firewalls que cortan TCP inactivo). 0: nunca.
+    db_pool_recycle_seconds: int = Field(default=1800, ge=0, le=86_400)
+    db_connect_timeout_seconds: int = Field(default=5, ge=1, le=120)
+    # statement_timeout de las conexiones de la API y sus jobs (no de Alembic). Sin valor: sin
+    # límite (desarrollo). En producción se recomienda 120: evita consultas colgadas sin
+    # cortar las purgas por lotes ni los recálculos, que trabajan en transacciones cortas.
+    db_statement_timeout_seconds: int | None = Field(default=None, ge=1, le=86_400)
+
+    # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
+    log_format: Literal["json", "text"] = "json"
+    # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en
+    # Linux recoge journald con su propia rotación.
+    log_file: str | None = None
+    log_file_max_mb: int = Field(default=50, ge=1, le=10_000)
+    log_file_backups: int = Field(default=10, ge=1, le=1000)
+
+    # Métricas Prometheus en /api/v1/metrics. Apagadas por defecto. Encendidas solo responden
+    # a direcciones de METRICS_ALLOWED_NETWORKS y, si hay METRICS_TOKEN, con ese Bearer.
+    metrics_enabled: bool = False
+    metrics_allowed_networks: str = "127.0.0.1,::1"
+    metrics_token: SecretStr | None = Field(default=None, min_length=32)
+
+    # Copias de seguridad (python -m app.cli backup). Directorio fuera del webroot y fuera
+    # del repositorio; retención en días de los ficheros sentra-*.dump de ese directorio.
+    backup_dir: str | None = None
+    backup_retention_days: int = Field(default=14, ge=1, le=3650)
+    # Carpeta de pg_dump/pg_restore si no están en PATH (p. ej. C:\Program Files\PostgreSQL\18\bin).
+    pg_bin_dir: str | None = None
+    # frontend/dist que sirve el reverse proxy; solo lo comprueba `production-check`.
+    frontend_dist_dir: str | None = None
+
+    @field_validator("trusted_proxies", "metrics_allowed_networks")
+    @classmethod
+    def _check_networks(cls, value: str, info: ValidationInfo) -> str:
+        parse_networks(value, (info.field_name or "").upper())
+        return value
+
+    @field_validator("log_file", "backup_dir", "pg_bin_dir", "frontend_dist_dir", mode="before")
+    @classmethod
+    def _blank_paths(cls, value: object) -> object:
+        if isinstance(value, str):
+            return value.strip() or None
+        return value
+
     @field_validator("ai_redact")
     @classmethod
     def _check_ai_redact(cls, value: str) -> str:
@@ -494,6 +583,20 @@ class Settings(BaseSettings):
     @property
     def is_production(self) -> bool:
         return self.environment == "production"
+
+    @property
+    def trusted_proxy_networks(self) -> tuple[AINetwork, ...]:
+        return parse_networks(self.trusted_proxies, "TRUSTED_PROXIES")
+
+    @property
+    def metrics_networks(self) -> tuple[AINetwork, ...]:
+        return parse_networks(self.metrics_allowed_networks, "METRICS_ALLOWED_NETWORKS")
+
+    @property
+    def effective_rate_limit_backend(self) -> Literal["memory", "database"]:
+        if self.rate_limit_backend == "auto":
+            return "database" if self.is_production else "memory"
+        return self.rate_limit_backend
 
 
 @lru_cache

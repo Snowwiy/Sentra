@@ -39,6 +39,7 @@ export function authValue(role: Role): AuthValue {
   return {
     status: "authenticated",
     user: { user_id: "00000000-0000-0000-0000-000000000001", username: role, role, last_login_at: null },
+    serverVersion: "test",
     error: undefined,
     notice: undefined,
     can: (permission) => permissions.has(permission),

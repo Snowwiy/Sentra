@@ -275,14 +275,56 @@ export interface AssetThreatSummary {
 
 export interface AssetList {
   items: Asset[];
+  /** Activos que cumplen los filtros (todas las páginas). */
   total: number;
+  /** Fase 4M: la lista siempre llega paginada desde el servidor. */
+  limit: number;
+  offset: number;
+  /** Recuento por estado con los demás filtros aplicados (tarjetas del dashboard). */
+  status_counts: Record<AssetStatus, number>;
+}
+
+/** GET /dashboard/summary (Fase 4M): contadores agregados en SQL. */
+export interface DashboardAssets {
+  total: number;
+  online: number;
+  offline: number;
+  unknown: number;
+  by_method: Record<MonitoringMethod, number>;
+  by_device_type: Record<string, number>;
+}
+
+export interface DashboardRisk {
+  by_level: Record<string, number>;
+  unscored: number;
+}
+
+export interface DashboardIncidents {
+  active: number;
+  critical: number;
+  unassigned: number;
+}
+
+export interface DashboardDetections {
+  active: number;
+  by_severity: Record<string, number>;
+}
+
+export interface DashboardSummary {
+  generated_at: string;
+  assets: DashboardAssets;
+  risk: DashboardRisk;
+  /** null si el rol no puede leer incidentes. */
+  incidents: DashboardIncidents | null;
+  detections: DashboardDetections;
+  active_alerts: number;
 }
 
 export type CheckStatus = "ok" | "error";
 
-export interface Health {
-  status: "ok" | "degraded";
-  version: string;
+/** GET /health/ready (Fase 4M): solo ok/error por dependencia, sin versiones ni hosts. */
+export interface Readiness {
+  status: "ready" | "not_ready";
   checks: Record<string, CheckStatus>;
 }
 
@@ -795,6 +837,8 @@ export interface AuthState {
   /** Solo en memoria: se envía en X-CSRF-Token en las peticiones mutables. */
   csrf_token: string;
   session_expires_at: string;
+  /** Fase 4M: la versión solo se muestra con sesión (ya no está en /health, público). */
+  server_version: string;
 }
 
 export interface User {

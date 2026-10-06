@@ -14,11 +14,12 @@ Decisiones (ver docs/authentication.md):
 """
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, select, update
+from sqlalchemy import Engine, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -32,7 +33,7 @@ from app.core.exceptions import (
     RateLimitedError,
 )
 from app.core.permissions import Permission, Role, permissions_for
-from app.core.rate_limit import RateLimiter
+from app.core.rate_limit import Limiter, make_limiter
 from app.core.security import (
     MAX_CREDENTIAL_LENGTH,
     SESSION_TOKEN_PREFIX,
@@ -99,11 +100,20 @@ class LoginGuard:
     Se comprueban ANTES de verificar la contraseña: bloqueado, ni siquiera se calcula el hash.
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, engine: Callable[[], Engine]) -> None:
         window = settings.login_rate_window_minutes * 60
-        self.user_ip = RateLimiter(settings.login_max_failures_per_user_ip, window)
-        self.ip = RateLimiter(settings.login_max_attempts_per_ip, window)
-        self.user = RateLimiter(settings.login_max_failures_per_user, window)
+        backend = settings.effective_rate_limit_backend
+        # Fase 4M: en producción los contadores viven en PostgreSQL (compartidos entre
+        # workers y persistentes tras reiniciar); ver core/rate_limit.py.
+        self.user_ip: Limiter = make_limiter(
+            backend, "login_user_ip", settings.login_max_failures_per_user_ip, window, engine
+        )
+        self.ip: Limiter = make_limiter(
+            backend, "login_ip", settings.login_max_attempts_per_ip, window, engine
+        )
+        self.user: Limiter = make_limiter(
+            backend, "login_user", settings.login_max_failures_per_user, window, engine
+        )
 
     @staticmethod
     def _user_key(username: str) -> str:
@@ -112,14 +122,13 @@ class LoginGuard:
     def check(self, username: str, client_ip: str | None) -> None:
         user = self._user_key(username)
         ip = client_ip or "unknown"
-        wait = max(
-            self.user_ip.blocked_for(f"{user}|{ip}"),
-            self.ip.blocked_for(ip),
-            self.user.blocked_for(user),
-        )
+        wait = max(self.user_ip.blocked_for(f"{user}|{ip}"), self.user.blocked_for(user))
+        if wait <= 0:
+            # Comprobar y contar el intento por dirección en un solo paso (atómico entre
+            # workers con el backend de base de datos).
+            wait = self.ip.acquire(ip)
         if wait > 0:
-            raise RateLimitedError("Too many login attempts, try again later", wait)
-        self.ip.hit(ip)
+            raise RateLimitedError("Too many login attempts, try again later", wait, "login")
 
     def failed(self, username: str, client_ip: str | None) -> None:
         user = self._user_key(username)

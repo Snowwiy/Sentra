@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WithRole } from "../test/auth";
 import type {
   Asset,
+  DashboardSummary,
   DiscoveryJobDetail,
   DiscoverySchedule,
   DiscoveryScope,
@@ -144,7 +145,23 @@ function asset(ip: string, network: string | null = NET): Asset {
   };
 }
 
-type Handler = (init: RequestInit) => { status?: number; body: unknown };
+const SUMMARY: DashboardSummary = {
+  generated_at: "2026-10-06T00:00:00Z",
+  assets: {
+    total: 0,
+    online: 0,
+    offline: 0,
+    unknown: 0,
+    by_method: { discovered: 0, agentless: 0, agent: 0 },
+    by_device_type: {},
+  },
+  risk: { by_level: {}, unscored: 0 },
+  incidents: null,
+  detections: { active: 0, by_severity: {} },
+  active_alerts: 0,
+};
+
+type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown };
 
 let routes: Record<string, Handler>;
 let calls: { method: string; path: string; init: RequestInit }[];
@@ -160,7 +177,8 @@ function refused(code: string) {
 beforeEach(() => {
   calls = [];
   routes = {
-    "GET /assets": () => ({ body: { items: [], total: 0 } }),
+    "GET /assets": () => ({ body: { items: [], total: 0, limit: 50, offset: 0, status_counts: {} } }),
+    "GET /dashboard/summary": () => ({ body: SUMMARY }),
     "GET /discovery/scope": () => ({ body: SCOPE }),
     "GET /discovery/schedule": () => ({ body: SCHEDULE }),
     "GET /discovery/jobs": () => ({ body: { items: [] } }),
@@ -172,11 +190,12 @@ beforeEach(() => {
     "fetch",
     vi.fn(async (input: string, init: RequestInit = {}) => {
       const method = init.method ?? "GET";
-      const path = new URL(input, "http://localhost").pathname.replace("/api/v1", "");
+      const url = new URL(input, "http://localhost");
+      const path = url.pathname.replace("/api/v1", "");
       calls.push({ method, path, init });
       const handler = routes[`${method} ${path}`];
       if (!handler) return json(404, { error: { code: "not_found", message: `no route ${path}` } });
-      const { status = 200, body } = handler(init);
+      const { status = 200, body } = handler(init, url);
       return json(status, body);
     }),
   );
@@ -341,7 +360,14 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
   it("completed: resultado, cambios y ver dispositivos", async () => {
     routes["GET /discovery/jobs"] = () => ({ body: { items: [COMPLETED] } });
     routes["GET /discovery/jobs/11111111-1111-1111-1111-111111111111"] = () => ({ body: COMPLETED });
-    routes["GET /assets"] = () => ({ body: { items: [asset("192.168.50.77"), asset("10.9.9.9", null)], total: 2 } });
+    // Fase 4M: el filtro por red lo aplica el servidor; el mock lo imita con el parámetro.
+    let lastQuery: URLSearchParams | undefined;
+    routes["GET /assets"] = (_init, url) => {
+      lastQuery = url.searchParams;
+      const all = [asset("192.168.50.77"), asset("10.9.9.9", null)];
+      const items = url.searchParams.get("subnet") ? all.slice(0, 1) : all;
+      return { body: { items, total: items.length } };
+    };
     renderPage();
     const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
     fireEvent.click(await within(history).findByRole("button", { name: /\d/ }));
@@ -368,8 +394,11 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     fireEvent.click(within(dialog).getByRole("button", { name: "Ver dispositivos" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
     const table = screen.getByRole("region", { name: "Activos de red" });
+    await waitFor(() => expect(within(table).queryByText("10.9.9.9")).not.toBeInTheDocument());
     expect(within(table).getByText("192.168.50.77")).toBeInTheDocument();
-    expect(within(table).queryByText("10.9.9.9")).not.toBeInTheDocument();
+    expect(lastQuery?.get("subnet")).toBe(COMPLETED.target);
+    expect(lastQuery?.get("sort")).toBe("first_seen");
+    expect(lastQuery?.get("order")).toBe("desc");
   });
 
   it("failed: muestra el motivo y que el resultado es parcial", async () => {

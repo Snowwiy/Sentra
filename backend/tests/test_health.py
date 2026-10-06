@@ -9,13 +9,24 @@ from app.main import create_app
 
 
 def test_health_reports_ok_when_database_is_reachable(client: TestClient) -> None:
-    response = client.get("/api/v1/health")
+    response = client.get("/api/v1/health/ready")
 
     assert response.status_code == 200
     body = response.json()
-    assert body["status"] == "ok"
-    assert body["checks"] == {"api": "ok", "database": "ok", "migrations": "ok"}
-    assert body["version"]
+    assert body == {
+        "status": "ready",
+        "checks": {"api": "ok", "database": "ok", "migrations": "ok"},
+    }
+
+
+def test_public_health_is_minimal(client: TestClient) -> None:
+    # Fase 4M: liveness público sin versión, base de datos, rutas ni IPs.
+    response = client.get("/api/v1/health")
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok"}
+    ready = client.get("/api/v1/health/ready").text
+    for leak in ("version", "postgres", "5433", "127.0.0.1", "sentra_test", "/home", "0024"):
+        assert leak not in ready.lower()
 
 
 def test_health_reports_degraded_when_database_is_unreachable() -> None:
@@ -29,10 +40,12 @@ def test_health_reports_degraded_when_database_is_unreachable() -> None:
 
     app.dependency_overrides[get_db] = broken_db
     with TestClient(app) as client:
-        response = client.get("/api/v1/health")
+        response = client.get("/api/v1/health/ready")
+        # Proceso vivo aunque la base no responda: liveness sigue en 200.
+        assert client.get("/api/v1/health").status_code == 200
 
     assert response.status_code == 503
-    assert response.json()["status"] == "degraded"
+    assert response.json()["status"] == "not_ready"
     assert response.json()["checks"]["database"] == "error"
     unreachable.dispose()
 

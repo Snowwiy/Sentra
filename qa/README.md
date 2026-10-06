@@ -159,6 +159,26 @@ crea (por prefijo, también restos de una ejecución interrumpida). Ejecútalo c
 parada: sus jobs de riesgo compiten por las mismas filas al borrar. Resultados de referencia en
 [docs/asset-context.md](../docs/asset-context.md).
 
+### Fase 4M: producción y dashboard paginado
+
+`qa/e2e_production.py` (solo stdlib) prueba la API en modo producción detrás de un Caddy real
+(`deploy/caddy/Caddyfile.example` con `tls internal` y el upstream en el 8100):
+
+```bash
+SENTRA_QA_PUBLIC_URL=https://sentra.qa.lan SENTRA_QA_HTTP_URL=http://sentra.qa.lan \
+SENTRA_QA_CA_FILE=<raíz de Caddy> SENTRA_QA_DIRECT_URL=http://127.0.0.1:8100 \
+SENTRA_QA_ADMIN_USER=... SENTRA_QA_ADMIN_PASSWORD=... \
+python qa/e2e_production.py --scenario proxy   # también: ai-down, db-down, db-up, workers
+```
+
+`proxy`: HTTPS, redirección, cabeceras y CSP, cookie `__Host-`, CSRF/Origin, IP real tras el
+proxy, sourcemaps y métricas ocultos, agente con TLS verificado. `ai-down`: readiness sigue
+`ready`. `db-down`/`db-up`: 503 sin trazas y recuperación sin reiniciar. `workers`: dos
+workers comparten rate limiting y los jobs singleton.
+
+`qa/perf_dashboard.py` siembra 10 000 activos y 10 000 incidentes y mide el dashboard
+(`seed`, `measure`, `cleanup`; uso en el docstring). Resultados en `docs/DEVELOPMENT_STATUS.md`.
+
 ## 5. Real agent and dashboard against the QA API
 
 ```powershell
@@ -214,7 +234,7 @@ not collected yet).
 | Scenario | How | Expected |
 |----------|-----|----------|
 | API down | stop the 8100 uvicorn, wait, start it again | agent logs `API unreachable` with backoff, buffers samples, then `connection to API restored`; buffered samples keep their original `recorded_at` |
-| PostgreSQL down | `pg_ctl stop` on the QA cluster | `/health` 503 `degraded`; other endpoints 503 `database_unavailable`; agent buffers; after `pg_ctl start` everything recovers without restarting the API |
+| PostgreSQL down | `pg_ctl stop` on the QA cluster | `/health` 200 (liveness), `/health/ready` 503 `not_ready`; other endpoints 503 `database_unavailable`; agent buffers; after `pg_ctl start` everything recovers without restarting the API |
 | Agent restart | kill the agent, start it with the same `--state-dir` | same `agent_id`/asset, no new enrollment, no duplicated events |
 | Token revoked | `python -m app.cli revoke-agent <asset_id>` then `reinstate-agent` | agent gets 401, then 403 `agent_revoked` and backs off; after reinstating it re-enrolls into the same asset |
 | Dashboard without API | stop the API with the dashboard open | "No se pudo conectar con la API de Sentra (HTTP 502)" and the header shows the API as unavailable |

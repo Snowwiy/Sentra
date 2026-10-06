@@ -8,6 +8,8 @@ export type AuthStatus = "loading" | "authenticated" | "anonymous" | "error";
 export interface AuthValue {
   status: AuthStatus;
   user: CurrentUser | undefined;
+  /** Versión del servidor (solo con sesión; /health es público y ya no la publica). */
+  serverVersion: string | undefined;
   /** Error al comprobar la sesión (API caída): distinto de "no hay sesión". */
   error: Error | undefined;
   /** Motivo por el que se volvió al login (sesión caducada), para explicarlo allí. */
@@ -94,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return {
       status: state.status,
       user: state.auth?.user,
+      serverVersion: state.auth?.server_version,
       error: state.error,
       notice: state.notice,
       can: (permission) => permissions.has(permission),

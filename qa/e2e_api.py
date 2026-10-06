@@ -264,7 +264,8 @@ def test_enrollment() -> None:
     check("old token revoked after rotation -> 401", r.status == 401, (r.status, r.body))
     r = call("POST", "/agents/heartbeat", {"agent_id": agent_id}, bearer(token2))
     check("new token works", r.status == 200 and r.body["status"] == "online", r.body)
-    assets = call("GET", "/assets").body["items"]
+    # Fase 4M: /assets pagina en el servidor (100 por defecto); la QA usa una base nueva.
+    assets = call("GET", "/assets?limit=500").body["items"]
     check(
         "no duplicate asset rows for same agent_id",
         sum(a["asset_id"] == asset_id for a in assets) == 1,
@@ -559,8 +560,9 @@ def test_events_and_inventory() -> None:
 
 def test_hardening() -> None:
     """Body size limit, migrations health check and telemetry idempotency (sample_id)."""
-    checks = call("GET", "/health").body.get("checks", {})
-    check("health reports migrations check", checks.get("migrations") == "ok", checks)
+    checks = call("GET", "/health/ready").body.get("checks", {})
+    check("readiness reports migrations check", checks.get("migrations") == "ok", checks)
+    check("metrics disabled by default -> 404", call("GET", "/metrics").status == 404)
 
     # Over the 4 MiB limit: rejected with 413 before authentication or JSON parsing.
     big = (
@@ -775,7 +777,20 @@ def test_assets_read() -> None:
         for a in r.body["items"]
     )
     check("asset list contract", ok, r.body)
-    check("asset list total == len(items)", r.body["total"] == len(r.body["items"]))
+    check(
+        "asset list page (Fase 4M)",
+        r.body["total"] >= len(r.body["items"])
+        and r.body["limit"] == 100
+        and r.body["offset"] == 0
+        and sum(r.body["status_counts"].values()) == r.body["total"],
+        {k: r.body.get(k) for k in ("total", "limit", "offset", "status_counts")},
+    )
+    summary = call("GET", "/dashboard/summary")
+    check(
+        "dashboard summary matches the asset list",
+        summary.status == 200 and summary.body["assets"]["total"] == r.body["total"],
+        summary.body,
+    )
 
 
 def test_alerts() -> None:

@@ -1,8 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
-import { detectionsApi, sentraApi } from "../api/sentra";
+import { detectionsApi } from "../api/sentra";
 import type {
-  Asset,
   DetectionConfidence,
   DetectionRule,
   DetectionSeverity,
@@ -21,6 +20,7 @@ import {
 import { FilterSelect, Pager, SearchInput, Toolbar } from "../components/ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { useAssetOptions } from "../lib/useAssetOptions";
 import { useDebounced } from "../lib/useDebounced";
 import { usePolling } from "../lib/usePolling";
 
@@ -60,7 +60,8 @@ export function DetectionsPage() {
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
   const [rules, setRules] = useState<DetectionRule[]>([]);
-  const [assets, setAssets] = useState<Asset[]>([]);
+  const [assetQuery, setAssetQuery] = useState("");
+  const assets = useAssetOptions(assetQuery, assetId);
   const q = useDebounced(query);
 
   // Catálogos de los filtros: si fallan, los filtros quedan vacíos pero la lista funciona.
@@ -69,10 +70,6 @@ export function DetectionsPage() {
     detectionsApi
       .rules(controller.signal)
       .then((list) => setRules(list.items))
-      .catch(() => undefined);
-    sentraApi
-      .listAssets(controller.signal)
-      .then((list) => setAssets(list.items))
       .catch(() => undefined);
     return () => controller.abort();
   }, []);
@@ -155,6 +152,12 @@ export function DetectionsPage() {
             options={rules.map((r) => ({ value: r.rule_id, label: `${r.rule_id} · ${r.title}` }))}
             onChange={reset(setRule)}
             allLabel="Todas"
+          />
+          <SearchInput
+            value={assetQuery}
+            onChange={setAssetQuery}
+            placeholder="Buscar activo"
+            label="Buscar activo"
           />
           <FilterSelect
             label="Activo"

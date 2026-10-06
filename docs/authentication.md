@@ -145,12 +145,15 @@ no reporta telemetría y `X-Admin-Key` no es aceptada en los endpoints del dashb
 - **Desarrollo / LAN de pruebas**: HTTP está permitido. La cookie no lleva `Secure`, así que
   la contraseña y la cookie viajan sin cifrar; la pantalla de login lo avisa cuando no se
   abre desde `localhost`.
-- **Producción**: servir el dashboard y la API detrás de HTTPS (proxy inverso como IIS, Caddy
-  o nginx, o una VPN). Con `ENVIRONMENT=production` la cookie es `Secure` y se llama
-  `__Host-sentra_session`; también se puede forzar con `SESSION_COOKIE_SECURE=true`.
-- Detrás de un proxy: uvicorn con `--proxy-headers` y `FORWARDED_ALLOW_IPS=<ip del proxy>`
-  para que la IP del cliente (límites y auditoría) sea la real, y `ALLOWED_HOSTS` con los
-  nombres del servidor (rechaza otros `Host`, `400`).
+- **Producción**: servir el dashboard y la API detrás de HTTPS (Caddy o nginx, ver
+  [production-deployment.md](production-deployment.md)). Con `ENVIRONMENT=production` la
+  cookie es `Secure` y se llama `__Host-sentra_session`, y toda petición que no llegó por
+  HTTPS recibe `403 https_required`; fuera de producción se puede forzar `Secure` con
+  `SESSION_COOKIE_SECURE=true`.
+- Detrás de un proxy: uvicorn con `--no-proxy-headers` y `TRUSTED_PROXIES=<ip del proxy>`
+  (Sentra resuelve la IP real del cliente para límites y auditoría), y `ALLOWED_HOSTS` con
+  los nombres del servidor (rechaza otros `Host`, `400`). Detalle en
+  [network-security.md](network-security.md).
 
 ### Acceso desde otra PC de la LAN (desarrollo)
 
@@ -192,5 +195,5 @@ mutaciones denegadas por permiso. Se consulta en **Usuarios → Auditoría** (`a
 | PATCH | `/api/v1/assets/{id}/criticality` | `assets:manage` |
 
 Todos los `GET` del dashboard (activos, eventos, alertas, agentes, descubrimiento) requieren
-sesión (`monitoring:read`). Siguen sin sesión: `GET /health` (sin datos) y los endpoints de
+sesión (`monitoring:read`). Siguen sin sesión: `GET /health` y `GET /health/ready` (sin datos internos) y los endpoints de
 agente, que usan su propio token.

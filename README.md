@@ -45,6 +45,7 @@ backend/        API (app/), migrations (alembic/), tests (tests/)
 frontend/       React + Vite dashboard
 agent/          Python agent (Windows first, Linux compatible)
 docs/           Agent protocol and DEVELOPMENT_STATUS.md (handoff)
+deploy/         Plantillas de producción: Caddy, nginx, systemd, PostgreSQL, Windows
 integrations/   Future optional integrations (empty)
 scripts/        PowerShell setup and start scripts for Windows
 .github/        CI (backend lint, types, tests)
@@ -86,7 +87,7 @@ Root `.env` (template: `.env.example`, never committed):
 
 | Variable | Purpose |
 |----------|---------|
-| `ENVIRONMENT` | `development`, `test` or `production` (production hides `/docs`) |
+| `ENVIRONMENT` | `development`, `test` or `production` (production hides `/docs`, exige HTTPS y se niega a arrancar con una configuración insegura: `python -m app.cli production-check`) |
 | `LOG_LEVEL` | Log level for JSON logs |
 | `DATABASE_URL` | Main database, `postgresql+psycopg://user:pass@host:port/db` |
 | `TEST_DATABASE_URL` | Separate database used by the test suite |
@@ -115,6 +116,12 @@ Root `.env` (template: `.env.example`, never committed):
 | `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
 | `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
 | `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) Gestor de modelos locales (Fase 4J.2): `AI_RUNTIME`, `AI_MODEL_DIRECTORIES`, contexto, margen de memoria y benchmark en [docs/local-model-manager.md](docs/local-model-manager.md) |
+| `TRUSTED_PROXIES` | Proxies (IPs/redes) cuyos `X-Forwarded-For/Proto` se aceptan (Fase 4M; por defecto `127.0.0.1,::1`) |
+| `RATE_LIMIT_BACKEND`, `API_MUTATIONS_PER_USER_PER_MINUTE`, `API_SEARCHES_PER_USER_PER_MINUTE` | Rate limiting compartido en PostgreSQL en producción (`auto`) y límites por usuario del dashboard (120/min) |
+| `DB_POOL_SIZE`, `DB_MAX_OVERFLOW`, `DB_POOL_TIMEOUT_SECONDS`, `DB_POOL_RECYCLE_SECONDS`, `DB_CONNECT_TIMEOUT_SECONDS`, `DB_STATEMENT_TIMEOUT_SECONDS` | Pool y tiempos máximos de PostgreSQL de la API |
+| `LOG_FORMAT`, `LOG_FILE`, `LOG_FILE_MAX_MB`, `LOG_FILE_BACKUPS` | Logs JSON/texto y rotación propia a archivo (Windows) |
+| `METRICS_ENABLED`, `METRICS_ALLOWED_NETWORKS`, `METRICS_TOKEN` | `/api/v1/metrics` Prometheus, apagado por defecto ([docs/observability.md](docs/observability.md)) |
+| `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `PG_BIN_DIR`, `FRONTEND_DIST_DIR` | Copias de seguridad ([docs/backup-restore.md](docs/backup-restore.md)) y build publicado |
 | `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](docs/discovery.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
@@ -131,7 +138,10 @@ cd backend
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/v1/health` | API, database and migration state (503 when degraded) |
+| GET | `/api/v1/health` | Liveness: `{"status":"ok"}` sin tocar la base (Fase 4M) |
+| GET | `/api/v1/health/ready` | Readiness: base, migraciones y apagado; 503 si no está lista. Sin versiones ni hosts |
+| GET | `/api/v1/dashboard/summary` | Agregados del dashboard en SQL (activos por estado/método/tipo, riesgo, incidentes, detecciones, alertas) |
+| GET | `/api/v1/metrics` | Prometheus; 404 salvo `METRICS_ENABLED` y red autorizada, token opcional ([docs/observability.md](docs/observability.md)) |
 | POST | `/api/v1/agents/register` | Enroll an agent (`X-Enrollment-Token` one-time token, or legacy `X-Enrollment-Key`); returns its token once |
 | POST | `/api/v1/agent-enrollment-tokens` | **Admin** (`X-Admin-Key`): create a one-time enrollment token (shown once) |
 | GET | `/api/v1/agent-enrollment-tokens` | **Admin**: list tokens and their state (never the token) |
@@ -140,7 +150,7 @@ cd backend
 | GET | `/api/v1/agents` | Enrolled agents with state, credential status and summary (no secrets) |
 | GET | `/api/v1/assets/{asset_id}/agent` | The asset's agent and credential status |
 | GET/POST | `/api/v1/console/...` | **Dashboard console** (sesión, solo rol admin): enrollment tokens, revoke/reinstate agents ([docs/agent-management.md](docs/agent-management.md)) |
-| GET | `/api/v1/assets` | List assets with status and latest telemetry |
+| GET | `/api/v1/assets` | List assets with status and latest telemetry; paginado en el servidor (Fase 4M: `limit` 100 por defecto, máx. 500; `offset`; `sort`, `order`; `status_counts`) |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |
 | GET | `/api/v1/assets/{asset_id}/telemetry?limit=120` | Telemetry history, oldest first |
 | GET | `/api/v1/alerts?status=&active=&severity=&rule=&asset_id=&q=&limit=&offset=` | Alerts, newest first; `total` is the number matching the filters |
@@ -256,14 +266,20 @@ sobrescribe una heurística. El contexto amplifica de forma acotada la evidencia
 el riesgo (nunca crea riesgo; lo desconocido no suma), aparece en incidentes (actual y
 snapshot), detecciones e IA (sin inventar datos), y cada activo tiene un resumen de amenaza
 interno ([docs/asset-context.md](docs/asset-context.md)).
-Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
+**Producción** (Fase 4M): servidor central con Caddy (HTTPS, frontend estático) delante de
+la API en 127.0.0.1, PostgreSQL con rol dedicado, validación de producción que impide
+arrancar inseguro, proxy de confianza, rate limiting compartido, readiness, logs JSON
+redactados, métricas protegidas, copias verificadas y restauración segura, y dashboard
+paginado en el servidor ([docs/production-deployment.md](docs/production-deployment.md),
+[docs/network-security.md](docs/network-security.md),
+[docs/backup-restore.md](docs/backup-restore.md), [docs/observability.md](docs/observability.md),
+plantillas en `deploy/`).
 
 ## Roadmap
 
-1. HTTPS de serie (proxy inverso documentado) y endurecimiento de producción.
-2. Signed MSI for the Windows agent.
-3. Telemetry downsampling (opt-in retention exists); journald events on Linux.
-4. Live updates (WebSockets/SSE).
-5. Agentless collectors (WinRM/WMI, SSH, SNMP; contracts in `backend/app/agentless/`) once
+1. Signed MSI for the Windows agent.
+2. Telemetry downsampling (opt-in retention exists); journald events on Linux.
+3. Live updates (WebSockets/SSE).
+4. Agentless collectors (WinRM/WMI, SSH, SNMP; contracts in `backend/app/agentless/`) once
    a credential store is decided; OUI vendor database.
-6. Optional integrations (Wazuh, Suricata, Syslog).
+5. Optional integrations (Wazuh, Suricata, Syslog).

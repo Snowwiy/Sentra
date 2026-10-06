@@ -9,8 +9,10 @@ desactivada o el destino es externo.
 import socket
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import pytest
 from fastapi.testclient import TestClient
@@ -19,6 +21,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.ai.config import AIConfig
 from app.core.config import get_settings
+from app.models.ai_local import AILocalModel, AIModelBenchmark
 from app.models.audit import AuditEvent
 from app.services.ai_service import AIRuntime
 from tests.ai_local_fakes import FakeRuntimeServer, FakeSource, nvidia, write_gguf
@@ -296,6 +299,28 @@ def test_benchmark_can_be_cancelled_and_only_one_runs_at_a_time(env: Env) -> Non
     cancel = env.client.post(f"{LOCAL}/benchmarks/{started['benchmark_id']}/cancel")
     assert cancel.status_code == 200
     assert _wait_benchmark(env, started["benchmark_id"])["status"] == "cancelled"
+
+
+def test_benchmark_running_in_another_worker_blocks_a_new_one(env: Env, db: Session) -> None:
+    # Fase 4M: con varios workers el estado en memoria no ve el benchmark del otro proceso;
+    # la fila "running" vigente en la base sí lo bloquea.
+    model = _register(env)
+    stored = db.scalars(
+        select(AILocalModel).where(AILocalModel.public_id == UUID(model["model_id"]))
+    ).one()
+    db.add(
+        AIModelBenchmark(
+            model_id=stored.id,
+            status="running",
+            runtime=stored.runtime,
+            max_tokens=32,
+            requested_by="otro-worker",
+            started_at=datetime.now(UTC),
+        )
+    )
+    db.commit()
+    busy = env.client.post(f"{LOCAL}/models/{model['model_id']}/benchmark")
+    assert busy.status_code == 409 and busy.json()["error"]["code"] == "ai_benchmark_busy"
 
 
 def test_benchmark_failure_does_not_break_ai_insights(env: Env) -> None:

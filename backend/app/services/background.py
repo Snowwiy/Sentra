@@ -1,17 +1,24 @@
 """Periodic in-process jobs.
 
-A daemon thread is enough for the MVP (one API process). With several workers each runs its own
-sweeper; that is safe because alert creation is deduplicated by a unique index, only wasteful.
-A dedicated scheduler/worker process is the step up when that matters.
+A daemon thread per job inside the API process. Fase 4M: con varios workers (o dos
+instancias por error) cada proceso arranca sus hilos, pero cada vuelta toma antes un
+advisory lock de PostgreSQL por job (db/locks.py): solo una ejecución trabaja a la vez y
+las demás se saltan esa vuelta. Si el proceso que tenía el lock muere, PostgreSQL lo libera
+con su conexión y otro worker sigue en la siguiente vuelta.
 """
 
 import logging
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 
+from sqlalchemy import Engine
+
 from app.core.config import get_settings
-from app.db.session import get_sessionmaker
+from app.core.metrics import REGISTRY
+from app.db.locks import JOB_LOCK_KEYS, singleton_lock
+from app.db.session import get_engine, get_sessionmaker
 from app.detection.config import DetectionConfig
 from app.detection.engine import DetectionEngine
 from app.models.discovery import DiscoveryTrigger
@@ -32,6 +39,7 @@ class PeriodicJob:
         job: Callable[[], None],
         stop: threading.Event | None = None,
         first_run_after: float | None = None,
+        lock_engine: Callable[[], Engine] | None = get_engine,
     ) -> None:
         self._name = name
         self._interval = interval_seconds
@@ -45,6 +53,34 @@ class PeriodicJob:
         # hay una en curso. La espera se cuenta desde el final de la ejecución anterior.
         self.next_run_at: datetime | None = None
         self.running = False
+        # Advisory lock del job (Fase 4M). None: sin exclusión entre procesos (tests).
+        self._lock_key = JOB_LOCK_KEYS.get(name)
+        self._lock_engine = lock_engine
+
+    @property
+    def name(self) -> str:
+        return self._name
+
+    def run_once(self) -> str:
+        """Una vuelta: "success", "failure" o "skipped" (otro proceso tiene el lock)."""
+        started = time.perf_counter()
+        result = "success"
+        try:
+            if self._lock_key is None or self._lock_engine is None:
+                self._job()
+            else:
+                with singleton_lock(self._lock_engine, self._lock_key) as acquired:
+                    if not acquired:
+                        result = "skipped"
+                    else:
+                        self._job()
+        except Exception:
+            # A failing run (e.g. database briefly down) must not kill the thread;
+            # the next run retries.
+            logger.exception("background job failed", extra={"job": self._name})
+            result = "failure"
+        REGISTRY.observe_job(self._name, result, time.perf_counter() - started)
+        return result
 
     def start(self) -> None:
         self._thread.start()
@@ -61,11 +97,7 @@ class PeriodicJob:
             self.next_run_at = None
             self.running = True
             try:
-                self._job()
-            except Exception:
-                # A failing run (e.g. database briefly down) must not kill the thread;
-                # the next run retries.
-                logger.exception("background job failed", extra={"job": self._name})
+                self.run_once()
             finally:
                 self.running = False
                 self.next_run_at = datetime.now(UTC) + timedelta(seconds=delay)

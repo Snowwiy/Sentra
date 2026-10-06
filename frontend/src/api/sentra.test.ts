@@ -47,13 +47,29 @@ describe("sentraApi query strings", () => {
   });
 });
 
-describe("sentraApi.health", () => {
-  it("treats a degraded 503 as data, not as a failure", async () => {
+describe("sentraApi.readiness", () => {
+  it("treats a not-ready 503 as data, not as a failure", async () => {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async () => new Response(JSON.stringify({ status: "degraded", version: "0.1.0", checks: {} }), { status: 503 })),
+      vi.fn(async (url: string) => {
+        requested.push(url);
+        return new Response(JSON.stringify({ status: "not_ready", checks: { database: "error" } }), { status: 503 });
+      }),
     );
 
-    await expect(sentraApi.health()).resolves.toMatchObject({ status: "degraded" });
+    await expect(sentraApi.readiness()).resolves.toMatchObject({ status: "not_ready" });
+    expect(lastPath()).toBe("/api/v1/health/ready");
+  });
+});
+
+describe("sentraApi.listAssets (Fase 4M)", () => {
+  it("always sends the page, sort and filters to the server", async () => {
+    await sentraApi.listAssets(undefined, { status: "offline", q: "pc", sort: "ip", order: "desc", limit: 50, offset: 100 });
+    expect(lastPath()).toBe("/api/v1/assets?status=offline&q=pc&sort=ip&order=desc&limit=50&offset=100");
+  });
+
+  it("reads the dashboard summary from its aggregate endpoint", async () => {
+    await sentraApi.dashboardSummary();
+    expect(lastPath()).toBe("/api/v1/dashboard/summary");
   });
 });

@@ -262,7 +262,12 @@ describe("IncidentsPage", () => {
     expect(screen.queryByRole("button", { name: "Nuevo incidente" })).not.toBeInTheDocument();
     cleanup();
 
-    routes["GET /assets"] = () => ({ body: { items: [{ asset_id: ASSET, display_name: "pc-demo", primary_ip: "10.0.0.5" }], total: 1 } });
+    // Fase 4M: el selector busca en el servidor (q + limit), nunca descarga el inventario.
+    const assetQueries: URLSearchParams[] = [];
+    routes["GET /assets"] = (_init, url) => {
+      assetQueries.push(url.searchParams);
+      return { body: { items: [{ asset_id: ASSET, display_name: "pc-demo", primary_ip: "10.0.0.5" }], total: 1 } };
+    };
     routes["POST /incidents"] = () => ({ status: 201, body: detail() });
     renderAt("/incidents", "analyst");
     fireEvent.click(await screen.findByRole("button", { name: "Nuevo incidente" }));
@@ -270,6 +275,9 @@ describe("IncidentsPage", () => {
     fireEvent.change(within(dialog).getByLabelText("Título"), { target: { value: "Caso manual" } });
     fireEvent.change(within(dialog).getByLabelText("Severidad"), { target: { value: "critical" } });
     await within(dialog).findByRole("option", { name: /pc-demo/ });
+    expect(assetQueries[0]?.get("limit")).toBe("50");
+    fireEvent.change(within(dialog).getByLabelText("Buscar activo"), { target: { value: "pc-de" } });
+    await waitFor(() => expect(assetQueries.some((q) => q.get("q") === "pc-de")).toBe(true));
     fireEvent.change(within(dialog).getByLabelText("Activo afectado"), { target: { value: ASSET } });
     fireEvent.click(within(dialog).getByRole("button", { name: "Crear incidente" }));
     expect(await screen.findByRole("heading", { name: /INC-000007/ })).toBeInTheDocument();

@@ -94,3 +94,9 @@ No auto-update and no MSI yet (Windows uses a zip + PowerShell installer). A man
 (`start_agent.ps1`) keeps its own state in `%LOCALAPPDATA%`; the Windows installer imports its
 `agent_id` so the host stays the same asset. No mTLS; use https for non-loopback API URLs (the
 agent warns otherwise).
+
+TLS (Fase 4M): el agente verifica siempre el certificado del servidor contra el almacén de
+confianza del sistema operativo y no tiene ninguna opción para desactivarlo. Con una CA
+interna, instalar su certificado raíz en cada equipo (`docs/network-security.md`). Sin
+autoactualización: se actualiza a mano con el paquete nuevo (`-Upgrade` en Windows, sección
+"Upgrade" de `docs/agent-linux-installation.md`), sin re-enrolar.

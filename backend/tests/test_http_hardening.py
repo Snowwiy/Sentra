@@ -79,7 +79,7 @@ def test_openapi_documents_the_real_error_envelope(client: TestClient) -> None:
         for method, operation in operations.items():
             for status, body in operation["responses"].items():
                 schema = body.get("content", {}).get("application/json", {}).get("schema", {})
-                if int(status) >= 400 and path != "/api/v1/health":
+                if int(status) >= 400 and path != "/api/v1/health/ready":
                     assert schema["$ref"].endswith("/ErrorResponse"), (method, path, status)
 
 
@@ -104,7 +104,8 @@ def test_openapi_documents_the_real_error_envelope(client: TestClient) -> None:
             {"200", "401", "403", "404", "409", "422", "503"},
         ),
         ("post", "/auth/login", {"200", "401", "403", "422", "429", "503"}),
-        ("get", "/health", {"200", "503"}),
+        ("get", "/health", {"200"}),
+        ("get", "/health/ready", {"200", "503"}),
     ],
 )
 def test_openapi_lists_the_statuses_each_route_can_answer(

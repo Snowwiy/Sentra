@@ -11,6 +11,7 @@ from app.api.v1.routes import (
     auth,
     console,
     console_discovery,
+    dashboard,
     detections,
     discovery,
     enrollment_tokens,
@@ -18,6 +19,7 @@ from app.api.v1.routes import (
     health,
     incidents,
     inventory,
+    metrics,
     processes,
     risk,
     telemetry,
@@ -33,6 +35,8 @@ _COMMON = error_responses(422, 503)
 
 api_router = APIRouter(prefix="/api/v1")
 api_router.include_router(health.router)
+api_router.include_router(metrics.router)
+api_router.include_router(dashboard.router, responses=_COMMON)
 api_router.include_router(auth.router, responses=_COMMON)
 api_router.include_router(users.router, responses=_COMMON)
 api_router.include_router(audit.router, responses=_COMMON)

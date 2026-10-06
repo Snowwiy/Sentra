@@ -58,6 +58,9 @@ function asset(name: string, overrides: Partial<Asset> = {}): Asset {
 
 let items: Asset[];
 let assetCalls: URL[];
+let summaryCalls: number;
+// Total del servidor (todas las páginas); por defecto, los items de la página.
+let serverTotal: number | undefined;
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -65,6 +68,8 @@ const json = (status: number, body: unknown) =>
 beforeEach(() => {
   items = [asset("b-db", { criticality: "critical", role: "database" }), asset("a-pc")];
   assetCalls = [];
+  summaryCalls = 0;
+  serverTotal = undefined;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
@@ -72,7 +77,31 @@ beforeEach(() => {
       const path = url.pathname.replace("/api/v1", "");
       if (path === "/assets") {
         assetCalls.push(url);
-        return json(200, { items, total: items.length });
+        return json(200, {
+          items,
+          total: serverTotal ?? items.length,
+          limit: Number(url.searchParams.get("limit")),
+          offset: Number(url.searchParams.get("offset") ?? 0),
+          status_counts: { online: 7000, offline: 2900, unknown: 100 },
+        });
+      }
+      if (path === "/dashboard/summary") {
+        summaryCalls += 1;
+        return json(200, {
+          generated_at: iso(),
+          assets: {
+            total: 10000,
+            online: 7000,
+            offline: 2900,
+            unknown: 100,
+            by_method: { discovered: 6000, agentless: 0, agent: 4000 },
+            by_device_type: { unknown: 10000 },
+          },
+          risk: { by_level: { critical: 12, high: 30 }, unscored: 0 },
+          incidents: { active: 3, critical: 1, unassigned: 2 },
+          detections: { active: 5, by_severity: { high: 5 } },
+          active_alerts: 4,
+        });
       }
       if (path === "/alerts" || path === "/events") return json(200, { items: [], total: 0 });
       return json(404, { error: { code: "not_found", message: path } });
@@ -136,5 +165,45 @@ describe("DashboardPage · contexto", () => {
     items = [];
     fireEvent.change(screen.getByLabelText("Entorno"), { target: { value: "production" } });
     expect(await screen.findByText("Ningún activo coincide con los filtros de contexto")).toBeInTheDocument();
+  });
+});
+
+describe("DashboardPage · paginación en servidor (Fase 4M)", () => {
+  it("nunca descarga todos los activos: siempre pide una página con limit", async () => {
+    renderPage();
+    await screen.findByText("b-db");
+    for (const call of assetCalls) {
+      expect(call.searchParams.get("limit")).toBe("50");
+      // offset 0 no se envía (es el valor por defecto del servidor).
+      expect(call.searchParams.get("offset")).toBeNull();
+    }
+  });
+
+  it("los contadores vienen del servidor, no de la página descargada", async () => {
+    renderPage();
+    await screen.findByText("b-db");
+    const stats = screen.getByLabelText("Resumen de estado");
+    expect(within(stats).getByText("10000")).toBeInTheDocument();
+    expect(within(stats).getByText("2900")).toBeInTheDocument();
+    expect(await screen.findByText(/4000 gestionados con agente/)).toBeInTheDocument();
+    expect(screen.getByText(/riesgo crítico 12/)).toBeInTheDocument();
+    expect(summaryCalls).toBeGreaterThan(0);
+  });
+
+  it("estado y búsqueda se filtran en el servidor y vuelven a la página 1", async () => {
+    serverTotal = 120;
+    renderPage();
+    await screen.findByText("b-db");
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("offset")).toBe("50"));
+    fireEvent.click(screen.getByRole("button", { name: /Offline/ }));
+    await waitFor(() => {
+      const params = assetCalls.at(-1)!.searchParams;
+      expect(params.get("status")).toBe("offline");
+      expect(params.get("offset")).toBeNull();
+    });
+    fireEvent.change(screen.getByLabelText("Buscar activos"), { target: { value: "srv" } });
+    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("q")).toBe("srv"));
+    expect(screen.getByText(/página 1 de 3/)).toBeInTheDocument();
   });
 });

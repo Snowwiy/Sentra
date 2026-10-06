@@ -1,0 +1,25 @@
+# Copia de seguridad diaria de PostgreSQL (Fase 4M). Guía: docs/backup-restore.md.
+# Lo lanza sentra-backup.timer. Usa BACKUP_DIR y BACKUP_RETENTION_DAYS de sentra.env.
+#   sudo cp deploy/systemd/sentra-backup.* /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sentra-backup.timer
+#   systemctl list-timers sentra-backup.timer ; journalctl -u sentra-backup
+
+[Unit]
+Description=Sentra: copia de seguridad de PostgreSQL
+After=postgresql.service
+
+[Service]
+Type=oneshot
+User=sentra
+Group=sentra
+WorkingDirectory=/opt/sentra/backend
+EnvironmentFile=/etc/sentra/sentra.env
+# Código de salida distinto de 0 si la copia o su verificación fallan (systemd lo marca
+# como failed: vigilarlo con OnFailure= o con la monitorización del servidor).
+ExecStart=/opt/sentra/backend/.venv/bin/python -m app.cli backup
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+ReadWritePaths=/var/backups/sentra

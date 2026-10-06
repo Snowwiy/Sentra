@@ -8,6 +8,7 @@ import logging
 
 from fastapi import APIRouter, Request, Response, status
 
+from app import __version__
 from app.api.auth import (
     Auth,
     CurrentAuth,
@@ -48,6 +49,7 @@ def auth_state(user: User, session: UserSession, token: str) -> AuthState:
         permissions=sorted(permissions_for(user.role)),
         csrf_token=csrf_token_for(token),
         session_expires_at=session.expires_at,
+        server_version=__version__,
     )
 
 

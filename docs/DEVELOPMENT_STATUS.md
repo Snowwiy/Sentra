@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-05 (Fase 4L).
+Last updated: 2026-10-06 (Fase 4M).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0023 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0024 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -22,11 +22,12 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Gestor de modelos locales | Fase 4J.2: Configuración → IA local → Modelos. Perfil de hardware (CPU, RAM, GPU NVIDIA/AMD/Intel, VRAM, disco) bajo demanda; abstracción `LocalAIRuntime` (llama.cpp, Ollama, vLLM, genérico) que solo habla con `AI_BASE_URL` local; registro de GGUF dentro de `AI_MODEL_DIRECTORIES` con cabecera validada y SHA-256; estimación de memoria (pesos + KV cache + overhead, offload, margen); motor de recomendación determinista con perfiles y "Recommended for Sentra"; selección con health check sin fallback cloud; benchmark local acotado y cancelable. Permiso `ai:manage` (solo admin). Migración 0021. [local-model-manager.md](local-model-manager.md) |
 | Gestión de incidentes | Fase 4K: incidentes `INC-000001` (secuencia, no PK) que agrupan por referencia detecciones, correlaciones, alertas y activos; state machine centralizada (open → triage → investigating ⇄ contained → resolved → closed, reopen explícito, merged terminal); severidad, prioridad (sugerida, no 1:1) y confianza (de la evidencia) separadas; creación manual o desde detección/alerta; incidentes relacionados sugeridos con motivos (sin deduplicación automática); asignación (analyst a sí mismo, admin a otros; nunca viewer ni inactivos); notas append-only; timeline unificado con cursor; evidencia agrupada; resolución con categoría obligatoria, feedback de falsos positivos, duplicado (referencia) vs fusión (admin); snapshot de riesgo 4I; concurrencia optimista (`version`, 409 `incident_conflict`); IA de solo lectura (`summary`, `timeline`, `evidence`, `next_steps`). Permisos `incidents:read` / `incidents:manage` / `incidents:admin`, auditoría `incident_*`. UI: Incidentes, detalle con 8 pestañas, panel en detección/alerta y vista SOC en el dashboard. Migración 0022. [incident-management.md](incident-management.md) |
 | Asset Context | Fase 4L: contexto de negocio por activo sin duplicar Asset (`asset_context`, `asset_tags`, `asset_context_changes`): criticidad 4I con justificación y autor, rol (sugerencia 4E aparte, nunca sobrescribe), entorno, owner, equipo, sensibilidad, zona lógica, exposición a Internet tri-estado, estado de gestión reutilizado y tags normalizadas con límites; procedencia por campo (manual/agent/discovery/inferred, listo para snmp/lldp/manufacturer/threat_intel); un evento de auditoría con diff por operación; concurrencia optimista (409 `asset_context_conflict`); riesgo con factores de contexto acotados (×1,25, solo con evidencia, `FORMULA_VERSION` 2) y visibles en la explicación; contexto y snapshots en incidentes; impacto separado de la severidad en detecciones; contexto grounded y seudonimizado en la IA; resumen de amenaza interno. Edición solo admin. UI: pestaña Contexto, filtros compactos en Activos. Migración 0023. [asset-context.md](asset-context.md) |
+| Producción y servidor central | Fase 4M: despliegue nativo (Linux/systemd de referencia, Windows Server con WinSW) detrás de Caddy (TLS, frontend estático, CSP, HSTS solo con certificado válido); `ENVIRONMENT=production` valida y se niega a arrancar inseguro (`core/production.py`, sin secretos en los mensajes) y exige HTTPS; `TRUSTED_PROXIES` con X-Forwarded-For/Proto solo desde proxies de confianza (`core/proxy.py`); redacción central de logs (`core/redaction.py`), logs JSON con `request_id` y rotación propia en Windows; `/health` (liveness) y `/health/ready` (base, migraciones, apagado; la IA no cuenta); `/metrics` Prometheus protegido; rate limiting compartido en PostgreSQL (`rate_limit_hits`, migración 0024) para login, registro, IA, mutaciones y búsquedas por usuario; jobs singleton con advisory locks y benchmark único entre workers; pool y `statement_timeout` configurables; `GET /dashboard/summary` y `/assets` paginado en SQL (estado efectivo, subred, orden por IP/puertos...); CLI `production-check`, `migration-status`, `generate-secret`, `backup`, `verify-backup`, `restore`, `integrity-check`. Plantillas en `deploy/`. [production-deployment.md](production-deployment.md), [network-security.md](network-security.md), [backup-restore.md](backup-restore.md), [observability.md](observability.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
 | Frontend (React, Vite) | Done: dashboard (counts, assets, active alerts, recent activity), asset detail with tabs Overview / Processes / Services / Software / Network / Users / Events / Alerts (search, filters, sort, pagination, change history), alerts page with filters and detail; Network page (discovered/monitored/managed, filters, discovery runs) and Exposure tab. Fase 4D: descubrimiento desde la página Red (iniciar, progreso real, cancelar, resultado, historial, estado del scheduler) sin terminal |
 | Alerts | Done: offline, sustained high CPU/RAM, critical disk, watched service stopped, critical events, error bursts, administrator changes; new asset / unknown device / disappeared / port exposed / port closed / monitoring lost (discovery; first run is a quiet baseline); states open/acknowledged/resolved (ack/resolve desde el dashboard o la CLI), dedup, occurrences, auto-resolve |
-| Tests | Backend 915 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 222 (+21 skipped on Linux) (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 230 tests (Vitest, incl. DOM tests of the Agentes, Red e Incidentes pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 275 contract checks (incl. detección simple, correlación, deduplicación y resolución; riesgo: activo limpio → detección alta → correlación → criticidad → resolver; IA: estado, 409 sin configurar, alcance y permisos; incidentes: detección → caso → cerrado con auditoría, detección relacionada adjuntada sin duplicar y dos sesiones con 409; contexto de activo: admin fija el contexto, auditoría, riesgo e incidente con contexto, viewer sin edición y dos admins con 409); `qa/perf_detections.py`, `qa/perf_risk.py`, `qa/perf_ai.py`, `qa/perf_incidents.py` y `qa/perf_asset_context.py` miden los motores con datos sintéticos |
+| Tests | Backend 968 (real PostgreSQL, incl. model/migration drift, indexed foreign keys, frontend type contract checks, autenticación/RBAC/CSRF/auditoría and real TCP discovery on loopback), agent 224 (+21 skipped on Linux) (3 Windows-only; Linux packaging tests run the real installer under a fake root); frontend 235 tests (Vitest, incl. DOM tests of the Agentes, Red e Incidentes pages with Testing Library + jsdom) + tsc + ESLint + build; `qa/e2e_api.py` 277 contract checks (incl. detección simple, correlación, deduplicación y resolución; riesgo: activo limpio → detección alta → correlación → criticidad → resolver; IA: estado, 409 sin configurar, alcance y permisos; incidentes: detección → caso → cerrado con auditoría, detección relacionada adjuntada sin duplicar y dos sesiones con 409; contexto de activo: admin fija el contexto, auditoría, riesgo e incidente con contexto, viewer sin edición y dos admins con 409); `qa/perf_detections.py`, `qa/perf_risk.py`, `qa/perf_ai.py`, `qa/perf_incidents.py` y `qa/perf_asset_context.py` miden los motores con datos sintéticos; `qa/e2e_production.py` (Fase 4M: Caddy real con TLS, IA caída, PostgreSQL caído y recuperado, dos workers) y `qa/perf_dashboard.py` (dashboard con 10 000 activos) |
 
 ## Architecture
 
@@ -99,7 +100,8 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
 
 Agent (token): `POST /agents/register` (one-time token or enrollment key) · `POST /agents/heartbeat` ·
 `POST /telemetry` · `POST /inventory` · `POST /events` · `POST /processes`.
-Read (dashboard): `GET /health` · `GET /assets` · `GET /assets/{id}` ·
+Health: `GET /health` (liveness) · `GET /health/ready` (readiness) · `GET /metrics` (Prometheus,
+apagado por defecto). Read (dashboard): `GET /dashboard/summary` · `GET /assets` (paginado) · `GET /assets/{id}` ·
 `GET /assets/{id}/telemetry` · `GET /assets/{id}/inventory` · `GET /assets/{id}/changes` ·
 `GET /assets/{id}/processes` · `GET /alerts` · `GET /alerts/{id}` · `GET /events` ·
 `GET /agents` · `GET /assets/{id}/agent` · `GET /detections` · `GET /detections/{id}` ·
@@ -114,7 +116,8 @@ Console (local dashboard): `GET /console` · `GET|POST /console/enrollment-token
 `POST /console/discovery/jobs` · `POST /console/discovery/jobs/{id}/cancel` (Fase 4D).
 Operator CLI (`python -m app.cli`): `list-agents`, `revoke-agent`, `reinstate-agent`,
 `ack-alert`, `resolve-alert`, `purge-old-data`, `discovery-scope`, `discover`, `run-detections`,
-`run-risk [--all]`.
+`run-risk [--all]`; Fase 4M: `production-check`, `migration-status`, `generate-secret`, `backup`,
+`verify-backup`, `restore --target-db --confirm`, `integrity-check`.
 Read (discovery): `GET /assets/{id}/exposure` · `GET /discovery/scope` · `GET /discovery/schedule` ·
 `GET /discovery/jobs` · `GET /discovery/jobs/{id}`. `discover` en la CLI queda como herramienta
 administrativa/debug: el uso normal es la página Red (docs/discovery.md).
@@ -142,9 +145,14 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Known issues and limitations
 
-- Sin HTTPS integrado: en la LAN por HTTP la contraseña y la cookie viajan en claro; en
-  producción servir detrás de un proxy HTTPS (docs/authentication.md). Los límites de login
-  son en memoria de un solo proceso. `GET /health` sigue público (sin datos).
+- Fase 4M: HTTPS mediante Caddy (no integrado en la API). En desarrollo por HTTP en la LAN
+  la contraseña y la cookie viajan en claro. Probado en Linux con Caddy real y `tls internal`;
+  pendiente en Windows Server real y con un certificado de la CA interna de la empresa.
+- Fase 4M: `AI_MAX_CONCURRENT` y los contadores de `/metrics` (HTTP, jobs, pool) son por
+  proceso; con N workers el runtime de IA puede recibir N x AI_MAX_CONCURRENT peticiones.
+- Fase 4M: la restauración necesita que un administrador de PostgreSQL cree antes la base
+  vacía (el rol `sentra` no tiene CREATEDB). `pg_dump`/`pg_restore` deben ser de la versión
+  del servidor o más nuevos.
 - Agent runs in the foreground as the current user; no Windows service/installer. The Security
   event channel needs admin rights: as a standard user it is logged once as unreadable and
   skipped (privileges are never changed).
@@ -249,13 +257,16 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Recommended next phase
 
+Fase 4M (producción y servidor central) entregada: desplegar en un servidor de prueba con
+Caddy y la CA interna, ejecutar `production-check`, programar copias y hacer una restauración
+de prueba; validar la CSP con el dashboard real y los agentes Windows/Linux por HTTPS.
+
 Fase 4L (Asset Context) entregada. Antes de la siguiente fase, probar 4K/4L con datos
 reales en el PC (contexto de servidores reales, flujo detección → incidente → cierre con
 varios operadores) y la 4J/4J.2 con un runtime y modelo local reales; revisar los pesos del
-riesgo y del contexto con datos reales; paginar la lista de activos del dashboard.
+riesgo y del contexto con datos reales.
 
-1. HTTPS de producción documentado y probado (proxy inverso) y validación física de la
-   Fase 4F (servicio Windows).
+1. Validación física de la Fase 4F (servicio Windows) y de la 4M en Windows Server.
 2. Per-asset alert thresholds.
 4. Downsampling for old telemetry (retention exists, opt-in); journald events on Linux
    (systemd services and dpkg/rpm packages are collected already).

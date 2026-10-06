@@ -16,7 +16,14 @@ def test_list_assets_is_empty_initially(client: TestClient) -> None:
     response = client.get("/api/v1/assets")
 
     assert response.status_code == 200
-    assert response.json() == {"items": [], "total": 0}
+    # Fase 4M: siempre paginado en el servidor (página por defecto de 100).
+    assert response.json() == {
+        "items": [],
+        "total": 0,
+        "limit": 100,
+        "offset": 0,
+        "status_counts": {"online": 0, "offline": 0, "unknown": 0},
+    }
 
 
 def test_list_assets_includes_status_and_latest_telemetry(client: TestClient) -> None:
@@ -138,7 +145,7 @@ def test_malformed_asset_id_returns_validation_error(client: TestClient) -> None
 def test_unhandled_errors_do_not_leak_details(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    def explode(self: AssetService) -> AssetList:
+    def explode(self: AssetService, *args: object, **kwargs: object) -> AssetList:
         raise RuntimeError("secret internal detail")
 
     monkeypatch.setattr(AssetService, "list_assets", explode)
@@ -147,7 +154,9 @@ def test_unhandled_errors_do_not_leak_details(
         response = raw_client.get("/api/v1/assets")
 
     assert response.status_code == 500
-    assert response.json() == {
-        "error": {"code": "internal_error", "message": "Internal server error"}
-    }
-    assert "secret" not in response.text
+    body = response.json()
+    # Fase 4M: código estable, mensaje seguro y el request_id para buscar la traza en el log.
+    request_id = body["error"].pop("request_id")
+    assert body == {"error": {"code": "internal_error", "message": "Internal server error"}}
+    assert response.headers["X-Request-ID"] == request_id
+    assert "secret" not in response.text and "Traceback" not in response.text

@@ -83,4 +83,10 @@ class AssetRead(ResponseModel):
 
 class AssetList(ResponseModel):
     items: list[AssetRead]
+    # Activos que cumplen los filtros (todas las páginas).
     total: int
+    # Fase 4M: la lista siempre está paginada en el servidor.
+    limit: int
+    offset: int
+    # Recuento por estado efectivo (online/offline/unknown) con los demás filtros aplicados.
+    status_counts: dict[str, int]

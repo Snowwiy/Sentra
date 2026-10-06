@@ -438,6 +438,23 @@ class LocalModelService:
         rank(list(evaluations.values()), profile)
         return evaluations
 
+    def _benchmark_running_elsewhere(self) -> bool:
+        """Fase 4M: otro worker (u otra instancia) tiene un benchmark "running" vigente.
+
+        El estado de BenchmarkState es por proceso; con varios workers solo la base lo ve
+        todo. Un registro más viejo que plazo + margen ya lo marca fallido
+        _expire_stale_benchmarks, así que aquí solo cuentan los que siguen en plazo.
+        """
+        self._expire_stale_benchmarks()
+        return (
+            self._session.scalar(
+                select(func.count())
+                .select_from(AIModelBenchmark)
+                .where(AIModelBenchmark.status == "running")
+            )
+            or 0
+        ) > 0
+
     def _expire_stale_benchmarks(self) -> None:
         limit = datetime.now(UTC) - (
             timedelta(seconds=self._settings.ai_benchmark_timeout_seconds) + STALE_BENCHMARK_GRACE
@@ -982,7 +999,7 @@ class LocalModelService:
         if model.runtime != kind:
             raise AIModelRuntimeMismatchError("The model does not belong to the configured runtime")
         runtime = self._runtime(kind)
-        if self._state.benchmarks.running() is not None:
+        if self._state.benchmarks.running() is not None or self._benchmark_running_elsewhere():
             raise AIBenchmarkBusyError("Another benchmark is running; wait or cancel it")
         if not runtime.health().reachable:
             raise AIModelUnavailableError("The local AI runtime is not responding")

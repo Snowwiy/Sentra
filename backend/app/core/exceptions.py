@@ -9,6 +9,9 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import TimeoutError as PoolTimeoutError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
+from app.core.metrics import REGISTRY
+from app.core.request_context import current_request_id
+
 logger = logging.getLogger(__name__)
 
 
@@ -77,9 +80,11 @@ class RateLimitedError(SentraError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "rate_limited"
 
-    def __init__(self, message: str, retry_after: float) -> None:
+    def __init__(self, message: str, retry_after: float, scope: str = "other") -> None:
         super().__init__(message)
         self.retry_after = max(int(retry_after) + 1, 1)
+        # Ámbito del límite (login, agent_register, ai...) solo para la métrica de 429.
+        self.scope = scope
 
 
 class PolicyError(SentraError):
@@ -148,11 +153,27 @@ class DiscoveryTargetError(SentraError):
     code = "discovery_target_refused"
 
 
-def _error(status_code: int, code: str, message: str, details: object = None) -> JSONResponse:
+def _error(
+    status_code: int,
+    code: str,
+    message: str,
+    details: object = None,
+    *,
+    with_request_id: bool = False,
+) -> JSONResponse:
     body: dict[str, object] = {"code": code, "message": message}
     if details is not None:
         body["details"] = details
-    return JSONResponse(status_code=status_code, content={"error": body})
+    request_id = current_request_id() if with_request_id else None
+    if request_id:
+        # Fase 4M: en errores del servidor el operador necesita ir del mensaje que ve el
+        # usuario a la traza del log; el id es lo único que se expone (nunca la traza).
+        body["request_id"] = request_id
+    response = JSONResponse(status_code=status_code, content={"error": body})
+    if request_id:
+        # Un 500 no pasa por el middleware que añade la cabecera (lo genera la capa externa).
+        response.headers["X-Request-ID"] = request_id
+    return response
 
 
 async def _sentra_error_handler(_: Request, exc: Exception) -> JSONResponse:
@@ -162,6 +183,7 @@ async def _sentra_error_handler(_: Request, exc: Exception) -> JSONResponse:
         response.headers["WWW-Authenticate"] = "Bearer"
     if isinstance(error, RateLimitedError):
         response.headers["Retry-After"] = str(error.retry_after)
+        REGISTRY.rate_limited(error.scope)
     return response
 
 
@@ -199,13 +221,23 @@ async def _database_unavailable_handler(request: Request, exc: Exception) -> JSO
         status.HTTP_503_SERVICE_UNAVAILABLE,
         "database_unavailable",
         "Database temporarily unavailable, retry later",
+        with_request_id=True,
     )
 
 
 async def _unhandled_error_handler(request: Request, exc: Exception) -> JSONResponse:
     # Full details go to the logs only; clients never receive internal tracebacks.
     logger.exception("Unhandled error", extra={"path": request.url.path}, exc_info=exc)
-    return _error(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error", "Internal server error")
+    response = _error(
+        status.HTTP_500_INTERNAL_SERVER_ERROR,
+        "internal_error",
+        "Internal server error",
+        with_request_id=True,
+    )
+    # La capa externa que genera el 500 no pasa por el middleware de cabeceras de seguridad.
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 def register_exception_handlers(app: FastAPI) -> None:

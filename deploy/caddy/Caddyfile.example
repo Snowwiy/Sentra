@@ -1,0 +1,107 @@
+# Sentra: reverse proxy de producción con Caddy 2 (Fase 4M).
+# Guía completa: docs/production-deployment.md y docs/network-security.md.
+#
+# Topología:  navegadores y agentes --HTTPS 443--> Caddy --HTTP 127.0.0.1:8000--> API
+#             Caddy sirve además el frontend estático (frontend/dist).
+#
+# Copiar a /etc/caddy/Caddyfile (Linux) o junto a caddy.exe (Windows), cambiar el nombre del
+# sitio, las rutas y elegir UNO de los tres casos de TLS. Validar con:
+#     caddy validate --config Caddyfile --adapter caddyfile
+#
+# Caddy ya usa TLS 1.2+ con cifrados seguros por defecto; no se toca la lista de cifrados.
+# Caddy no acepta X-Forwarded-For de los clientes (solo de servers.trusted_proxies), así que
+# la API recibe siempre la IP real del cliente en X-Forwarded-For.
+{
+	# Caso A (certificado público): correo para el aviso de caducidad de Let's Encrypt.
+	# email admin@empresa.com
+
+	# Sin panel de administración remoto: solo la API local de Caddy en loopback.
+	admin localhost:2019
+}
+
+# Redirección HTTP -> HTTPS: Caddy la crea sola para el sitio de abajo (puerto 80 -> 443).
+# El login nunca viaja por HTTP: la API en producción rechaza además todo lo que no sea https.
+
+sentra.empresa.lan {
+	# --- TLS: elegir UN caso ---------------------------------------------------------------
+	# Caso A, certificado público (nombre resoluble desde Internet y puerto 80/443 accesibles
+	# para la validación ACME): borrar la línea "tls" y Caddy obtiene y renueva el certificado.
+	#
+	# Caso B, CA interna de la empresa (LAN/VPN): certificado y clave emitidos por la CA
+	# interna para este nombre. La CA debe estar instalada en navegadores y agentes
+	# (docs/network-security.md, "CA interna").
+	tls /etc/caddy/certs/sentra.crt /etc/caddy/certs/sentra.key
+	#
+	# Caso C, SOLO PRUEBAS (NO PRODUCCIÓN): Caddy crea su propia CA local. Los navegadores
+	# avisarán hasta instalar su raíz; no usar para agentes reales. Comentar HSTS abajo.
+	# tls internal
+
+	encode zstd gzip
+
+	# Tamaño máximo de cuerpo: igual que MAX_REQUEST_BYTES de la API (4 MB por defecto).
+	request_body {
+		max_size 4MB
+	}
+
+	# HSTS solo cuando el certificado es correcto (casos A y B) y nunca en desarrollo:
+	# durante un año el navegador ya no aceptará HTTP ni un certificado inválido.
+	header Strict-Transport-Security "max-age=31536000"
+	header -Server
+
+	# Métricas Prometheus: nunca a través del proxy público. Se consultan desde el propio
+	# servidor (127.0.0.1:8000) o desde METRICS_ALLOWED_NETWORKS (docs/observability.md).
+	# Bloques handle: Caddy elige el de ruta más específica, así que este gana a /api/*.
+	handle /api/v1/metrics* {
+		respond 404
+	}
+
+	# --- API -----------------------------------------------------------------------------
+	handle /api/* {
+		reverse_proxy 127.0.0.1:8000 {
+			# Host se conserva (por defecto en Caddy): la API lo compara con ALLOWED_HOSTS y
+			# con el Origin del navegador (CSRF). X-Forwarded-For/Proto los añade Caddy.
+			transport http {
+				dial_timeout 5s
+				# La IA local puede tardar (AI_TIMEOUT_SECONDS, benchmarks hasta 180 s): margen
+				# amplio para no cortar respuestas largas. El resto de rutas responde en ms.
+				response_header_timeout 300s
+			}
+		}
+	}
+
+	# Nunca publicar source maps aunque alguien los genere por error (SENTRA_BUILD_SOURCEMAP).
+	@maps path *.map
+	handle @maps {
+		respond 404
+	}
+
+	# --- Frontend (SPA estática) ---------------------------------------------------------
+	handle {
+		root * /opt/sentra/frontend/dist
+		# Los ficheros de assets/ llevan hash en el nombre: caché larga e inmutable.
+		@hashed path /assets/*
+		header @hashed Cache-Control "public, max-age=31536000, immutable"
+		# index.html siempre se revalida para recoger cada versión nueva al actualizar.
+		@index path / /index.html
+		header @index Cache-Control "no-cache"
+		# CSP del dashboard: solo recursos propios. El build de Vite no usa scripts ni estilos
+		# en línea; si un cambio futuro los necesitara, fallará aquí (mejor que relajar la CSP).
+		header {
+			Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'"
+			X-Content-Type-Options "nosniff"
+			X-Frame-Options "DENY"
+			Referrer-Policy "no-referrer"
+			Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=(), usb=(), interest-cohort=()"
+		}
+		try_files {path} /index.html
+		file_server
+	}
+
+	log {
+		output file /var/log/caddy/sentra-access.log {
+			roll_size 50MiB
+			roll_keep 10
+		}
+		format json
+	}
+}

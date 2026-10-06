@@ -9,13 +9,16 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
 from app.ai.config import AIConfig
+from app.api.auth import ApiLimits
 from app.api.v1.router import api_router
 from app.core.body_limit import BodySizeLimitMiddleware
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
 from app.core.logging import configure_logging
 from app.core.middleware import request_logging_middleware
-from app.core.rate_limit import RateLimiter
+from app.core.production import enforce_production
+from app.core.proxy import HttpsRequiredMiddleware, TrustedProxyMiddleware
+from app.core.rate_limit import make_limiter
 from app.db.migrations import expected_heads, is_up_to_date
 from app.db.session import get_engine, get_sessionmaker
 from app.services.ai_service import AIRuntime, default_provider_factory
@@ -98,6 +101,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     for job in jobs:
         job.start()
     yield
+    # Fase 4M, apagado ordenado: primero /health/ready deja de estar listo (el proxy deja
+    # de enviar tráfico nuevo), luego se paran los jobs (ninguno empieza una vuelta nueva y
+    # los largos se interrumpen), después el discovery y la IA, y al final el pool.
+    app.state.draining = True
+    logger.info("shutting down", extra={"jobs": [job.name for job in jobs]})
     for job in jobs:
         job.stop()
     # Antes de cerrar el pool: el scan en curso del dashboard se cancela (resultado parcial,
@@ -109,9 +117,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     get_engine().dispose()
 
 
-def create_app() -> FastAPI:
-    settings = get_settings()
-    configure_logging(settings.log_level)
+def create_app(settings: Settings | None = None) -> FastAPI:
+    settings = settings or get_settings()
+    configure_logging(
+        settings.log_level,
+        settings.log_format,
+        settings.log_file,
+        settings.log_file_max_mb,
+        settings.log_file_backups,
+    )
+    # Fase 4M: en producción, una configuración insegura impide arrancar (sin secretos en
+    # el mensaje). Ver core/production.py y `python -m app.cli production-check`.
+    enforce_production(settings)
 
     app = FastAPI(
         title=settings.app_name,
@@ -141,15 +158,34 @@ def create_app() -> FastAPI:
         # falso). Opcional para no romper el acceso por IP en la LAN de desarrollo.
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=settings.allowed_host_list)
     app.middleware("http")(request_logging_middleware)
-    # Added last so it runs first: oversized bodies are refused before any other work.
+    if settings.is_production:
+        # Después del proxy de confianza (que fija el esquema real) y antes que todo lo demás.
+        app.add_middleware(HttpsRequiredMiddleware)
+    # Oversized bodies are refused before any other work.
     app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+    # Added last so it runs first (Fase 4M): IP del cliente y esquema reales solo desde
+    # TRUSTED_PROXIES; el resto de capas (logs, rate limiting, CSRF, HTTPS) ya los ven.
+    app.add_middleware(TrustedProxyMiddleware, networks=settings.trusted_proxy_networks)
     register_exception_handlers(app)
-    # Límites en memoria, uno por aplicación (core/rate_limit.py).
-    app.state.login_guard = LoginGuard(settings)
-    app.state.register_limiter = RateLimiter(settings.agent_register_max_per_minute, 60)
+    app.state.draining = False
+    # Límites por aplicación: en memoria o en PostgreSQL según RATE_LIMIT_BACKEND
+    # (core/rate_limit.py). El engine se resuelve al usarlo, nunca al crear la app.
+    backend = settings.effective_rate_limit_backend
+    app.state.login_guard = LoginGuard(settings, get_engine)
+    app.state.register_limiter = make_limiter(
+        backend, "agent_register", settings.agent_register_max_per_minute, 60, get_engine
+    )
+    app.state.api_limits = ApiLimits(
+        mutations=make_limiter(
+            backend, "api_mutations", settings.api_mutations_per_user_per_minute, 60, get_engine
+        ),
+        searches=make_limiter(
+            backend, "api_searches", settings.api_searches_per_user_per_minute, 60, get_engine
+        ),
+    )
     # Fase 4J: límites de la IA y fábrica del proveedor (los tests inyectan uno falso).
     # Nada se conecta al proveedor al arrancar: la IA solo actúa bajo demanda.
-    app.state.ai_runtime = AIRuntime(AIConfig.from_settings(settings))
+    app.state.ai_runtime = AIRuntime(AIConfig.from_settings(settings), backend, get_engine)
     app.state.ai_provider_factory = default_provider_factory
     # Fase 4J.2: gestor de modelos locales. No detecta hardware ni contacta el runtime al
     # arrancar ni lanza benchmarks: todo ocurre al abrir la página o por acción del admin.

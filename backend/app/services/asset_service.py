@@ -1,11 +1,11 @@
-import ipaddress
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import ColumnElement, Select, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
@@ -21,15 +21,34 @@ from app.models.asset_context import (
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.risk import AssetRisk
 from app.models.telemetry import TelemetrySample
-from app.repositories.asset_repository import AssetRepository
+from app.repositories.alert_repository import escape_like
+from app.repositories.asset_repository import (
+    AssetRepository,
+    effective_status_expr,
+    inet_expr,
+    sort_columns,
+)
 from app.repositories.telemetry_repository import TelemetryRepository
 from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence
 from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
 from app.services.identification import network_adapter_vendor
 
-AssetSort = Literal["name", "criticality"]
-_CRITICALITY_RANK = {c: rank for rank, c in enumerate(AssetCriticality)}
+AssetSort = Literal[
+    "name",
+    "criticality",
+    "ip",
+    "type",
+    "status",
+    "method",
+    "first_seen",
+    "last_seen",
+    "network_seen",
+    "ports",
+]
+# Página por defecto de GET /assets cuando el cliente no pide limit (Fase 4M).
+DEFAULT_PAGE_SIZE = 100
+MAX_PAGE_SIZE = 500
 
 
 def effective_status(asset: Asset, now: datetime, timeout: timedelta) -> AssetStatus:
@@ -71,18 +90,41 @@ class AssetFilter:
     department: str | None = None
     tag: str | None = None
 
-    @property
-    def sql_only(self) -> bool:
-        """True si ningún filtro necesita Python (estado efectivo, subred, búsqueda...)."""
-        return (
-            self.method is None
-            and self.status is None
-            and self.device_type is None
-            and self.subnet is None
-            and not self.search
-        )
+    def refine(
+        self, stmt: Select[Asset], status_expr: ColumnElement[Any], *, with_status: bool = True
+    ) -> Select[Asset]:
+        """Todos los filtros en SQL (Fase 4M): nada se filtra en Python.
 
-    def refine(self, stmt: Select[Asset]) -> Select[Asset]:
+        `with_status=False` deja fuera el filtro de estado, para contar por estado los
+        activos del resto de filtros (las tarjetas Online/Offline del dashboard).
+        """
+        if self.method is not None:
+            stmt = stmt.where(Asset.monitoring_method == self.method)
+        if with_status and self.status is not None:
+            stmt = stmt.where(status_expr == self.status.value)
+        if self.device_type is not None:
+            stmt = stmt.where(func.coalesce(Asset.device_type, "unknown") == self.device_type)
+        if self.subnet is not None:
+            # <<= : contenida en la red. Filas con una IP inválida (inet NULL) no coinciden.
+            stmt = stmt.where(inet_expr().op("<<=")(cast(str(self.subnet), INET)))
+        if self.search:
+            pattern = "%" + escape_like(self.search.lower()) + "%"
+            stmt = stmt.where(
+                or_(
+                    *(
+                        func.lower(column).like(pattern, escape="\\")
+                        for column in (
+                            Asset.device_name,
+                            Asset.hostname,
+                            Asset.reverse_dns,
+                            Asset.primary_ip,
+                            Asset.mac_address,
+                            Asset.device_vendor,
+                            Asset.vendor,
+                        )
+                    )
+                )
+            )
         if self.criticality is not None:
             stmt = stmt.where(Asset.criticality == self.criticality)
         return filter_statement(
@@ -95,34 +137,6 @@ class AssetFilter:
             department=self.department,
             tag=self.tag,
         )
-
-    def matches(self, asset: Asset, status: AssetStatus) -> bool:
-        if self.method is not None and asset.monitoring_method != self.method:
-            return False
-        if self.status is not None and status != self.status:
-            return False
-        if self.device_type is not None and (asset.device_type or "unknown") != self.device_type:
-            return False
-        if self.subnet is not None:
-            try:
-                address = ipaddress.ip_address(asset.primary_ip)
-            except ValueError:
-                return False
-            if address.version != self.subnet.version or address not in self.subnet:
-                return False
-        if self.search:
-            needle = self.search.lower()
-            fields = (
-                asset.device_name,
-                asset.hostname,
-                asset.reverse_dns,
-                asset.primary_ip,
-                asset.mac_address,
-                asset.device_vendor,
-                asset.vendor,
-            )
-            return any(needle in (value or "").lower() for value in fields)
-        return True
 
 
 def open_ports_by_asset(session: Session, asset_ids: Iterable[int]) -> dict[int, list[int]]:
@@ -198,30 +212,25 @@ class AssetService:
         self,
         f: AssetFilter | None = None,
         sort: AssetSort = "name",
-        limit: int | None = None,
+        limit: int = DEFAULT_PAGE_SIZE,
         offset: int = 0,
+        descending: bool = False,
     ) -> AssetList:
-        """Activos que cumplen el filtro. Sin `limit` devuelve todos (contrato previo a 4L);
-        con `limit`/`offset` pagina y `total` sigue contando todos los que cumplen."""
+        """Una página de activos que cumplen el filtro, filtrada, ordenada y paginada en SQL.
+
+        Fase 4M: ya no existe el modo "todos los activos" (con 10 000 activos el dashboard
+        tardaba ~1,5 s por descargar y serializar la lista entera). `total` cuenta todos los
+        que cumplen el filtro y `status_counts` los reparte por estado ignorando solo el
+        filtro de estado (las tarjetas del dashboard).
+        """
         f = f or AssetFilter()
         now = datetime.now(UTC)
-        if limit is not None and f.sql_only:
-            # Con 10 000 activos, paginar en SQL evita cargar todos en memoria por página.
-            page, total = self._assets.page(f.refine, sort == "criticality", limit, offset)
-            assets = list(page)
-        else:
-            # Status is resolved at read time (see effective_status), so filtering happens here.
-            assets = [
-                asset
-                for asset in self._assets.list_all(f.refine)
-                if f.matches(asset, effective_status(asset, now, self._timeout))
-            ]
-            if sort == "criticality":
-                # Estable: dentro de la misma criticidad se conserva el orden por nombre.
-                assets.sort(key=lambda a: -_CRITICALITY_RANK[a.criticality])
-            total = len(assets)
-            if limit is not None:
-                assets = assets[offset : offset + limit]
+        status = effective_status_expr(now, self._timeout)
+        order = sort_columns(sort, descending, status)
+        assets, total = self._assets.page(lambda stmt: f.refine(stmt, status), order, limit, offset)
+        by_status = self._assets.count_by(
+            lambda stmt: f.refine(stmt, status, with_status=False), status
+        )
         # Datos derivados solo de la página (una consulta por tipo, sin N+1).
         latest = self._telemetry.latest_by_asset(asset.id for asset in assets)
         ports = open_ports_by_asset(self._session, (asset.id for asset in assets))
@@ -238,7 +247,13 @@ class AssetService:
             )
             for asset in assets
         ]
-        return AssetList(items=items, total=total)
+        return AssetList(
+            items=items,
+            total=total,
+            limit=limit,
+            offset=offset,
+            status_counts={s.value: by_status.get(s.value, 0) for s in AssetStatus},
+        )
 
     def get_asset(self, public_id: UUID) -> AssetRead:
         asset = self._assets.get_by_public_id(public_id)

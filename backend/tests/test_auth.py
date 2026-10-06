@@ -536,7 +536,8 @@ def test_permission_matrix(
 
 # Rutas que no usan la sesión del dashboard, cada una con su credencial y motivo.
 NON_SESSION_ROUTES = {
-    ("GET", "/api/v1/health"),  # monitorización/balanceadores; sin datos sensibles
+    ("GET", "/api/v1/health"),  # liveness: monitorización/balanceadores; sin datos sensibles
+    ("GET", "/api/v1/health/ready"),  # readiness: solo ok/error por dependencia
     ("POST", "/api/v1/auth/login"),  # por definición, sin sesión
     ("POST", "/api/v1/agents/register"),  # token/clave de enrollment
     ("POST", "/api/v1/agents/heartbeat"),  # token de agente

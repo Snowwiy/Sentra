@@ -1,0 +1,55 @@
+"""Exclusión mutua entre procesos con advisory locks de PostgreSQL (Fase 4M).
+
+Con varios workers de uvicorn, o una segunda instancia de la API arrancada por error, cada
+proceso lanza sus propios jobs periódicos (offline sweeper, detección, riesgo, retención,
+discovery programado). Repetirlos no corrompe datos (índices únicos, idempotencia), pero
+duplica carga, alertas en carrera y scans de red. Un advisory lock por job garantiza que en
+cada momento solo una ejecución trabaja; las demás se saltan esa vuelta.
+
+Se eligió PostgreSQL y no Redis: ya es obligatorio, el lock muere con la conexión si el
+proceso cae (no hay "lock huérfano" que limpiar) y no añade otro servicio.
+"""
+
+import logging
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+
+from sqlalchemy import Engine, text
+
+logger = logging.getLogger(__name__)
+
+# Espacio de claves propio de Sentra (bigint). Cada job tiene la suya, fija: cambiarla
+# permitiría que una versión vieja y una nueva corriesen el mismo job a la vez.
+_BASE = 0x53_45_4E_54_00_00_00  # "SENT"
+JOB_LOCK_KEYS: dict[str, int] = {
+    "offline-sweeper": _BASE + 1,
+    "detection-engine": _BASE + 2,
+    "risk-engine": _BASE + 3,
+    "retention": _BASE + 4,
+    "discovery": _BASE + 5,
+}
+
+
+@contextmanager
+def singleton_lock(engine: Callable[[], Engine], key: int) -> Iterator[bool]:
+    """True si este proceso obtuvo el lock `key` (y lo mantiene durante el bloque).
+
+    Lock de sesión en una conexión dedicada: se libera al salir. Si la liberación falla, la
+    conexión se invalida (se cierra de verdad) para que el lock no viaje al pool.
+    """
+    conn = engine().connect()
+    try:
+        acquired = bool(conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key}).scalar())
+        conn.commit()
+        try:
+            yield acquired
+        finally:
+            if acquired:
+                try:
+                    conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+                    conn.commit()
+                except Exception:
+                    logger.warning("could not release job lock; dropping connection", exc_info=True)
+                    conn.invalidate()
+    finally:
+        conn.close()

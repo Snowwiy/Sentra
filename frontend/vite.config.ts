@@ -9,6 +9,11 @@ export default defineConfig(({ mode }) => {
 
   return {
     plugins: [react()],
+    build: {
+      // Fase 4M: sin source maps en producción por defecto (exponen el código fuente completo
+      // a cualquiera que abra el dashboard). SENTRA_BUILD_SOURCEMAP=true solo para depurar.
+      sourcemap: env.SENTRA_BUILD_SOURCEMAP === "true",
+    },
     server: {
       port: Number(env.SENTRA_FRONTEND_PORT) || 5173,
       strictPort: true,
@@ -16,9 +21,9 @@ export default defineConfig(({ mode }) => {
         // changeOrigin: false conserva el Host del navegador (p. ej. 192.168.1.10:5173): la API
         // compara el Origin de cada petición mutable con su propio origen (defensa CSRF) y
         // así funciona igual desde localhost que desde otra PC de la LAN.
-        // xfwd: añade X-Forwarded-For con la IP real del navegador; uvicorn solo la acepta
-        // porque Vite corre en la misma máquina (127.0.0.1), y así el rate limiting del login
-        // y la auditoría ven cada PC en lugar de "127.0.0.1" para todas.
+        // xfwd: añade X-Forwarded-For con la IP real del navegador; la API solo la acepta
+        // porque Vite corre en la misma máquina (127.0.0.1 está en TRUSTED_PROXIES), y así el
+        // rate limiting del login y la auditoría ven cada PC en lugar de "127.0.0.1".
         "/api": { target: apiTarget, changeOrigin: false, xfwd: true },
       },
     },

@@ -52,14 +52,16 @@ def test_health_reports_pending_migrations(client: TestClient, engine: Engine) -
         current = connection.execute(text("SELECT version_num FROM alembic_version")).scalar()
         connection.execute(text("UPDATE alembic_version SET version_num = '0001'"))
     try:
-        response = client.get("/api/v1/health")
+        response = client.get("/api/v1/health/ready")
+        # Liveness no depende de la base ni del esquema (Fase 4M).
+        assert client.get("/api/v1/health").status_code == 200
     finally:
         with engine.begin() as connection:
             connection.execute(text("UPDATE alembic_version SET version_num = :v"), {"v": current})
 
     assert response.status_code == 503
     assert response.json()["checks"]["migrations"] == "error"
-    assert client.get("/api/v1/health").json()["checks"]["migrations"] == "ok"
+    assert client.get("/api/v1/health/ready").json()["checks"]["migrations"] == "ok"
 
 
 def _nul_cases(agent_id: str) -> list[tuple[str, dict[str, Any], list[Any]]]:

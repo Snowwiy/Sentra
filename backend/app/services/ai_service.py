@@ -24,7 +24,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Engine, Select, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.ai.config import AIConfig
@@ -47,7 +47,7 @@ from app.ai.provider import (
 from app.ai.redaction import Redactor
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError, RateLimitedError
-from app.core.rate_limit import RateLimiter
+from app.core.rate_limit import Limiter, RateLimiter, make_limiter
 from app.models.ai import AIInsight
 from app.models.asset import Asset
 from app.models.detection import Detection
@@ -88,11 +88,27 @@ class HealthResult:
 class AIRuntime:
     """Estado por proceso: límites de frecuencia y de concurrencia (como el login)."""
 
-    def __init__(self, config: AIConfig) -> None:
-        self.per_user = RateLimiter(config.rate_per_user, 60)
-        self.global_ = RateLimiter(config.rate_global, 60)
+    def __init__(
+        self,
+        config: AIConfig,
+        backend: str = "memory",
+        engine: Callable[[], Engine] | None = None,
+    ) -> None:
+        # Fase 4M: con backend database los límites por minuto se comparten entre workers.
+        self.per_user: Limiter = (
+            make_limiter(backend, "ai_user", config.rate_per_user, 60, engine)
+            if engine is not None
+            else RateLimiter(config.rate_per_user, 60)
+        )
+        self.global_: Limiter = (
+            make_limiter(backend, "ai_global", config.rate_global, 60, engine)
+            if engine is not None
+            else RateLimiter(config.rate_global, 60)
+        )
         # Acotar llamadas simultáneas: cada una ocupa un hilo del threadpool de la API
-        # hasta AI_TIMEOUT_SECONDS; sin tope, un bucle de peticiones lo agotaría.
+        # hasta AI_TIMEOUT_SECONDS; sin tope, un bucle de peticiones lo agotaría. Es por
+        # proceso: con N workers el máximo real es N x AI_MAX_CONCURRENT (ver
+        # docs/production-deployment.md; el runtime local sigue siendo un servicio aparte).
         self.slots = threading.BoundedSemaphore(config.max_concurrent)
         self._health_lock = threading.Lock()
         self._health: tuple[float, str, HealthResult | None] | None = None
@@ -457,14 +473,13 @@ class AIInsightService:
 
     def _check_rate_limit(self) -> None:
         user_key = f"user:{self._requester.user_id}"
-        wait = max(
-            self._runtime.per_user.blocked_for(user_key),
-            self._runtime.global_.blocked_for("global"),
-        )
+        wait = self._runtime.global_.blocked_for("global")
+        if wait <= 0:
+            wait = self._runtime.per_user.acquire(user_key)
+            if wait <= 0:
+                wait = self._runtime.global_.acquire("global")
         if wait > 0:
-            raise RateLimitedError("Too many AI analyses; retry later", wait)
-        self._runtime.per_user.hit(user_key)
-        self._runtime.global_.hit("global")
+            raise RateLimitedError("Too many AI analyses; retry later", wait, "ai")
 
     def _infer(
         self, kind: InsightKind, ctx: AIContext, question: str | None

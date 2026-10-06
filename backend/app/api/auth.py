@@ -24,14 +24,21 @@ dispara otra web. Defensas, en capas (no se confía solo en CORS, que no impide 
 """
 
 from collections.abc import Callable
+from dataclasses import dataclass
 from typing import Annotated
 
 from fastapi import Depends, Request, Response
 
 from app.api.deps import AppSettings, DbSession
 from app.core.config import Settings
-from app.core.exceptions import CsrfError, NotAuthenticatedError, PermissionDeniedError
+from app.core.exceptions import (
+    CsrfError,
+    NotAuthenticatedError,
+    PermissionDeniedError,
+    RateLimitedError,
+)
 from app.core.permissions import Permission
+from app.core.rate_limit import Limiter
 from app.core.security import csrf_token_matches
 from app.services import audit_service
 from app.services.audit_service import Actor
@@ -71,9 +78,37 @@ def clear_session_cookie(response: Response, settings: Settings) -> None:
 
 
 def client_ip(request: Request) -> str | None:
-    # Detrás de un reverse proxy es la dirección del proxy salvo que uvicorn confíe en sus
-    # cabeceras (--proxy-headers / FORWARDED_ALLOW_IPS); ver docs/authentication.md.
+    # Fase 4M: request.client ya es la IP real validada cuando la conexión llega de un proxy
+    # de TRUSTED_PROXIES (core/proxy.py); de cualquier otro origen, el par TCP. Nunca se lee
+    # X-Forwarded-For aquí: un cliente podría escribirlo para esquivar límites.
     return request.client.host if request.client else None
+
+
+@dataclass(frozen=True)
+class ApiLimits:
+    """Límites por usuario del dashboard (Fase 4M): mutaciones y búsquedas de texto libre."""
+
+    mutations: Limiter
+    searches: Limiter
+
+
+def _apply_user_limits(request: Request, ctx: AuthContext) -> None:
+    limits: ApiLimits | None = getattr(request.app.state, "api_limits", None)
+    # Cerrar sesión nunca se bloquea: dejar a alguien sin poder salir no protege nada.
+    if limits is None or request.url.path.endswith("/auth/logout"):
+        return
+    key = f"user:{ctx.user.id}"
+    if request.method not in SAFE_METHODS:
+        # Incidentes, discovery, IA, usuarios...: un operador real no se acerca al límite;
+        # un script con una sesión robada o una UI manipulada sí.
+        wait, scope = limits.mutations.acquire(key), "api_mutations"
+    elif request.query_params.get("q", "").strip():
+        # Búsquedas ILIKE en SQL: lo caro de los listados. El polling sin texto no cuenta.
+        wait, scope = limits.searches.acquire(key), "api_searches"
+    else:
+        return
+    if wait > 0:
+        raise RateLimitedError("Too many requests, retry later", wait, scope)
 
 
 def check_origin(request: Request, settings: Settings) -> None:
@@ -117,6 +152,7 @@ def get_auth_context(request: Request, settings: AppSettings, auth: Auth) -> Aut
         check_origin(request, settings)
         if not csrf_token_matches(ctx.token, request.headers.get(CSRF_HEADER)):
             raise CsrfError("Missing or invalid CSRF token")
+    _apply_user_limits(request, ctx)
     return ctx
 
 

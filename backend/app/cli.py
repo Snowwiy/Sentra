@@ -8,6 +8,7 @@ contraseña del último admin (`reset-password`) y operar sin dashboard.
 
 import argparse
 import getpass
+import secrets
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
@@ -38,9 +39,18 @@ from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import open_ports_by_asset
 from app.services.auth_service import SessionPolicy, UserService
+from app.services.backup_service import (
+    BackupError,
+    create_backup,
+    find_tool,
+    integrity_report,
+    restore_backup,
+    verify_backup,
+)
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import oui_database, refresh_identity
+from app.services.preflight import migration_state, production_report
 from app.services.retention_service import RetentionPolicy, RetentionService
 
 
@@ -359,6 +369,134 @@ def _reclassify_assets(session: Session) -> int:
     return 0
 
 
+# --- Fase 4M: operación en producción ------------------------------------------------------
+
+
+def _production_check() -> int:
+    """PASS/WARN/FAIL de configuración, base, migraciones y disco. No modifica nada."""
+    findings = production_report(get_settings())
+    for finding in findings:
+        print(f"{finding.level:4}  {finding.message}")
+    fails = sum(1 for f in findings if f.level == "FAIL")
+    warns = sum(1 for f in findings if f.level == "WARN")
+    print(f"\n{len(findings)} checks: {fails} FAIL, {warns} WARN")
+    return 1 if fails else 0
+
+
+def _migration_status() -> int:
+    """Revisión actual y destino antes de `alembic upgrade head` (no migra).
+
+    Códigos: 0 al día, 1 hay migraciones pendientes, 2 error (base no disponible, varias
+    heads o una revisión que este código no conoce).
+    """
+    from sqlalchemy.exc import SQLAlchemyError
+
+    from app.db.session import engine_from_settings
+
+    engine = engine_from_settings(get_settings())
+    try:
+        state = migration_state(engine)
+    except SQLAlchemyError as exc:
+        print(f"database unavailable ({type(exc).__name__})", file=sys.stderr)
+        return 2
+    finally:
+        engine.dispose()
+    print(f"current revision: {', '.join(state.current) or 'none'}")
+    print(f"target revision:  {', '.join(state.heads)}")
+    if len(state.heads) != 1:
+        print("FAIL multiple Alembic heads in the code; do not migrate", file=sys.stderr)
+        return 2
+    if state.unknown:
+        print("FAIL the database is at a revision this code does not know", file=sys.stderr)
+        return 2
+    if state.up_to_date:
+        print("up to date")
+        return 0
+    print("pending: back up first, then run `alembic upgrade head`")
+    return 1
+
+
+def _generate_secret(nbytes: int) -> int:
+    # Para ADMIN_API_KEY, METRICS_TOKEN, AGENT_ENROLLMENT_KEY o la contraseña de PostgreSQL.
+    # Se imprime una vez para copiarla al .env; Sentra nunca la genera sola al arrancar
+    # (un secreto distinto en cada reinicio rompería agentes y scripts).
+    print(secrets.token_urlsafe(nbytes))
+    return 0
+
+
+def _backup(directory: str | None) -> int:
+    from pathlib import Path
+
+    settings = get_settings()
+    target = directory or settings.backup_dir
+    if not target:
+        print("set BACKUP_DIR or pass --dir", file=sys.stderr)
+        return 2
+    try:
+        result = create_backup(
+            settings.database_url,
+            Path(target),
+            settings.backup_retention_days,
+            settings.pg_bin_dir,
+            webroot=settings.frontend_dist_dir,
+        )
+    except BackupError as exc:
+        print(f"backup failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"backup ok: {result.path} ({result.size} bytes) sha256 {result.sha256}")
+    for path in result.deleted:
+        print(f"retention: deleted {path.name}")
+    return 0
+
+
+def _verify_backup(file: str) -> int:
+    from pathlib import Path
+
+    settings = get_settings()
+    try:
+        digest = verify_backup(Path(file), find_tool("pg_restore", settings.pg_bin_dir))
+    except BackupError as exc:
+        print(f"verification failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"backup verified: sha256 {digest}")
+    return 0
+
+
+def _restore(file: str, target_db: str, confirm: str | None) -> int:
+    from pathlib import Path
+
+    settings = get_settings()
+    try:
+        report = restore_backup(
+            settings.database_url, Path(file), target_db, confirm, settings.pg_bin_dir
+        )
+    except BackupError as exc:
+        print(f"restore refused or failed: {exc}", file=sys.stderr)
+        return 1
+    print(f"restored into {target_db}:")
+    for key, value in report.items():
+        print(f"  {key}: {value}")
+    print("next: alembic upgrade head (if the code is newer), start the API, check /health/ready")
+    return 0
+
+
+def _integrity(database: str | None) -> int:
+    settings = get_settings()
+    from sqlalchemy.engine import make_url
+
+    url = make_url(settings.database_url)
+    if database:
+        url = url.set(database=database)
+    try:
+        report = integrity_report(url)
+    except Exception as exc:
+        print(f"integrity check failed ({type(exc).__name__})", file=sys.stderr)
+        return 1
+    for key, value in report.items():
+        print(f"{key}: {value}")
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="python -m app.cli", description="Sentra operator tools")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -434,8 +572,47 @@ def main(argv: list[str] | None = None) -> int:
     discover.add_argument(
         "--target", help="CIDR or address inside DISCOVERY_ALLOWED_NETWORKS (default: all)"
     )
+    commands.add_parser(
+        "production-check",
+        help="PASS/WARN/FAIL report of configuration, database, migrations and files (Fase 4M)",
+    )
+    commands.add_parser(
+        "migration-status", help="show current and target Alembic revision (does not migrate)"
+    )
+    secret = commands.add_parser("generate-secret", help="print a new random secret for .env")
+    secret.add_argument("--bytes", type=int, default=32, choices=range(24, 129), metavar="24-128")
+    backup = commands.add_parser(
+        "backup", help="pg_dump (custom format) + checksum + verification + retention"
+    )
+    backup.add_argument("--dir", help="destination (default BACKUP_DIR)")
+    verify = commands.add_parser("verify-backup", help="checksum and pg_restore --list a backup")
+    verify.add_argument("file")
+    restore = commands.add_parser(
+        "restore", help="restore a verified backup into a NEW EMPTY database (never in place)"
+    )
+    restore.add_argument("file")
+    restore.add_argument("--target-db", required=True, help="existing empty database")
+    restore.add_argument("--confirm", help="repeat the target database name to confirm")
+    integrity = commands.add_parser(
+        "integrity-check", help="schema revision and row counts of the key tables"
+    )
+    integrity.add_argument("--database", help="database name (default: the configured one)")
     args = parser.parse_args(argv)
 
+    if args.command == "production-check":
+        return _production_check()
+    if args.command == "migration-status":
+        return _migration_status()
+    if args.command == "generate-secret":
+        return _generate_secret(args.bytes)
+    if args.command == "backup":
+        return _backup(args.dir)
+    if args.command == "verify-backup":
+        return _verify_backup(args.file)
+    if args.command == "restore":
+        return _restore(args.file, args.target_db, args.confirm)
+    if args.command == "integrity-check":
+        return _integrity(args.database)
     if args.command == "discovery-scope":
         return _discovery_scope()
     if args.command == "discover":

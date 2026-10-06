@@ -77,6 +77,8 @@ class AuthState(ResponseModel):
     permissions: list[Permission]
     csrf_token: str
     session_expires_at: datetime
+    # Fase 4M: la versión ya no se publica en /health (público); solo usuarios con sesión.
+    server_version: str
 
 
 class SessionRead(ResponseModel):

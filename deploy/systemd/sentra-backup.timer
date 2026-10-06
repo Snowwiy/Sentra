@@ -1,0 +1,13 @@
+# Programa sentra-backup.service cada día a las 02:30 (hora del servidor).
+
+[Unit]
+Description=Sentra: copia diaria de PostgreSQL
+
+[Timer]
+OnCalendar=*-*-* 02:30:00
+RandomizedDelaySec=10m
+# Si el servidor estaba apagado a esa hora, la copia se hace al arrancar.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

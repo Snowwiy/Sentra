@@ -17,8 +17,18 @@ function session(role: Role, csrf = `csrf-${role}`): AuthState {
     permissions: ROLE_PERMISSIONS[role],
     csrf_token: csrf,
     session_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
+    server_version: "0.1.0",
   };
 }
+
+const SUMMARY = {
+  generated_at: new Date().toISOString(),
+  assets: { total: 0, online: 0, offline: 0, unknown: 0, by_method: { discovered: 0, agentless: 0, agent: 0 }, by_device_type: {} },
+  risk: { by_level: {}, unscored: 0 },
+  incidents: { active: 0, critical: 0, unassigned: 0 },
+  detections: { active: 0, by_severity: {} },
+  active_alerts: 0,
+};
 
 type Handler = (init: RequestInit) => { status?: number; body?: unknown };
 let routes: Record<string, Handler>;
@@ -38,8 +48,11 @@ beforeEach(() => {
   calls = [];
   routes = {
     "GET /auth/me": () => UNAUTHENTICATED,
-    "GET /health": () => ({ body: { status: "ok", checks: { database: "ok" }, version: "x" } }),
-    "GET /assets": () => ({ body: { items: [], total: 0 } }),
+    "GET /health/ready": () => ({ body: { status: "ready", checks: { database: "ok" } } }),
+    "GET /dashboard/summary": () => ({ body: SUMMARY }),
+    "GET /assets": () => ({
+      body: { items: [], total: 0, limit: 50, offset: 0, status_counts: { online: 0, offline: 0, unknown: 0 } },
+    }),
     "GET /alerts": () => ({ body: { items: [], total: 0 } }),
     "GET /agents": () => ({ body: { summary: { total: 0, online: 0, offline: 0, pending: 0, revoked: 0 }, items: [] } }),
     "GET /users": () => ({ body: { items: [] } }),

@@ -25,11 +25,15 @@ interface Result<T> {
  * The last good data is kept when a later refresh fails, so callers can show it as stale.
  * `fetcher` must be memoized (useCallback); changing it restarts polling.
  * `enabled: false` stops polling (and cancels a request in flight) until it is true again.
+ * `keepPrevious`: al cambiar el fetcher (otra página, filtro u orden) se siguen mostrando los
+ * datos anteriores hasta que llega la respuesta nueva, en vez de volver a "cargando". Así una
+ * tabla paginada en el servidor no desmonta el buscador ni los filtros en cada cambio.
  */
 export function usePolling<T>(
   fetcher: Fetcher<T>,
   intervalMs: number,
   enabled = true,
+  keepPrevious = false,
 ): PollingState<T> {
   const [result, setResult] = useState<Result<T>>();
   const [refreshing, setRefreshing] = useState(false);
@@ -76,11 +80,12 @@ export function usePolling<T>(
 
   const refresh = useCallback(() => void load(), [load]);
   const current = result?.source === fetcher ? result : undefined;
+  const shown = keepPrevious ? result : current;
 
   return {
-    data: current?.data,
+    data: current?.data ?? (keepPrevious ? result?.data : undefined),
     error: current?.error,
-    loading: current === undefined,
+    loading: shown === undefined,
     // A request cancelled by disabling never reaches its `finally`; do not report it.
     refreshing: enabled && refreshing,
     updatedAt: current?.updatedAt,

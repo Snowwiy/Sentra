@@ -15,8 +15,6 @@ from uuid import UUID
 from sqlalchemy import (
     ColumnElement,
     Float,
-    String,
-    case,
     cast,
     column,
     func,
@@ -40,6 +38,7 @@ from app.models.risk import (
     RiskSnapshot,
 )
 from app.repositories.alert_repository import escape_like
+from app.repositories.asset_repository import effective_status_expr
 from app.risk.config import RiskConfig
 from app.risk.explain import explain
 from app.schemas.risk import (
@@ -107,21 +106,9 @@ class RiskService:
 
     # --- Expresiones comunes ---------------------------------------------------------------
 
-    def _status_expr(self, now: datetime) -> ColumnElement[str]:
-        """effective_status (asset_service) en SQL, para filtrar sin cargar todos los activos.
-
-        Debe seguir exactamente la misma regla: sin agente manda la red; con agente, unknown
-        hasta el primer contacto y offline pasado HEARTBEAT_TIMEOUT_SECONDS.
-        """
-        return case(
-            (
-                Asset.agent_id.is_(None),
-                func.coalesce(cast(Asset.network_status, String), AssetStatus.UNKNOWN.value),
-            ),
-            (Asset.last_seen_at.is_(None), literal(AssetStatus.UNKNOWN.value)),
-            (Asset.last_seen_at < now - self._timeout, literal(AssetStatus.OFFLINE.value)),
-            else_=cast(Asset.status, String),
-        )
+    def _status_expr(self, now: datetime) -> ColumnElement[Any]:
+        """effective_status (asset_service) en SQL; expresión compartida desde la Fase 4M."""
+        return effective_status_expr(now, self._timeout)
 
     @staticmethod
     def _last_seen_expr() -> ColumnElement[datetime]:

@@ -1,0 +1,67 @@
+# Sentra API como servicio systemd (Fase 4M). Guía: docs/production-deployment.md.
+#
+#   sudo cp deploy/systemd/sentra.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now sentra
+#   journalctl -u sentra -f            # logs JSON (journald los rota)
+#
+# Supone: usuario de sistema "sentra" sin login, código en /opt/sentra, entorno virtual en
+# /opt/sentra/backend/.venv y configuración en /etc/sentra/sentra.env (root:sentra, 640).
+# PostgreSQL es un servicio aparte: Sentra nunca lo arranca ni lo para.
+
+[Unit]
+Description=Sentra API (monitorización y eventos de seguridad)
+Documentation=file:///opt/sentra/docs/production-deployment.md
+After=network-online.target postgresql.service
+Wants=network-online.target
+# Una configuración insegura en producción impide arrancar: tras 5 intentos en 2 minutos
+# systemd deja de reintentar y el motivo queda en journalctl -u sentra.
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+Type=exec
+User=sentra
+Group=sentra
+WorkingDirectory=/opt/sentra/backend
+EnvironmentFile=/etc/sentra/sentra.env
+# Solo loopback: el único que habla con la API es el reverse proxy de la misma máquina.
+# --no-proxy-headers: X-Forwarded-* los interpreta Sentra según TRUSTED_PROXIES.
+# Un worker por defecto; con más (--workers N) ver docs/production-deployment.md (límites
+# compartidos en PostgreSQL, jobs con advisory locks, IA N x AI_MAX_CONCURRENT).
+ExecStart=/opt/sentra/backend/.venv/bin/python -m uvicorn app.main:app \
+    --host 127.0.0.1 --port 8000 --no-proxy-headers --no-server-header \
+    --timeout-graceful-shutdown 20
+# Apagado ordenado: SIGTERM -> readiness deja de estar listo, jobs y discovery se detienen.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+Restart=on-failure
+RestartSec=5
+
+# Endurecimiento del proceso (el servicio no necesita nada de esto).
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6 AF_NETLINK
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+# Escritura solo donde hace falta: logs propios (si LOG_FILE) y modelos/catálogo de IA.
+StateDirectory=sentra
+LogsDirectory=sentra
+ReadWritePaths=/var/lib/sentra /var/log/sentra
+
+[Install]
+WantedBy=multi-user.target

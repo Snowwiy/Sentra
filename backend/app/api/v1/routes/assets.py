@@ -51,7 +51,13 @@ from app.services import audit_service
 from app.services.agent_management_service import AgentManagementService
 from app.services.alert_service import AlertThresholds
 from app.services.asset_context_service import AssetContextService
-from app.services.asset_service import AssetFilter, AssetService, AssetSort
+from app.services.asset_service import (
+    DEFAULT_PAGE_SIZE,
+    MAX_PAGE_SIZE,
+    AssetFilter,
+    AssetService,
+    AssetSort,
+)
 from app.services.auth_service import AuthContext
 from app.services.exposure_service import ExposureService
 from app.services.inventory_service import InventoryService
@@ -87,8 +93,10 @@ def list_assets(
     department: Annotated[str | None, Query(min_length=1, max_length=DEPARTMENT_MAX)] = None,
     tag: Annotated[str | None, Query(min_length=1, max_length=TAG_MAX * 2)] = None,
     sort: AssetSort = "name",
-    # Opcional: sin limit se devuelven todos los activos (contrato anterior a 4L).
-    limit: Annotated[int | None, Query(ge=1, le=1000)] = None,
+    order: Literal["asc", "desc"] = "asc",
+    # Fase 4M: siempre paginado en el servidor. Sin limit, una página de DEFAULT_PAGE_SIZE
+    # (antes devolvía todos los activos, ~1,5 s con 10 000).
+    limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
 ) -> AssetList:
     search = q.strip() if q else None
@@ -117,6 +125,7 @@ def list_assets(
         sort=sort,
         limit=limit,
         offset=offset,
+        descending=order == "desc",
     )
 
 

@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { sentraApi } from "../api/sentra";
-import type { Asset, DiscoveryJob, MonitoringMethod } from "../api/types";
+import { sentraApi as api, type AssetSortKey } from "../api/sentra";
+import type { DiscoveryJob, MonitoringMethod } from "../api/types";
 import {
   DISABLED_MESSAGE,
   DISCOVERY_FEATURE,
@@ -16,8 +16,7 @@ import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { isActive } from "../lib/discovery";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
-import { compareBy, listPage, matchesText } from "../lib/listing";
-import { inIpv4Network, ipSortKey } from "../lib/net";
+import { useDebounced } from "../lib/useDebounced";
 import { useConsole } from "../lib/useConsole";
 import { useListState } from "../lib/useListState";
 import { usePolling } from "../lib/usePolling";
@@ -35,39 +34,64 @@ type ModalState = { jobId?: string } | undefined;
 
 type Key = "ip" | "name" | "type" | "status" | "method" | "first" | "last" | "ports";
 
-const SORTERS: Record<Key, (a: Asset) => string | number | null> = {
-  ip: (a) => ipSortKey(a.primary_ip),
-  // Los activos sin nombre (null) se ordenan detrás de los nombrados.
-  name: (a) => a.device_name ?? a.hostname,
-  type: (a) => a.device_type,
-  status: (a) => a.status,
-  method: (a) => a.monitoring_method,
-  first: (a) => a.discovered_at ?? a.first_seen_at,
-  last: (a) => a.last_network_seen_at,
-  ports: (a) => a.open_ports.length,
+// Fase 4M: orden, filtros y paginación en el servidor (antes se descargaban todos los activos
+// y se filtraban aquí). Columna de la tabla -> orden de GET /assets.
+const SORT_KEYS: Record<Key, AssetSortKey> = {
+  ip: "ip",
+  name: "name",
+  type: "type",
+  status: "status",
+  method: "method",
+  first: "first_seen",
+  last: "network_seen",
+  ports: "ports",
 };
 
 const METHODS: MonitoringMethod[] = ["discovered", "agentless", "agent"];
-
-function inSubnet(asset: Asset, subnet: string): boolean {
-  return asset.discovery_network === subnet || inIpv4Network(asset.primary_ip, subnet);
-}
 
 export function NetworkPage() {
   // Si hay algún job en cola o en curso, según la última respuesta del historial. Se
   // actualiza dentro del fetcher (no en un efecto) para elegir el intervalo de polling.
   const [discovering, setDiscovering] = useState(false);
   const fetchJobs = useCallback(async (signal: AbortSignal) => {
-    const result = await sentraApi.discoveryJobs(10, signal);
+    const result = await api.discoveryJobs(10, signal);
     setDiscovering(result.items.some(isActive));
     return result;
   }, []);
   const jobs = usePolling(fetchJobs, discovering ? ACTIVE_JOBS_MS : REFRESH_MS);
-  const fetchAssets = useCallback((signal: AbortSignal) => sentraApi.listAssets(signal), []);
-  const assets = usePolling(fetchAssets, discovering ? ACTIVE_ASSETS_MS : REFRESH_MS);
-  const fetchScope = useCallback((signal: AbortSignal) => sentraApi.discoveryScope(signal), []);
+  const list = useListState<Key, { method: string; status: string; type: string; subnet: string }>(
+    { key: "ip", dir: "asc" },
+    { method: "", status: "", type: "", subnet: "" },
+  );
+  const q = useDebounced(list.query.trim(), 300);
+  const { method, status, type, subnet } = list.filters;
+  const fetchAssets = useCallback(
+    (signal: AbortSignal) =>
+      api.listAssets(signal, {
+        method: (method || undefined) as MonitoringMethod | undefined,
+        status: (status || undefined) as "online" | "offline" | "unknown" | undefined,
+        deviceType: type || undefined,
+        subnet: subnet || undefined,
+        q: q || undefined,
+        sort: SORT_KEYS[list.sort.key],
+        order: list.sort.dir,
+        limit: PAGE_SIZE,
+        offset: (list.page - 1) * PAGE_SIZE,
+      }),
+    [method, status, type, subnet, q, list.sort.key, list.sort.dir, list.page],
+  );
+  const assets = usePolling(
+    fetchAssets,
+    discovering ? ACTIVE_ASSETS_MS : REFRESH_MS,
+    true,
+    true,
+  );
+  // Contadores por método y tipos existentes: agregados del servidor, no de una página.
+  const fetchSummary = useCallback((signal: AbortSignal) => api.dashboardSummary(signal), []);
+  const summary = usePolling(fetchSummary, discovering ? ACTIVE_ASSETS_MS : REFRESH_MS);
+  const fetchScope = useCallback((signal: AbortSignal) => api.discoveryScope(signal), []);
   const scope = usePolling(fetchScope, 10 * REFRESH_MS);
-  const fetchSchedule = useCallback((signal: AbortSignal) => sentraApi.discoverySchedule(signal), []);
+  const fetchSchedule = useCallback((signal: AbortSignal) => api.discoverySchedule(signal), []);
   const schedule = usePolling(fetchSchedule, SCHEDULE_MS);
   const consoleState = useConsole(DISCOVERY_FEATURE, "discovery:run");
   const [modal, setModal] = useState<ModalState>();
@@ -77,7 +101,12 @@ export function NetworkPage() {
   // Al terminar el último descubrimiento activo, la tabla se refresca en el acto con los
   // activos nuevos o actualizados, sin esperar al siguiente intervalo.
   const wasDiscovering = useRef(false);
-  const refreshAssets = assets.refresh;
+  const refreshList = assets.refresh;
+  const refreshSummary = summary.refresh;
+  const refreshAssets = useCallback(() => {
+    refreshList();
+    refreshSummary();
+  }, [refreshList, refreshSummary]);
   const refreshJobs = jobs.refresh;
   const refreshSchedule = schedule.refresh;
   useEffect(() => {
@@ -97,10 +126,6 @@ export function NetworkPage() {
     [refreshJobs, refreshAssets],
   );
 
-  const list = useListState<Key, { method: string; status: string; type: string; subnet: string }>(
-    { key: "ip", dir: "asc" },
-    { method: "", status: "", type: "", subnet: "" },
-  );
   const showDevices = (target: string) => {
     // La red del job y los descubiertos más recientes primero: los nuevos quedan arriba.
     list.setFilter("subnet", target);
@@ -108,14 +133,14 @@ export function NetworkPage() {
     setModal(undefined);
     tableRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   };
-  const items = useMemo(() => assets.data?.items ?? [], [assets.data]);
+  const items = assets.data?.items ?? [];
   const types = useMemo(() => {
-    const seen = new Set(items.map((a) => a.device_type ?? "unknown"));
-    return [...seen].sort().map((value) => ({
+    const seen = Object.keys(summary.data?.assets.by_device_type ?? {});
+    return seen.sort().map((value) => ({
       value,
       label: value === "unknown" ? "Desconocido" : (DEVICE_TYPE_LABELS[value] ?? value),
     }));
-  }, [items]);
+  }, [summary.data]);
   const subnets = scope.data?.allowed_networks ?? [];
   const activeJobs = (jobs.data?.items ?? []).filter(isActive);
   const scopeEnabled = scope.data?.enabled === true;
@@ -124,31 +149,19 @@ export function NetworkPage() {
     : !scopeEnabled
       ? DISABLED_MESSAGE
       : consoleState.reason;
-  const counts = useMemo(() => {
-    const result: Record<MonitoringMethod, number> = { discovered: 0, agentless: 0, agent: 0 };
-    for (const asset of items) result[asset.monitoring_method] += 1;
-    return result;
-  }, [items]);
-
-  const page = listPage(items, {
-    filter: (a) =>
-      (!list.filters.method || a.monitoring_method === list.filters.method) &&
-      (!list.filters.status || a.status === list.filters.status) &&
-      (!list.filters.type || (a.device_type ?? "unknown") === list.filters.type) &&
-      (!list.filters.subnet || inSubnet(a, list.filters.subnet)) &&
-      matchesText(
-        list.query,
-        a.display_name,
-        a.primary_ip,
-        a.mac_address,
-        a.reverse_dns,
-        a.device_vendor,
-        a.network_adapter_vendor,
-      ),
-    compare: compareBy(SORTERS[list.sort.key], list.sort.dir),
+  const counts: Record<MonitoringMethod, number> = summary.data?.assets.by_method ?? {
+    discovered: 0,
+    agentless: 0,
+    agent: 0,
+  };
+  const total = assets.data?.total ?? 0;
+  const filtered = Boolean(list.query.trim() || method || status || type || subnet);
+  const page = {
+    items,
+    total,
     page: list.page,
-    pageSize: PAGE_SIZE,
-  });
+    pages: Math.max(1, Math.ceil(total / PAGE_SIZE)),
+  };
   const header = (label: string, key: Key, numeric = false) => (
     <SortHeader label={label} sortKey={key} sort={list.sort} onSort={list.setSort} numeric={numeric} />
   );
@@ -262,7 +275,7 @@ export function NetworkPage() {
             />
           )}
         </Toolbar>
-        {items.length === 0 ? (
+        {items.length === 0 && !filtered && list.page === 1 ? (
           <EmptyState title="Sin activos">
             Pulsa «Iniciar descubrimiento» para analizar una red autorizada, o instala el agente en
             un equipo.
