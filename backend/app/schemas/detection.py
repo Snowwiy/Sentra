@@ -17,6 +17,8 @@ class DetectionRead(ResponseModel):
     hostname: str
     rule_id: str
     rule_version: int
+    # Fase 5A: builtin | custom | sigma.
+    rule_source: str = "builtin"
     # "single" o "correlation".
     kind: str
     category: str
@@ -80,30 +82,3 @@ class DetectionDetail(DetectionRead):
 class DetectionAction(RequestModel):
     # Nota opcional del analista al resolver (queda en la detección y en la auditoría).
     note: str | None = Field(default=None, max_length=500)
-
-
-class DetectionRuleRead(ResponseModel):
-    rule_id: str
-    version: int
-    kind: str
-    category: str
-    title: str
-    description: str
-    why: str
-    severity: DetectionSeverity
-    confidence: DetectionConfidence
-    triggers: list[str]
-    required_data: list[str]
-    recommendations: list[str]
-    mitre_tactic: str | None
-    mitre_technique: str | None
-    mitre_subtechnique: str | None
-    cooldown_minutes: int
-    enabled: bool
-
-
-class DetectionRuleList(ResponseModel):
-    items: list[DetectionRuleRead]
-    # Ventanas configuradas (minutos) y umbral de alerta, para entender las descripciones.
-    windows: dict[str, int]
-    alert_min_severity: DetectionSeverity | None

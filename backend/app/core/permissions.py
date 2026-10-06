@@ -53,11 +53,26 @@ class Permission(enum.StrEnum):
     INCIDENTS_MANAGE = "incidents:manage"
     # Acciones administrativas sobre casos: reasignar a otros, cerrar, reabrir y fusionar.
     INCIDENTS_ADMIN = "incidents:admin"
+    # Reglas de detección (Fase 5A). Ver el catálogo de reglas (built-in, custom y Sigma),
+    # sus versiones y estadísticas. No incluye datos de eventos.
+    RULES_READ = "rules:read"
+    # Validar reglas, probarlas contra eventos sintéticos y previsualizar Sigma. No guarda
+    # nada ni crea detecciones.
+    RULES_TEST = "rules:test"
+    # Crear, importar, editar, versionar, activar, desactivar y retirar reglas, y probarlas
+    # contra datos históricos. Solo admin: una regla cambia lo que Sentra detecta (o deja de
+    # detectar) para todos.
+    RULES_MANAGE = "rules:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
     Role.VIEWER: frozenset(
-        {Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ}
+        {
+            Permission.MONITORING_READ,
+            Permission.AI_USE,
+            Permission.INCIDENTS_READ,
+            Permission.RULES_READ,
+        }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
     # pero no gestiona credenciales (agentes, tokens de enrollment) ni usuarios.
@@ -70,6 +85,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AI_USE,
             Permission.INCIDENTS_READ,
             Permission.INCIDENTS_MANAGE,
+            Permission.RULES_READ,
+            Permission.RULES_TEST,
         }
     ),
     Role.ADMIN: frozenset(Permission),

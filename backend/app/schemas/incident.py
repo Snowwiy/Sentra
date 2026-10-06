@@ -156,6 +156,9 @@ class IncidentList(ResponseModel):
 class IncidentDetectionRef(ResponseModel):
     detection_id: UUID
     rule_id: str
+    # Fase 5A: versión y origen (builtin/custom/sigma) de la regla; null si se purgó.
+    rule_version: int | None = None
+    rule_source: str | None = None
     # single o correlation.
     kind: str
     title: str

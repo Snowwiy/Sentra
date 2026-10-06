@@ -21,6 +21,7 @@ function detection(overrides: Partial<Detection> = {}): Detection {
     hostname: "pc-demo",
     rule_id: "CORR-001",
     rule_version: 1,
+    rule_source: "builtin",
     kind: "correlation",
     category: "authentication",
     severity: "high",

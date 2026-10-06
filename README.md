@@ -114,6 +114,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `CHANGE_RETENTION_DAYS`, `ALERT_RETENTION_DAYS` | Delete inventory changes / **resolved** alerts older than N days (unset = keep forever; active alerts are never deleted) |
 | `RETENTION_SWEEP_INTERVAL_SECONDS` | How often the retention job runs when a retention is set (default 3600) |
 | `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
+| `SIGMA_DEFAULT_CONFIDENCE`, `RULE_TEST_MAX_HOURS`, `RULE_TEST_MAX_ROWS`, `RULE_TEST_TIMEOUT_SECONDS`, `RULE_TEST_PER_MINUTE` | Reglas personalizadas y Sigma (Fase 5A): confianza inicial de las reglas Sigma importadas (`low`) y límites de la prueba histórica (72 h, 20 000 filas, 10 s, 6 por usuario y minuto). [docs/custom-detection-rules.md](docs/custom-detection-rules.md) |
 | `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
 | `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) Gestor de modelos locales (Fase 4J.2): `AI_RUNTIME`, `AI_MODEL_DIRECTORIES`, contexto, margen de memoria y benchmark en [docs/local-model-manager.md](docs/local-model-manager.md) |
 | `TRUSTED_PROXIES` | Proxies (IPs/redes) cuyos `X-Forwarded-For/Proto` se aceptan (Fase 4M; por defecto `127.0.0.1,::1`) |
@@ -172,7 +173,11 @@ cd backend
 | GET | `/api/v1/detections?status=&active=&severity=&min_severity=&confidence=&rule_id=&asset_id=&since=&until=&q=&limit=&offset=` | Detecciones del motor (Fase 4H), la actividad más reciente primero |
 | GET | `/api/v1/detections/{detection_id}` | Detalle: qué pasó, por qué importa, evidencias (timeline), MITRE, recomendaciones |
 | POST | `/api/v1/detections/{detection_id}/acknowledge`, `/resolve` | Reconocer / resolver (roles admin y analyst; auditado). `resolve` acepta `{"note": "…"}` |
-| GET | `/api/v1/detection-rules` | Catálogo de reglas, ventanas y umbral de alerta |
+| GET | `/api/v1/detection-rules?source=&status=&compile_status=&severity=&logsource=&mitre=&q=&sort=&order=&limit=&offset=` | Catálogo unificado de reglas (built-in, personalizadas y Sigma; `rules:read`) |
+| GET | `/api/v1/detection-rules/catalog`, `/{rule_id}`, `/{rule_id}/versions[/{v}]`, `/diff?from=&to=`, `/export`, `/sigma-source`, `/audit` | Logsources y campos, detalle, versiones inmutables, diff semántico, exportación, YAML Sigma original y auditoría (Fase 5A) |
+| POST/PATCH | `/api/v1/detection-rules`, `PATCH /{rule_id}`, `/{rule_id}/enable\|disable\|retire\|unretire`, `/{rule_id}/versions/{v}/restore` | Crear, versionar y gestionar reglas personalizadas (`rules:manage`, admin; `revision` obligatoria, 409 si otro admin la cambió) |
+| POST | `/api/v1/detection-rules/validate`, `/test`, `/test/historical` | Validar y probar sin efectos: sintética (`rules:test`) e histórica de solo lectura (`rules:manage`) |
+| POST | `/api/v1/sigma/preview`, `/sigma/import` | Vista previa (`rules:test`) e importación Sigma (`rules:manage`; siempre desactivada) ([docs/sigma-support.md](docs/sigma-support.md)) |
 | GET | `/api/v1/risk/overview` | Riesgo (Fase 4I): activos por nivel y confianza, factores principales, transiciones recientes |
 | GET | `/api/v1/risk/assets?level=&confidence=&device_type=&status=&criticality=&min_score=&q=&sort=&order=&limit=&offset=` | Activos por riesgo, el más alto primero |
 | GET | `/api/v1/risk/assets/{asset_id}`, `/history?range=24h\|7d\|30d`, `/contributions?snapshot_id=` | Detalle explicable, tendencia y contribuciones |
@@ -238,6 +243,14 @@ El dashboard exige login con roles y sesiones de servidor ([docs/authentication.
 eventos, inventario, procesos y descubrimiento en detecciones con severidad y confianza
 separadas, evidencias y recomendaciones; las graves abren una alerta
 ([docs/detection-engine.md](docs/detection-engine.md)).
+**Reglas personalizadas y Sigma** (Fase 5A): Detecciones → Reglas lista las built-in, las
+personalizadas y las importadas de Sigma. Las reglas son JSON declarativo (nunca código),
+validado con allowlist, con regex seguras, versiones inmutables, estados (borrador, activa,
+desactivada, retirada) separados del estado de compilación, pruebas sintéticas e históricas
+sin efectos y auditoría completa. Se ejecutan en el mismo motor de 4H, con recarga en caliente
+entre workers. La importación Sigma admite un subconjunto honesto y marca como no soportado
+lo que Sentra no recoge ([docs/custom-detection-rules.md](docs/custom-detection-rules.md),
+[docs/sigma-support.md](docs/sigma-support.md)).
 **Riesgo** (Fase 4I): cada activo tiene un score 0-100 determinista con nivel y confianza
 separados, calculado a partir de sus detecciones, su exposición, su criticidad y su tipo, con
 contribuciones explicables, historial de cambios y tendencia; página Riesgo y sección Riesgo

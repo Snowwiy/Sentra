@@ -235,6 +235,7 @@ class RiskEngine:
                 Detection.public_id,
                 Detection.asset_id,
                 Detection.rule_id,
+                Detection.rule_category,
                 Detection.title,
                 Detection.kind,
                 Detection.severity,
@@ -277,8 +278,10 @@ class RiskEngine:
                     public_id=row.public_id,
                     rule_id=row.rule_id,
                     title=row.title,
-                    # Una regla retirada del catálogo sigue contando con categoría genérica.
-                    category=rule.meta.category if rule else "unknown",
+                    # Fase 5A: la categoría viaja en la detección (también custom/Sigma). Las
+                    # anteriores a 0025 no la tienen: se toma del catálogo built-in; una regla
+                    # retirada del catálogo sigue contando con categoría genérica.
+                    category=row.rule_category or (rule.meta.category if rule else "unknown"),
                     kind=row.kind,
                     severity=row.severity,
                     confidence=row.confidence,

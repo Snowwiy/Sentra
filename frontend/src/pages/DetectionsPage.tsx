@@ -116,6 +116,9 @@ export function DetectionsPage() {
     <div className="page">
       <div className="page__header">
         <h1>Detecciones</h1>
+        <Link to="/detections/rules" className="button">
+          Reglas
+        </Link>
       </div>
       <section className="panel">
         <Toolbar>

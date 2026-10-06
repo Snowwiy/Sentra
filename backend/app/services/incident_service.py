@@ -1200,6 +1200,8 @@ def detection_refs(
             IncidentDetectionRef(
                 detection_id=link.detection_public_id,
                 rule_id=link.rule_id,
+                rule_version=detection.rule_version if detection else None,
+                rule_source=detection.rule_source if detection else None,
                 kind=link.kind,
                 title=link.title,
                 severity=detection.severity.value if detection else link.severity,

@@ -15,6 +15,7 @@ import { AssetContextSummary } from "../components/incidents/IncidentTabs";
 import { RelatedIncidentsPanel } from "../components/incidents/RelatedIncidentsPanel";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { SOURCE_LABELS } from "../lib/rules";
 import { usePolling } from "../lib/usePolling";
 
 /** Valor de evidencia como texto plano: React lo escapa; nunca se interpreta como HTML. */
@@ -123,6 +124,7 @@ function DetectionActions({ detection, onChanged }: { detection: DetectionDetail
 }
 
 export function DetectionDetailPage() {
+  const auth = useAuth();
   const { detectionId = "" } = useParams();
   const fetchDetection = useCallback(
     (signal: AbortSignal) => detectionsApi.get(detectionId, signal),
@@ -189,7 +191,14 @@ export function DetectionDetailPage() {
           <div className="field">
             <dt>Regla</dt>
             <dd>
-              <span className="mono">{d.rule_id}</span> v{d.rule_version} ·{" "}
+              {auth.can("rules:read") ? (
+                <Link to={`/detections/rules/${encodeURIComponent(d.rule_id)}`} className="mono">
+                  {d.rule_id}
+                </Link>
+              ) : (
+                <span className="mono">{d.rule_id}</span>
+              )}{" "}
+              v{d.rule_version} · {SOURCE_LABELS[d.rule_source] ?? d.rule_source} ·{" "}
               {CATEGORY_LABELS[d.category] ?? d.category}
               {d.kind === "correlation" && " · correlación"}
             </dd>

@@ -61,6 +61,7 @@ from app.services.asset_context_service import (
     tags_by_asset,
 )
 from app.services.asset_service import effective_status
+from app.services.detection_rule_service import rule_text
 from app.services.incident_service import family_ids
 from app.services.risk_service import RiskService
 
@@ -341,8 +342,9 @@ class ContextBuilder:
         return {
             "ref": key,
             "rule_id": d.rule_id,
+            "rule_source": d.rule_source,
             "kind": d.kind,
-            "category": meta.category if meta else None,
+            "category": d.rule_category or (meta.category if meta else None),
             "title": self._text(d.title, 200),
             "summary": self._text(d.summary),
             "severity": d.severity.value,
@@ -575,16 +577,30 @@ class ContextBuilder:
         item = self._detection_item(detection, asset) or {}
         rule = RULES_BY_ID.get(detection.rule_id)
         meta = rule.meta if rule else None
-        # Catálogo de reglas: texto fijo de Sentra (confiable), no datos del host.
-        item["rule"] = (
-            {
+        if meta is not None:
+            # Catálogo built-in: texto fijo de Sentra (confiable), no datos del host.
+            item["rule"] = {
                 "description": meta.description,
                 "why_it_matters": meta.why,
                 "rule_recommendations": list(meta.recommendations),
             }
-            if meta
-            else None
-        )
+        else:
+            # Fase 5A: los textos de reglas custom/Sigma los escribe un admin o vienen de un
+            # YAML importado: son contenido NO confiable y pasan por el mismo saneado que los
+            # datos del host (_text), nunca como instrucciones del sistema.
+            texts = rule_text(self._session, detection.rule_id, detection.rule_version)
+            item["rule"] = (
+                {
+                    "source": texts.source,
+                    "description": self._text(texts.description, 400),
+                    "why_it_matters": self._text(texts.why, 400),
+                    "rule_recommendations": [
+                        t for r in texts.recommendations[:5] if (t := self._text(r, 200))
+                    ],
+                }
+                if texts
+                else None
+            )
         item["details"] = self._safe(detection.details or {})
         item["acknowledged"] = detection.acknowledged_at is not None
         item["resolution_note"] = self._text(detection.resolution_note, 200)

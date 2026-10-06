@@ -40,6 +40,10 @@ class MetricsRegistry:
         self._jobs: dict[tuple[str, str], int] = defaultdict(int)
         self._job_last: dict[str, tuple[float, float]] = {}
         self._rate_limited: dict[str, int] = defaultdict(int)
+        # Fase 5A: evaluaciones de reglas por ORIGEN (builtin, custom, sigma). Nunca por regla:
+        # con cientos de reglas personalizadas la cardinalidad se dispararía; el detalle por
+        # regla está en GET /detection-rules (detection_rule_stats).
+        self._rules: dict[str, list[float]] = {}
 
     def observe_request(self, method: str, route: str, status: int, seconds: float) -> None:
         status_class = f"{status // 100}xx"
@@ -57,6 +61,16 @@ class MetricsRegistry:
             self._jobs[(job, result)] += 1
             if result == "success":
                 self._job_last[job] = (time.time(), seconds)
+
+    def observe_rules(
+        self, source: str, evaluations: int, matches: int, errors: int, seconds: float
+    ) -> None:
+        with self._lock:
+            totals = self._rules.setdefault(source, [0, 0, 0, 0.0])
+            totals[0] += evaluations
+            totals[1] += matches
+            totals[2] += errors
+            totals[3] += seconds
 
     def rate_limited(self, scope: str) -> None:
         with self._lock:
@@ -119,6 +133,22 @@ class MetricsRegistry:
             ]
             for scope, count in sorted(self._rate_limited.items()):
                 lines.append(f"sentra_rate_limited_total{_labels((('scope', scope),))} {count}")
+            for index, (name, help_text) in enumerate(
+                (
+                    ("sentra_detection_rule_evaluations_total", "Evaluaciones de reglas."),
+                    ("sentra_detection_rule_matches_total", "Coincidencias de reglas."),
+                    ("sentra_detection_rule_errors_total", "Errores aislados de reglas."),
+                    (
+                        "sentra_detection_rule_evaluation_seconds_total",
+                        "Tiempo total evaluando reglas.",
+                    ),
+                )
+            ):
+                lines += [f"# HELP {name} {help_text} Por origen.", f"# TYPE {name} counter"]
+                for source, totals in sorted(self._rules.items()):
+                    value = totals[index]
+                    shown = f"{value:.6f}" if index == 3 else f"{int(value)}"
+                    lines.append(f"{name}{_labels((('source', source),))} {shown}")
         return lines
 
 

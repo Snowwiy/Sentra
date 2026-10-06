@@ -11,21 +11,29 @@ evaluada igualmente para no reintentarla en bucle (una regla rota no debe bloque
 Concurrencia: varias instancias (workers) pueden ejecutar el motor a la vez. Las señales se
 reparten con FOR UPDATE SKIP LOCKED y la deduplicación la garantiza el índice único parcial
 uq_detections_active_key (como las alertas).
+
+Fase 5A: las reglas personalizadas y Sigma (custom/runtime.py) entran por el mismo camino.
+Solo se evalúan las candidatas del índice (tipo de señal, canal, id de evento) y cada una
+mide su tiempo y sus errores en detection_rule_stats, igual que las built-in.
 """
 
 import logging
-from collections.abc import Sequence
+import time
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, cast
 
-from sqlalchemy import CursorResult, any_, delete, func, select, update
+from sqlalchemy import CursorResult, any_, case, delete, func, select, update
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.metrics import REGISTRY
 from app.detection import text
 from app.detection.config import DetectionConfig
+from app.detection.custom.runtime import CustomRule, CustomRuleIndex, load_index
 from app.detection.rules import (
     ANY_SUBJECT,
     RULES,
@@ -37,6 +45,7 @@ from app.detection.rules import (
 from app.detection.signals import SignalKind
 from app.models.alert import AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset
+from app.models.asset_context import AssetBusinessContext
 from app.models.detection import (
     SEVERITY_RANK,
     Detection,
@@ -45,6 +54,7 @@ from app.models.detection import (
     DetectionSignal,
     DetectionStatus,
 )
+from app.models.detection_rule import DetectionRuleMatch, DetectionRuleStats, RuleSource
 from app.repositories.alert_repository import AlertRepository
 from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
@@ -56,6 +66,11 @@ logger = logging.getLogger(__name__)
 MAX_EVIDENCE = 100
 BATCH_SIZE = 500
 PURGE_BATCH = 5000
+# Una evaluación de regla más lenta que esto cuenta como lenta (estadística y aviso en log).
+SLOW_EVALUATION_SECONDS = 0.05
+# Errores seguidos a partir de los que se avisa en el log de una regla rota de forma
+# persistente. No se desactiva sola: un atacante podría provocar errores para apagarla.
+FAILING_RULE_ERRORS = 10
 
 
 @dataclass
@@ -67,6 +82,20 @@ class EngineRun:
     failed_rules: dict[str, int] = field(default_factory=dict)
 
 
+@dataclass
+class _RuleStat:
+    """Contadores de una regla en el lote en curso (se vuelcan a detection_rule_stats)."""
+
+    source: str
+    evaluations: int = 0
+    matches: int = 0
+    errors: int = 0
+    slow: int = 0
+    seconds: float = 0.0
+    last_matched_at: datetime | None = None
+    last_error: str | None = None
+
+
 class _Context:
     """Implementación de RuleContext sobre la tabla de señales (consultas acotadas)."""
 
@@ -74,6 +103,7 @@ class _Context:
         self._session = session
         self.config = config
         self._os: dict[int, str] = {}
+        self._assets: dict[int, Mapping[str, Any]] = {}
 
     def _where(
         self,
@@ -143,6 +173,119 @@ class _Context:
             self._os[asset_id] = (os_name or "").lower()
         return self._os[asset_id]
 
+    # --- Fase 5A: reglas personalizadas ------------------------------------------------------
+
+    def asset_values(self, asset_id: int) -> Mapping[str, Any]:
+        """Contexto del activo para los campos asset.* (una consulta por activo y lote)."""
+        if asset_id not in self._assets:
+            # Savepoint propio: el motor la llama fuera del savepoint de la regla (fast path) y
+            # un fallo aquí no debe dejar abortada la transacción del lote.
+            with self._session.begin_nested():
+                self._assets[asset_id] = asset_values(self._session, asset_id)
+        return self._assets[asset_id]
+
+    def record_and_count_rule_match(
+        self,
+        rule_pk: int,
+        version: int,
+        asset_id: int,
+        group_key: str,
+        signal: DetectionSignal,
+        start: datetime,
+    ) -> int:
+        """Registra la coincidencia y cuenta las del grupo en la ventana: un solo viaje a BD.
+
+        En PostgreSQL la consulta principal no ve las filas que inserta su propio CTE, así que
+        se suman las existentes y la recién insertada. Idempotente por señal: reevaluar no
+        inserta (ON CONFLICT DO NOTHING) y la coincidencia ya está entre las existentes.
+        """
+        inserted = (
+            insert(DetectionRuleMatch)
+            .values(
+                rule_id=rule_pk,
+                rule_version=version,
+                asset_id=asset_id,
+                group_key=group_key,
+                signal_id=signal.id,
+                occurred_at=signal.occurred_at,
+                created_at=datetime.now(UTC),
+            )
+            .on_conflict_do_nothing(constraint="uq_rule_match_signal")
+            .returning(DetectionRuleMatch.id)
+            .cte("inserted")
+        )
+        existing = (
+            select(func.count())
+            .select_from(DetectionRuleMatch)
+            .where(
+                *self._match_where(rule_pk, version, asset_id, group_key, start, signal.occurred_at)
+            )
+            .scalar_subquery()
+        )
+        new = select(func.count()).select_from(inserted).scalar_subquery()
+        # Core sobre la conexión de la sesión: evita la maquinaria ORM de inserts masivos.
+        count = self._session.connection().scalar(select(existing + new))
+        return int(count or 0)
+
+    def _match_where(
+        self,
+        rule_pk: int,
+        version: int,
+        asset_id: int,
+        group_key: str,
+        start: datetime,
+        end: datetime,
+    ) -> list[Any]:
+        # Usa ix_rule_matches_window: regla, versión, activo, grupo y rango temporal.
+        return [
+            DetectionRuleMatch.rule_id == rule_pk,
+            DetectionRuleMatch.rule_version == version,
+            DetectionRuleMatch.asset_id == asset_id,
+            DetectionRuleMatch.group_key == group_key,
+            DetectionRuleMatch.occurred_at >= start,
+            DetectionRuleMatch.occurred_at <= end,
+        ]
+
+    def rule_match_signals(
+        self,
+        rule_pk: int,
+        version: int,
+        asset_id: int,
+        group_key: str,
+        start: datetime,
+        end: datetime,
+        limit: int,
+    ) -> Sequence[DetectionSignal]:
+        rows = self._session.scalars(
+            select(DetectionSignal)
+            .join(DetectionRuleMatch, DetectionRuleMatch.signal_id == DetectionSignal.id)
+            .where(*self._match_where(rule_pk, version, asset_id, group_key, start, end))
+            .order_by(DetectionRuleMatch.occurred_at.desc(), DetectionRuleMatch.id.desc())
+            .limit(limit)
+        ).all()
+        return list(reversed(rows))
+
+
+def asset_values(session: Session, asset_id: int) -> dict[str, Any]:
+    """Valores de los campos asset.* del catálogo para un activo (contexto 4L incluido)."""
+    row = session.execute(
+        select(Asset, AssetBusinessContext)
+        .outerjoin(AssetBusinessContext, AssetBusinessContext.asset_id == Asset.id)
+        .where(Asset.id == asset_id)
+    ).first()
+    if row is None:
+        return {}
+    asset, ctx = row[0], row[1]
+    return {
+        "hostname": (asset.display_name or "").lower() or None,
+        "os": (asset.os_name or "").lower() or None,
+        "criticality": asset.criticality.value if asset.criticality else None,
+        "role": ctx.role.value if ctx is not None else "unknown",
+        "environment": ctx.environment.value if ctx is not None else "unknown",
+        "network_zone": ctx.network_zone.value if ctx is not None else "unknown",
+        "internet_exposed": ctx.internet_exposed if ctx is not None else None,
+    }
+
 
 class DetectionEngine:
     def __init__(
@@ -151,6 +294,8 @@ class DetectionEngine:
         config: DetectionConfig,
         thresholds: AlertThresholds | None = None,
         rules: Sequence[DetectionRule] = RULES,
+        custom: CustomRuleIndex | None = None,
+        load_custom: bool = True,
     ) -> None:
         self._session = session
         self._config = config
@@ -159,6 +304,11 @@ class DetectionEngine:
         # Activos con detecciones nuevas o actualizadas en el lote: su riesgo se recalcula
         # (Fase 4I). Se encolan una vez por lote, no por evidencia.
         self._touched: set[int] = set()
+        # Fase 5A: índice de reglas personalizadas. Sin índice explícito se carga desde la
+        # BD antes de cada lote (solo se reconstruye si la huella cambió: multi-worker).
+        self._load_custom = custom is None and load_custom
+        self._custom: CustomRuleIndex | None = custom
+        self._stats: dict[str, _RuleStat] = {}
         for rule in rules:
             if rule.meta.id in config.disabled_rules:
                 continue
@@ -180,6 +330,7 @@ class DetectionEngine:
             ).all()
             if not signals:
                 break
+            self._refresh_custom()
             context = _Context(self._session, self._config)
             for signal in signals:
                 self._evaluate(context, signal, run)
@@ -188,6 +339,7 @@ class DetectionEngine:
             if self._touched:
                 request_recalculation(self._session, self._touched)
                 self._touched.clear()
+            self._flush_stats()
             self._session.commit()
             if len(signals) < batch_size:
                 break
@@ -203,24 +355,155 @@ class DetectionEngine:
             )
         return run
 
+    def _refresh_custom(self) -> None:
+        if not self._load_custom:
+            return
+        try:
+            self._custom = load_index(self._session)
+        except Exception:
+            # Sin índice nuevo se sigue con el anterior (o solo built-in): nunca se para el
+            # motor por no poder leer las reglas personalizadas.
+            self._session.rollback()
+            logger.exception("custom detection rules could not be loaded")
+
     def _evaluate(self, context: _Context, signal: DetectionSignal, run: EngineRun) -> None:
-        for rule in self._by_kind.get(signal.kind, ()):
+        rules: list[DetectionRule] = list(self._by_kind.get(signal.kind, ()))
+        if self._custom is not None:
+            rules.extend(self._custom.candidates(signal.kind, signal.data))
+        for rule in rules:
+            stat = self._stats.get(rule.meta.id)
+            if stat is None:
+                stat = self._stats[rule.meta.id] = _RuleStat(rule.meta.source)
+            started = time.perf_counter()
             try:
+                if isinstance(rule, CustomRule):
+                    # Fast path: la condición se evalúa en memoria, sin savepoint (la mayoría de
+                    # candidatas no coincide). Los valores del activo salen de la caché del
+                    # lote. Solo una coincidencia paga el savepoint y la escritura.
+                    asset = (
+                        context.asset_values(signal.asset_id)
+                        if rule.compiled.asset_fields
+                        else None
+                    )
+                    if not rule.matches(signal.kind, signal.subject, signal.data, asset)[0]:
+                        continue
                 with self._session.begin_nested():
                     for result in rule.evaluate(context, signal):
+                        stat.matches += 1
+                        stat.last_matched_at = datetime.now(UTC)
                         created = self.apply(rule, signal.asset_id, result)
                         if created:
                             run.created += 1
                         elif created is False:
                             run.updated += 1
-            except Exception:
+            except Exception as exc:
                 # Fallo aislado: se deshizo el savepoint de esta regla; las demás siguen.
                 run.rule_errors += 1
                 run.failed_rules[rule.meta.id] = run.failed_rules.get(rule.meta.id, 0) + 1
+                stat.errors += 1
+                # Solo la categoría del error: nunca datos del evento en estadísticas.
+                stat.last_error = type(exc).__name__[:200]
                 logger.exception(
                     "detection rule failed",
-                    extra={"rule": rule.meta.id, "signal_id": signal.id, "kind": signal.kind},
+                    extra={
+                        "rule": rule.meta.id,
+                        "rule_version": rule.meta.version,
+                        "rule_source": rule.meta.source,
+                        "error_category": type(exc).__name__,
+                        "signal_id": signal.id,
+                        "kind": signal.kind,
+                    },
                 )
+            finally:
+                elapsed = time.perf_counter() - started
+                stat.evaluations += 1
+                stat.seconds += elapsed
+                if elapsed > SLOW_EVALUATION_SECONDS:
+                    stat.slow += 1
+
+    def _flush_stats(self) -> None:
+        """Vuelca los contadores del lote: una sentencia, sin tocar la fila de la regla."""
+        if not self._stats:
+            return
+        now = datetime.now(UTC)
+        rows = [
+            {
+                "rule_uid": uid,
+                "evaluations": stat.evaluations,
+                "matches": stat.matches,
+                "errors": stat.errors,
+                "consecutive_errors": stat.errors if stat.errors == stat.evaluations else 0,
+                "slow_evaluations": stat.slow,
+                "eval_time_us": int(stat.seconds * 1_000_000),
+                "last_evaluated_at": now,
+                "last_matched_at": stat.last_matched_at,
+                "last_error_at": now if stat.errors else None,
+                "last_error": stat.last_error,
+            }
+            for uid, stat in sorted(self._stats.items())
+        ]
+        table = DetectionRuleStats.__table__
+        stmt = insert(DetectionRuleStats)
+        excluded = stmt.excluded
+        stmt = stmt.on_conflict_do_update(
+            index_elements=["rule_uid"],
+            set_={
+                "evaluations": table.c.evaluations + excluded.evaluations,
+                "matches": table.c.matches + excluded.matches,
+                "errors": table.c.errors + excluded.errors,
+                # Todas las evaluaciones del lote fallaron: se acumula; si alguna fue bien,
+                # la racha se reinicia.
+                "consecutive_errors": case(
+                    (
+                        excluded.consecutive_errors > 0,
+                        table.c.consecutive_errors + excluded.consecutive_errors,
+                    ),
+                    else_=0,
+                ),
+                "slow_evaluations": table.c.slow_evaluations + excluded.slow_evaluations,
+                "eval_time_us": table.c.eval_time_us + excluded.eval_time_us,
+                "last_evaluated_at": excluded.last_evaluated_at,
+                "last_matched_at": func.coalesce(excluded.last_matched_at, table.c.last_matched_at),
+                "last_error_at": func.coalesce(excluded.last_error_at, table.c.last_error_at),
+                "last_error": func.coalesce(excluded.last_error, table.c.last_error),
+            },
+        )
+        # Core sobre la conexión de la sesión y "executemany" (sentencia compilada una vez y
+        # cacheada): un VALUES con cientos de filas por la ruta ORM costaba más que evaluar el
+        # lote entero.
+        self._session.connection().execute(stmt, rows)
+        by_source: dict[str, list[float]] = defaultdict(lambda: [0, 0, 0, 0.0])
+        for uid, stat in self._stats.items():
+            totals = by_source[stat.source]
+            totals[0] += stat.evaluations
+            totals[1] += stat.matches
+            totals[2] += stat.errors
+            totals[3] += stat.seconds
+            if stat.slow:
+                logger.warning(
+                    "detection rule slow",
+                    extra={"rule": uid, "rule_source": stat.source, "slow_evaluations": stat.slow},
+                )
+        for source, (evaluations, matches, errors, seconds) in by_source.items():
+            # Etiqueta solo por origen (builtin/custom/sigma): nunca por regla en /metrics.
+            REGISTRY.observe_rules(source, int(evaluations), int(matches), int(errors), seconds)
+        self._warn_failing([uid for uid, stat in self._stats.items() if stat.errors])
+        self._stats.clear()
+
+    def _warn_failing(self, uids: list[str]) -> None:
+        if not uids:
+            return
+        failing = self._session.execute(
+            select(DetectionRuleStats.rule_uid, DetectionRuleStats.consecutive_errors).where(
+                DetectionRuleStats.rule_uid.in_(uids),
+                DetectionRuleStats.consecutive_errors >= FAILING_RULE_ERRORS,
+            )
+        ).all()
+        for uid, streak in failing:
+            logger.warning(
+                "detection rule failing repeatedly",
+                extra={"rule": uid, "consecutive_errors": streak},
+            )
 
     # --- Deduplicación y persistencia ----------------------------------------------------------
 
@@ -256,6 +539,8 @@ class DetectionEngine:
                 asset_id=asset_id,
                 rule_id=meta.id,
                 rule_version=meta.version,
+                rule_source=meta.source,
+                rule_category=meta.category[:32],
                 kind=meta.kind,
                 dedup_key=key,
                 severity=severity,
@@ -264,7 +549,7 @@ class DetectionEngine:
                 title=text.clean(meta.title, 255),
                 summary=text.clean(result.summary, 1000),
                 details=text.bounded_data(result.details) or None,
-                mitre_tactic=mitre.tactic if mitre else None,
+                mitre_tactic=(mitre.tactic or None) if mitre else None,
                 mitre_technique=mitre.technique if mitre else None,
                 mitre_subtechnique=mitre.subtechnique if mitre else None,
                 occurrence_count=1,
@@ -321,7 +606,11 @@ class DetectionEngine:
         detection.summary = text.clean(result.summary, 1000)
         if result.details:
             detection.details = text.bounded_data(result.details)
-        detection.rule_version = meta.version
+        if meta.source == RuleSource.BUILTIN:
+            detection.rule_version = meta.version
+        # Fase 5A: en reglas custom/Sigma la detección conserva la versión que la CREÓ (su
+        # explicación sale de esa versión); la versión que añadió la última evidencia queda
+        # en details.rule_version.
         detection.updated_at = now
         self._maybe_alert(detection, previous_severity)
         return False
@@ -449,6 +738,25 @@ class DetectionEngine:
             self._session.commit()
             deleted += result.rowcount
             if result.rowcount < PURGE_BATCH:
+                break
+        # Coincidencias de reglas con umbral: misma retención que las señales que cuentan.
+        while True:
+            match_batch = (
+                select(DetectionRuleMatch.id)
+                .where(DetectionRuleMatch.created_at < cutoff)
+                .limit(PURGE_BATCH)
+                .scalar_subquery()
+            )
+            purged = cast(
+                CursorResult[Any],
+                self._session.execute(
+                    delete(DetectionRuleMatch).where(
+                        DetectionRuleMatch.id == any_(func.array(match_batch))
+                    )
+                ),
+            )
+            self._session.commit()
+            if purged.rowcount < PURGE_BATCH:
                 return deleted
 
     def reevaluate(self, since: datetime, asset_id: int | None = None) -> int:
@@ -494,6 +802,8 @@ def resolve_detection_alert(session: Session, detection: Detection, now: datetim
 def _evidence_summary(signal: DetectionSignal) -> str:
     """Una línea legible para el timeline, a partir de los datos de la señal."""
     data = signal.data if isinstance(signal.data, dict) else {}
+    if signal.kind == SignalKind.EVENT.value:
+        return f"Evento {data.get('code', '?')} ({data.get('channel', '?')})"
     label = _EVIDENCE_LABELS.get(signal.kind, signal.kind)
     parts = []
     for key in (
@@ -540,4 +850,5 @@ _EVIDENCE_LABELS = {
     SignalKind.PORT_EXPOSED.value: "Puerto expuesto",
     SignalKind.ASSET_DISCOVERED.value: "Dispositivo descubierto",
     SignalKind.ASSET_DISAPPEARED.value: "Activo desaparecido",
+    SignalKind.EVENT.value: "Evento del sistema",
 }

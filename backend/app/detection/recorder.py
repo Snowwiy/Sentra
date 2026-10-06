@@ -18,11 +18,13 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.detection import text
 from app.detection.config import DetectionConfig
+from app.detection.custom.runtime import active_event_channels
 from app.detection.signals import (
     ChangeLike,
     SignalDraft,
     SignalKind,
     SourceType,
+    raw_event_signals,
     signal_from_discovery_change,
     signals_from_events,
     signals_from_inventory_changes,
@@ -89,8 +91,18 @@ class SignalRecorder:
             not_before = datetime.now(UTC) - self._config.max_event_age
             self._insert(asset_id, signals_from_events(events, not_before))
 
+        def raw_action() -> None:
+            # Fase 5A: solo canales con reglas personalizadas activas (caché por proceso con
+            # comprobación periódica en BD, ver runtime.active_event_channels).
+            channels = active_event_channels(self._session)
+            if channels:
+                not_before = datetime.now(UTC) - self._config.max_event_age
+                self._insert(asset_id, raw_event_signals(events, not_before, channels))
+
         if events:
             self._guarded("events", action)
+            # Aparte: un fallo de las reglas personalizadas no pierde las señales built-in.
+            self._guarded("events_custom", raw_action)
 
     def record_inventory(
         self,

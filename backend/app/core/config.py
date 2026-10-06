@@ -284,6 +284,17 @@ class Settings(BaseSettings):
     # reconocidas nunca. Sin valor (por defecto) no se borra nada.
     detection_retention_days: int | None = Field(default=None, ge=1)
 
+    # --- Fase 5A: reglas personalizadas y Sigma (ver docs/custom-detection-rules.md) ---
+    # Confianza de una regla Sigma importada (Sigma no la define). Conservadora por defecto:
+    # una regla de terceros no prueba nada en este entorno hasta que alguien la revisa.
+    sigma_default_confidence: Literal["low", "medium"] = "low"
+    # Prueba contra datos históricos (solo admin): rango máximo, filas examinadas, tiempo y
+    # pruebas por minuto y usuario. Protegen la base de datos de un escaneo sin límite.
+    rule_test_max_hours: int = Field(default=72, ge=1, le=720)
+    rule_test_max_rows: int = Field(default=20_000, ge=100, le=200_000)
+    rule_test_timeout_seconds: int = Field(default=10, ge=1, le=60)
+    rule_test_per_minute: int = Field(default=6, ge=1, le=120)
+
     # --- Fase 4I: Risk Engine (ver docs/risk-engine.md) ---
     # Desactivarlo detiene el job de riesgo; las lecturas muestran el último valor calculado.
     risk_enabled: bool = True

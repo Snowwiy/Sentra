@@ -821,7 +821,10 @@ export type Permission =
   | "ai:manage"
   | "incidents:read"
   | "incidents:manage"
-  | "incidents:admin";
+  | "incidents:admin"
+  | "rules:read"
+  | "rules:test"
+  | "rules:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -885,6 +888,8 @@ export interface Detection {
   hostname: string;
   rule_id: string;
   rule_version: number;
+  /** Fase 5A: builtin | custom | sigma. */
+  rule_source: RuleSource;
   /** "single" o "correlation". */
   kind: string;
   category: string;
@@ -937,9 +942,45 @@ export interface DetectionDetail extends Detection {
   asset_context: AssetContextBrief | null;
 }
 
+// --- Fase 5A: reglas personalizadas e importación Sigma ------------------------------------
+
+export type RuleSource = "builtin" | "custom" | "sigma";
+export type RuleStatus = "draft" | "active" | "disabled" | "retired";
+export type CompileStatus = "valid" | "partial" | "unsupported" | "invalid";
+export type RuleSort = "title" | "updated_at" | "last_triggered" | "severity" | "source";
+export type RuleComplexity = "low" | "medium" | "high";
+
+export interface RuleIssue {
+  code: string;
+  /** Mensaje técnico del compilador (texto plano). */
+  message: string;
+  path: string;
+}
+
+export interface RuleStats {
+  evaluations: number;
+  matches: number;
+  errors: number;
+  consecutive_errors: number;
+  slow_evaluations: number;
+  avg_eval_ms: number | null;
+  last_evaluated_at: IsoDateTime | null;
+  last_matched_at: IsoDateTime | null;
+  last_error_at: IsoDateTime | null;
+  /** Tipo de error, nunca datos del evento. */
+  last_error: string | null;
+}
+
+/** Una regla del catálogo unificado (built-in, custom o Sigma). */
 export interface DetectionRule {
   rule_id: string;
+  source: RuleSource;
   version: number;
+  status: RuleStatus;
+  enabled: boolean;
+  compile_status: CompileStatus;
+  /** Built-in: solo lectura (se gestionan con DETECTION_DISABLED_RULES en el servidor). */
+  read_only: boolean;
   kind: string;
   category: string;
   title: string;
@@ -947,6 +988,7 @@ export interface DetectionRule {
   why: string;
   severity: DetectionSeverity;
   confidence: DetectionConfidence;
+  logsource: string | null;
   triggers: string[];
   required_data: string[];
   recommendations: string[];
@@ -954,13 +996,283 @@ export interface DetectionRule {
   mitre_technique: string | null;
   mitre_subtechnique: string | null;
   cooldown_minutes: number;
-  enabled: boolean;
+  sigma_id: string | null;
+  /** Concurrencia optimista: se envía en cada cambio (409 si otro admin cambió la regla). */
+  revision: number | null;
+  updated_at: IsoDateTime | null;
+  updated_by: string | null;
+  detections_24h: number;
+  last_triggered_at: IsoDateTime | null;
+  errors: number;
+  consecutive_errors: number;
 }
 
 export interface DetectionRuleList {
   items: DetectionRule[];
+  total: number;
   windows: Record<string, number>;
   alert_min_severity: DetectionSeverity | null;
+}
+
+export interface RuleDetail extends DetectionRule {
+  tags: string[];
+  /** JSON declarativo sentra-rule/1 (null en built-in: viven en código). */
+  definition: RuleDefinition | null;
+  compiled: Record<string, unknown> | null;
+  compile_issues: RuleIssue[];
+  complexity: RuleComplexity | null;
+  stats: RuleStats;
+  detections_total: number;
+  sigma_metadata: Record<string, unknown> | null;
+  has_sigma_source: boolean;
+  created_at: IsoDateTime | null;
+  created_by: string | null;
+  retired_at: IsoDateTime | null;
+  logsource_title: string | null;
+}
+
+export interface RuleVersion {
+  version: number;
+  created_at: IsoDateTime;
+  created_by: string;
+  change_note: string;
+  compile_status: CompileStatus;
+  title: string;
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  current: boolean;
+}
+
+export interface RuleVersionList {
+  items: RuleVersion[];
+}
+
+export interface RuleVersionDetail extends RuleVersion {
+  description: string;
+  why: string;
+  recommendations: string[];
+  category: string;
+  mitre_tactic: string | null;
+  mitre_technique: string | null;
+  mitre_subtechnique: string | null;
+  tags: string[];
+  definition: RuleDefinition;
+  compiled: Record<string, unknown>;
+  compile_issues: RuleIssue[];
+  content_hash: string;
+}
+
+export interface RuleChange {
+  field: string;
+  before: unknown;
+  after: unknown;
+}
+
+export interface RuleDiff {
+  rule_id: string;
+  from_version: number;
+  to_version: number;
+  changes: RuleChange[];
+}
+
+export type RuleOperator =
+  | "equals"
+  | "not_equals"
+  | "contains"
+  | "starts_with"
+  | "ends_with"
+  | "in"
+  | "regex"
+  | "exists"
+  | "gt"
+  | "gte"
+  | "lt"
+  | "lte";
+
+export type RuleScalar = string | number | boolean;
+
+export interface RuleLeaf {
+  field: string;
+  op: RuleOperator;
+  value: RuleScalar | RuleScalar[];
+  case_sensitive?: boolean;
+}
+
+export type RuleNode = RuleLeaf | { all: RuleNode[] } | { any: RuleNode[] } | { not: RuleNode };
+
+/** Formato declarativo sentra-rule/1. Nunca código: el backend lo valida con allowlist. */
+export interface RuleDefinition {
+  format?: string;
+  logsource: string;
+  condition: RuleNode;
+  threshold?: { count: number; window_minutes: number } | null;
+  group_by?: string[];
+  cooldown_minutes?: number;
+}
+
+export interface RuleContentInput {
+  title: string;
+  description: string;
+  why: string;
+  recommendations: string[];
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  category: string | null;
+  mitre_tactic: string | null;
+  mitre_technique: string | null;
+  mitre_subtechnique: string | null;
+  tags: string[];
+  definition: RuleDefinition;
+}
+
+export interface RuleValidation {
+  valid: boolean;
+  compile_status: CompileStatus;
+  errors: RuleIssue[];
+  warnings: RuleIssue[];
+  definition: Record<string, unknown> | null;
+  compiled: Record<string, unknown> | null;
+  complexity: RuleComplexity | null;
+}
+
+export interface SyntheticEventInput {
+  fields: Record<string, string | number | boolean | null>;
+  occurred_at?: string | null;
+}
+
+export interface EventTestResult {
+  index: number;
+  matched: boolean;
+  group: string | null;
+  missing_fields: string[];
+}
+
+export interface SimulatedDetection {
+  group: string;
+  count: number;
+  first_at: IsoDateTime;
+  last_at: IsoDateTime;
+}
+
+export interface RuleTestResult {
+  matched: number;
+  events: EventTestResult[];
+  would_detect: SimulatedDetection[];
+  threshold: number | null;
+  window_minutes: number | null;
+  duration_ms: number;
+}
+
+export interface HistoricalMatch {
+  occurred_at: IsoDateTime;
+  asset_id: string;
+  hostname: string;
+  source_id: string | null;
+  summary: string;
+  fields: Record<string, unknown>;
+}
+
+export interface HistoricalGroup {
+  asset_id: string;
+  hostname: string;
+  group: string;
+  max_count: number;
+  first_at: IsoDateTime;
+}
+
+export interface HistoricalTestResult {
+  data_source: string;
+  since: IsoDateTime;
+  until: IsoDateTime;
+  scanned: number;
+  matched: number;
+  truncated: boolean;
+  sample: HistoricalMatch[];
+  would_detect: HistoricalGroup[];
+  threshold: number | null;
+  duration_ms: number;
+  notes: string[];
+}
+
+export interface SigmaSource {
+  rule_id: string;
+  /** YAML original: se muestra como texto, nunca se interpreta. */
+  yaml: string;
+}
+
+export interface SigmaDuplicate {
+  /** none | identical | changed | retired */
+  state: string;
+  rule_id: string | null;
+  current_version: number | null;
+  revision: number | null;
+}
+
+export interface SigmaPreview {
+  /** supported | partial | unsupported | invalid */
+  outcome: string;
+  title: string;
+  sigma_id: string | null;
+  level: string | null;
+  severity: DetectionSeverity;
+  confidence: DetectionConfidence;
+  logsource: Record<string, string>;
+  sentra_logsource: string | null;
+  mitre_tactic: string | null;
+  mitre_technique: string | null;
+  mitre_subtechnique: string | null;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  errors: RuleIssue[];
+  unsupported: RuleIssue[];
+  warnings: RuleIssue[];
+  definition: Record<string, unknown> | null;
+  compiled: Record<string, unknown> | null;
+  duplicate: SigmaDuplicate;
+}
+
+export interface SigmaImportResult {
+  /** imported | imported_with_warnings | updated | unchanged | unsupported | rejected */
+  result: string;
+  rule: RuleDetail | null;
+  preview: SigmaPreview;
+}
+
+export interface RuleField {
+  name: string;
+  /** string | integer | boolean */
+  type: string;
+  description: string;
+  values: string[];
+  operators: RuleOperator[];
+}
+
+export interface RuleLogSource {
+  name: string;
+  title: string;
+  support: string;
+  platforms: string[];
+  notes: string;
+  event_codes: number[];
+  sigma_hint: string;
+  default_category: string;
+  fields: RuleField[];
+}
+
+export interface RuleCompatibility {
+  area: string;
+  support: string;
+  notes: string;
+  logsources: string[];
+}
+
+export interface RuleCatalog {
+  logsources: RuleLogSource[];
+  asset_fields: RuleField[];
+  categories: string[];
+  limits: Record<string, number>;
+  compatibility: RuleCompatibility[];
+  sigma_default_confidence: DetectionConfidence;
 }
 
 // --- Fase 4I: Risk Engine ----------------------------------------------------------------
@@ -1538,6 +1850,9 @@ export interface IncidentList {
 export interface IncidentDetectionRef {
   detection_id: string;
   rule_id: string;
+  /** Fase 5A: null si la retención ya purgó la detección. */
+  rule_version: number | null;
+  rule_source: RuleSource | null;
   kind: string;
   title: string;
   severity: string;

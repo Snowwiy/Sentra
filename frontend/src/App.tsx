@@ -24,6 +24,11 @@ const IncidentDetailPage = lazy(() =>
   import("./pages/IncidentDetailPage").then((m) => ({ default: m.IncidentDetailPage })),
 );
 const incidentsFallback = <LoadingState label="Cargando incidentes…" />;
+// Reglas de detección (Fase 5A): también en su propio chunk (editor e importación Sigma).
+const RulesPage = lazy(() => import("./pages/RulesPage").then((m) => ({ default: m.RulesPage })));
+const RuleDetailPage = lazy(() => import("./pages/RuleDetailPage").then((m) => ({ default: m.RuleDetailPage })));
+const RuleEditorPage = lazy(() => import("./pages/RuleEditorPage").then((m) => ({ default: m.RuleEditorPage })));
+const rulesFallback = <LoadingState label="Cargando reglas…" />;
 
 export function AppRoutes() {
   return (
@@ -45,6 +50,46 @@ export function AppRoutes() {
           <Route path="risk" element={<RiskPage />} />
           <Route path="alerts" element={<AlertsPage />} />
           <Route path="detections" element={<DetectionsPage />} />
+          <Route
+            path="detections/rules"
+            element={
+              <RequirePermission permission="rules:read">
+                <Suspense fallback={rulesFallback}>
+                  <RulesPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="detections/rules/new"
+            element={
+              <RequirePermission permission="rules:manage">
+                <Suspense fallback={rulesFallback}>
+                  <RuleEditorPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="detections/rules/:ruleId"
+            element={
+              <RequirePermission permission="rules:read">
+                <Suspense fallback={rulesFallback}>
+                  <RuleDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="detections/rules/:ruleId/edit"
+            element={
+              <RequirePermission permission="rules:manage">
+                <Suspense fallback={rulesFallback}>
+                  <RuleEditorPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
           <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
           <Route
             path="incidents"

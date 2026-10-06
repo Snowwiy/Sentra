@@ -183,6 +183,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             backend, "api_searches", settings.api_searches_per_user_per_minute, 60, get_engine
         ),
     )
+    # Fase 5A: pruebas históricas de reglas por usuario (además del lock global de 1 a la vez).
+    app.state.rule_test_limiter = make_limiter(
+        backend, "rule_test", settings.rule_test_per_minute, 60, get_engine
+    )
     # Fase 4J: límites de la IA y fábrica del proveedor (los tests inyectan uno falso).
     # Nada se conecta al proveedor al arrancar: la IA solo actúa bajo demanda.
     app.state.ai_runtime = AIRuntime(AIConfig.from_settings(settings), backend, get_engine)

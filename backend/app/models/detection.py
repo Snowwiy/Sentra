@@ -7,9 +7,10 @@ Capas, de menos a más elaboradas:
 - detección (Detection): conclusión de una regla con severidad, confianza y evidencia;
 - alerta (Alert): notificación operacional; solo las detecciones graves abren una.
 
-Las reglas viven en código (app/detection/rules.py) con un id estable ("AUTH-001"): no hay
-tabla detection_rules para no tener dos fuentes de verdad mientras no exista edición de
-reglas desde la UI. Las filas guardan rule_id y rule_version para saber qué versión decidió.
+Las reglas built-in viven en código (app/detection/rules.py) con un id estable ("AUTH-001").
+Desde la Fase 5A las reglas personalizadas y Sigma viven en detection_rules (ver
+models/detection_rule.py). Las filas guardan rule_id, rule_version y rule_source para saber
+qué regla y qué versión decidió, aunque la regla cambie después.
 """
 
 import enum
@@ -114,6 +115,13 @@ class Detection(Base):
 
     rule_id: Mapped[str] = mapped_column(String(32))
     rule_version: Mapped[int] = mapped_column(Integer)
+    # Fase 5A: origen de la regla (builtin, custom, sigma) y su categoría copiada al crear la
+    # detección. Así riesgo, IA e incidentes la entienden sin consultar la regla, y una regla
+    # retirada sigue clasificando sus detecciones antiguas.
+    rule_source: Mapped[str] = mapped_column(
+        String(16), default="builtin", server_default="builtin"
+    )
+    rule_category: Mapped[str | None] = mapped_column(String(32))
     # "single" (una regla sobre una señal) o "correlation" (varias señales en una ventana).
     kind: Mapped[str] = mapped_column(String(16))
     # Lo que identifica "la misma detección" dentro de la regla y el activo: la cuenta, el

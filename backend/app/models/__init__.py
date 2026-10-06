@@ -23,6 +23,15 @@ from app.models.detection import (
     DetectionSignal,
     DetectionStatus,
 )
+from app.models.detection_rule import (
+    CompileStatus,
+    DetectionRuleMatch,
+    DetectionRuleRecord,
+    DetectionRuleStats,
+    DetectionRuleVersion,
+    RuleSource,
+    RuleStatus,
+)
 from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrigger
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
@@ -75,12 +84,17 @@ __all__ = [
     "AuditEvent",
     "ChangeCategory",
     "ChangeKind",
+    "CompileStatus",
     "ContextSource",
     "DataSensitivity",
     "Detection",
     "DetectionBaseline",
     "DetectionConfidence",
     "DetectionEvidence",
+    "DetectionRuleMatch",
+    "DetectionRuleRecord",
+    "DetectionRuleStats",
+    "DetectionRuleVersion",
     "DetectionSeverity",
     "DetectionSignal",
     "DetectionStatus",
@@ -104,6 +118,8 @@ __all__ = [
     "RiskContributionRecord",
     "RiskLevel",
     "RiskSnapshot",
+    "RuleSource",
+    "RuleStatus",
     "SystemEvent",
     "TelemetrySample",
     "User",

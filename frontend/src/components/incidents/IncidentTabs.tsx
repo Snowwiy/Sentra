@@ -171,6 +171,10 @@ function DetectionRows({ items }: { items: IncidentDetectionRef[] }) {
               </td>
               <td className="mono">
                 {d.rule_id}
+                {d.rule_version !== null && <span className="muted small"> v{d.rule_version}</span>}
+                {d.rule_source && d.rule_source !== "builtin" && (
+                  <span className="muted small"> · {d.rule_source === "sigma" ? "Sigma" : "personalizada"}</span>
+                )}
                 {d.kind === "correlation" && <span className="muted small"> · correlación</span>}
               </td>
               <td>

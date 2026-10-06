@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session, aliased
 from app.core.exceptions import ConflictError, NotFoundError
 from app.detection.config import DetectionConfig
 from app.detection.engine import resolve_detection_alert
-from app.detection.rules import RULES, RULES_BY_ID, RuleMeta
+from app.detection.rules import RULES_BY_ID, RuleMeta
 from app.models.alert import Alert
 from app.models.asset import Asset
 from app.models.detection import (
@@ -34,10 +34,9 @@ from app.schemas.detection import (
     DetectionEvidenceRead,
     DetectionList,
     DetectionRead,
-    DetectionRuleList,
-    DetectionRuleRead,
 )
 from app.services.asset_context_service import context_values
+from app.services.detection_rule_service import rule_text
 
 # Timeline del detalle: la evidencia está acotada a 100 por detección (engine.MAX_EVIDENCE).
 EVIDENCE_LIMIT = 100
@@ -141,45 +140,19 @@ class DetectionService:
             )
             or 0
         )
-        meta = _meta(detection.rule_id)
+        # Textos de la versión de la regla que alimentó la detección por última vez (custom y
+        # Sigma); las built-in, del código.
+        texts = rule_text(self._session, detection.rule_id, _last_version(detection))
         return DetectionDetail(
             **_read(detection, asset, alert_id).model_dump(),
             details=detection.details,
-            description=meta.description if meta else "",
-            why=meta.why if meta else "",
-            recommendations=list(meta.recommendations) if meta else [],
-            required_data=list(meta.required_data) if meta else [],
+            description=texts.description if texts else "",
+            why=texts.why if texts else "",
+            recommendations=list(texts.recommendations) if texts else [],
+            required_data=list(texts.required_data) if texts else [],
             evidence=[DetectionEvidenceRead.model_validate(item) for item in evidence],
             evidence_total=total,
             asset_context=context_values(self._session, [asset])[asset.id].brief(),
-        )
-
-    def rules(self) -> DetectionRuleList:
-        return DetectionRuleList(
-            items=[
-                DetectionRuleRead(
-                    rule_id=m.id,
-                    version=m.version,
-                    kind=m.kind,
-                    category=m.category,
-                    title=m.title,
-                    description=m.description,
-                    why=m.why,
-                    severity=m.severity,
-                    confidence=m.confidence,
-                    triggers=sorted(k.value for k in m.triggers),
-                    required_data=list(m.required_data),
-                    recommendations=list(m.recommendations),
-                    mitre_tactic=m.mitre.tactic if m.mitre else None,
-                    mitre_technique=m.mitre.technique if m.mitre else None,
-                    mitre_subtechnique=m.mitre.subtechnique if m.mitre else None,
-                    cooldown_minutes=int(m.cooldown_for(self._config).total_seconds() // 60),
-                    enabled=self._config.enabled and m.id not in self._config.disabled_rules,
-                )
-                for m in (rule.meta for rule in RULES)
-            ],
-            windows=self._config.windows(),
-            alert_min_severity=self._config.alert_min_severity,
         )
 
     # --- Flujo del analista ------------------------------------------------------------------
@@ -230,6 +203,13 @@ def _meta(rule_id: str) -> RuleMeta | None:
     return rule.meta if rule else None
 
 
+def _last_version(detection: Detection) -> int:
+    # Las custom no reescriben rule_version (versión que CREÓ la detección); la última que la
+    # actualizó va en details.rule_version.
+    value = (detection.details or {}).get("rule_version")
+    return value if isinstance(value, int) and value > 0 else detection.rule_version
+
+
 def _read(detection: Detection, asset: Asset, alert_id: UUID | None) -> DetectionRead:
     meta = _meta(detection.rule_id)
     return DetectionRead(
@@ -239,8 +219,9 @@ def _read(detection: Detection, asset: Asset, alert_id: UUID | None) -> Detectio
         rule_id=detection.rule_id,
         rule_version=detection.rule_version,
         kind=detection.kind,
+        rule_source=detection.rule_source,
         # Una regla retirada del catálogo sigue mostrando sus detecciones históricas.
-        category=meta.category if meta else "unknown",
+        category=detection.rule_category or (meta.category if meta else "unknown"),
         severity=detection.severity,
         confidence=detection.confidence,
         status=detection.status,

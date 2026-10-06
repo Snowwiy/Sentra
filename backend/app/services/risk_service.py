@@ -588,7 +588,7 @@ def _detection_ref(d: Detection) -> RiskDetectionRef:
         detection_id=d.public_id,
         rule_id=d.rule_id,
         title=d.title,
-        category=rule.meta.category if rule else "unknown",
+        category=d.rule_category or (rule.meta.category if rule else "unknown"),
         severity=d.severity,
         confidence=d.confidence,
         status=d.status,

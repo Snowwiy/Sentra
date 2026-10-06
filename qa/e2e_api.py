@@ -1048,8 +1048,287 @@ def test_detections() -> None:
         any(a["target_id"] == cleared["detection_id"] and a["result"] == "success" for a in audit),
         audit[:3],
     )
-    r = call("GET", "/detection-rules")
-    check("rule catalogue lists 23 rules", r.status == 200 and len(r.body["items"]) == 23, r.status)
+    r = call("GET", "/detection-rules?source=builtin")
+    check(
+        "rule catalogue lists 23 built-in rules",
+        r.status == 200 and r.body["total"] == 23,
+        r.status,
+    )
+
+
+SIGMA_QA = """
+title: QA cuentas svc creadas
+id: 3c0e9b8a-1b2c-4d5e-8f90-0a1b2c3d4e5f
+status: test
+tags: [attack.persistence, attack.t1136.001]
+logsource:
+  product: windows
+  service: security
+detection:
+  selection:
+    EventID: 4720
+    TargetUserName|startswith: 'qasvc_'
+  condition: selection
+level: high
+"""
+
+SIGMA_QA_UNSUPPORTED = """
+title: QA linea de comandos
+id: 4d1f0c9b-2c3d-4e5f-9a01-1b2c3d4e5f60
+logsource:
+  category: process_creation
+  product: windows
+detection:
+  selection:
+    CommandLine|contains: 'mimikatz'
+  condition: selection
+level: critical
+"""
+
+
+def test_detection_rules() -> None:
+    """Fase 5A: reglas personalizadas y Sigma sobre el MISMO motor 4H (job real).
+
+    Escenarios: (1) regla simple creada, probada en seco, activada y detectando; (2) regla de
+    umbral agrupada por cuenta; (3) Sigma soportada importada desactivada, activada y
+    detectando; (4) Sigma no soportada que no se puede activar y YAML malicioso rechazado;
+    (5) versiones, desactivar/retirar y permisos por rol. Datos sintéticos.
+    """
+    security = {"channel": "Security", "provider": "Microsoft-Windows-Security-Auditing"}
+    users: dict[str, dict[str, str]] = {}
+    for role in ("analyst", "viewer"):
+        name = f"qa-rules-{role}-" + uuid.uuid4().hex[:6]
+        password = f"qa {role} password " + uuid.uuid4().hex[:8]
+        r = call("POST", "/users", {"username": name, "password": password, "role": role})
+        check(f"admin creates a rules {role}", r.status == 201, (r.status, r.body))
+        users[role] = login(name, password)[1]
+    agent_id, token, asset_id = enroll("qa-rules")
+    h = bearer(token)
+    record = iter(range(20_000, 30_000))
+
+    def send(events: list[dict[str, Any]]) -> None:
+        r = call("POST", "/events", {"agent_id": agent_id, "events": events}, h)
+        check("rule events accepted", r.status == 201, (r.status, r.body))
+
+    def by_rule(uid: str) -> list[dict[str, Any]]:
+        r = call("GET", f"/detections?asset_id={asset_id}&rule_id={uid}")
+        return r.body["items"] if r.status == 200 else []
+
+    def sec(code: int, **data: str) -> dict[str, Any]:
+        return event(
+            next(record), event_code=code, level="info", message=f"QA {code}", data=data, **security
+        )
+
+    # 1. Regla simple.
+    definition = {
+        "logsource": "windows_security",
+        "condition": {
+            "all": [
+                {"field": "event.code", "op": "equals", "value": 4720},
+                {"field": "event.data.TargetUserName", "op": "starts_with", "value": "qa_"},
+            ]
+        },
+    }
+    r = call("POST", "/detection-rules/validate", {"definition": definition})
+    check("validate custom rule", r.status == 200 and r.body["valid"], r.body)
+    r = call(
+        "POST",
+        "/detection-rules/test",
+        {
+            "definition": definition,
+            "events": [
+                {"fields": {"event.code": 4720, "event.data.TargetUserName": "qa_x"}},
+                {"fields": {"event.code": 4720, "event.data.TargetUserName": "ana"}},
+            ],
+        },
+    )
+    check(
+        "dry-run matches only the right event", r.status == 200 and r.body["matched"] == 1, r.body
+    )
+    r = call(
+        "POST",
+        "/detection-rules",
+        {
+            "title": "QA cuenta qa_ creada",
+            "severity": "high",
+            "category": "account",
+            "definition": definition,
+        },
+    )
+    check("create custom rule (draft)", r.status == 201 and r.body["status"] == "draft", r.body)
+    if r.status != 201:
+        return
+    simple = r.body
+    uid = simple["rule_id"]
+    r = call("POST", f"/detection-rules/{uid}/enable", {"revision": simple["revision"]})
+    check("enable custom rule", r.status == 200 and r.body["enabled"], r.body)
+    simple = r.body
+    # El recorder cachea unos segundos los canales con reglas activas.
+    time.sleep(6)
+    send([sec(4720, TargetUserName="qa_backup", SubjectUserName="qa-admin")])
+    found = wait_for(lambda: by_rule(uid), bool)
+    check("custom rule creates a detection", len(found) == 1, found)
+    if found:
+        check(
+            "detection carries rule source and version",
+            found[0]["rule_source"] == "custom" and found[0]["rule_version"] == 1,
+            found[0],
+        )
+
+    # 2. Umbral por cuenta.
+    threshold = {
+        "logsource": "windows_security",
+        "condition": {"field": "event.code", "op": "equals", "value": 4625},
+        "threshold": {"count": 4, "window_minutes": 10},
+        "group_by": ["event.data.TargetUserName"],
+    }
+    r = call(
+        "POST",
+        "/detection-rules",
+        {
+            "title": "QA fallos por cuenta",
+            "severity": "medium",
+            "category": "authentication",
+            "definition": threshold,
+        },
+    )
+    check("create threshold rule", r.status == 201, r.body)
+    if r.status == 201:
+        t_uid = r.body["rule_id"]
+        call("POST", f"/detection-rules/{t_uid}/enable", {"revision": r.body["revision"]})
+        time.sleep(6)
+        send(
+            [sec(4625, TargetUserName="qa-few", LogonType="3") for _ in range(3)]
+            + [sec(4625, TargetUserName="qa-many", LogonType="3") for _ in range(4)]
+        )
+        found = wait_for(lambda: by_rule(t_uid), bool)
+        groups = [
+            call("GET", f"/detections/{d['detection_id']}").body["details"].get("group")
+            for d in found
+        ]
+        check("threshold fires only for the group that reaches it", groups == ["qa-many"], groups)
+
+    # 3. Sigma soportada.
+    r = call("POST", "/sigma/preview", {"yaml": SIGMA_QA})
+    check("sigma preview supported", r.status == 200 and r.body["outcome"] == "supported", r.body)
+    r = call("POST", "/sigma/import", {"yaml": SIGMA_QA})
+    check(
+        "sigma imported disabled",
+        r.status == 200 and r.body["result"] == "imported" and not r.body["rule"]["enabled"],
+        r.body,
+    )
+    if r.status == 200 and r.body["rule"]:
+        sigma_rule = r.body["rule"]
+        r = call("POST", "/sigma/import", {"yaml": SIGMA_QA})
+        check("same sigma again is unchanged", r.body.get("result") == "unchanged", r.body)
+        call(
+            "POST",
+            f"/detection-rules/{sigma_rule['rule_id']}/enable",
+            {"revision": sigma_rule["revision"]},
+        )
+        time.sleep(6)
+        send([sec(4720, TargetUserName="qasvc_web")])
+        found = wait_for(lambda: by_rule(sigma_rule["rule_id"]), bool)
+        check("sigma rule detects", len(found) == 1 and found[0]["rule_source"] == "sigma", found)
+
+    # 4. Sigma no soportada y YAML malicioso.
+    r = call("POST", "/sigma/import", {"yaml": SIGMA_QA_UNSUPPORTED})
+    check(
+        "unsupported sigma kept as draft",
+        r.status == 200 and r.body["result"] == "unsupported",
+        r.body,
+    )
+    if r.status == 200 and r.body["rule"]:
+        bad = r.body["rule"]
+        r = call("POST", f"/detection-rules/{bad['rule_id']}/enable", {"revision": bad["revision"]})
+        check(
+            "unsupported sigma cannot be enabled", r.status == 409 and is_error_envelope(r), r.body
+        )
+    r = call("POST", "/sigma/import", {"yaml": "a: !!python/object/apply:os.system ['id']"})
+    check("python yaml tag rejected", r.status == 200 and r.body["result"] == "rejected", r.body)
+    r = call(
+        "POST",
+        "/detection-rules",
+        {
+            "title": "QA mala",
+            "definition": {
+                "logsource": "windows_security",
+                "condition": {
+                    "field": "event.data.TargetUserName",
+                    "op": "regex",
+                    "value": "(a+)+$",
+                },
+            },
+        },
+    )
+    check("catastrophic regex rejected (422)", r.status == 422 and is_error_envelope(r), r.body)
+
+    # 5. Versiones, estados y permisos.
+    r = call(
+        "PATCH", f"/detection-rules/{uid}", {"revision": simple["revision"], "severity": "critical"}
+    )
+    check("edit creates version 2", r.status == 200 and r.body["version"] == 2, r.body)
+    r2 = call("PATCH", f"/detection-rules/{uid}", {"revision": simple["revision"], "why": "x"})
+    check(
+        "stale revision -> 409",
+        r2.status == 409 and is_error_envelope(r2, "detection_rule_conflict"),
+    )
+    if r.status == 200:
+        current = r.body
+        old = by_rule(uid)
+        check("old detection keeps version 1", bool(old) and old[0]["rule_version"] == 1, old)
+        r = call("POST", f"/detection-rules/{uid}/disable", {"revision": current["revision"]})
+        check("disable rule", r.status == 200 and r.body["status"] == "disabled", r.body)
+        r = call("POST", f"/detection-rules/{uid}/retire", {"revision": r.body["revision"]})
+        check("retire keeps the rule", r.status == 200 and r.body["status"] == "retired", r.body)
+        versions = call("GET", f"/detection-rules/{uid}/versions").body
+        check("versions kept after retire", len(versions.get("items", [])) == 2, versions)
+    r = call("POST", "/detection-rules/AUTH-001/disable", {"revision": 1})
+    check("built-in rules are read-only", r.status == 409, r.body)
+    analyst, viewer = users["analyst"], users["viewer"]
+    check("viewer reads rules", call("GET", "/detection-rules", session=viewer).status == 200)
+    check(
+        "viewer cannot validate",
+        call("POST", "/detection-rules/validate", {"definition": definition}, session=viewer).status
+        == 403,
+    )
+    check(
+        "analyst can dry-run",
+        call(
+            "POST", "/detection-rules/validate", {"definition": definition}, session=analyst
+        ).status
+        == 200,
+    )
+    check(
+        "analyst cannot create",
+        call(
+            "POST", "/detection-rules", {"title": "x", "definition": definition}, session=analyst
+        ).status
+        == 403,
+    )
+    check(
+        "analyst cannot import sigma",
+        call("POST", "/sigma/import", {"yaml": SIGMA_QA}, session=analyst).status == 403,
+    )
+    audit = call("GET", f"/detection-rules/{uid}/audit").body.get("items", [])
+    actions = {a["action"] for a in audit}
+    check(
+        "rule lifecycle audited",
+        {"rule_created", "rule_enabled", "rule_version_created", "rule_disabled", "rule_retired"}
+        <= actions,
+        sorted(actions),
+    )
+    # Limpieza: las reglas QA activas afectarían a los grupos siguientes (p. ej. el umbral de
+    # 4625 sumaría riesgo en test_risk). Se desactivan; no se borran (no hay borrado).
+    active = call("GET", "/detection-rules?status=active&q=QA").body.get("items", [])
+    for item in active:
+        if item["source"] != "builtin":
+            r = call(
+                "POST",
+                f"/detection-rules/{item['rule_id']}/disable",
+                {"revision": item["revision"]},
+            )
+            check(f"disable QA rule {item['rule_id']}", r.status == 200, r.body)
 
 
 def test_risk() -> None:
@@ -1592,6 +1871,7 @@ def main() -> int:
         test_hybrid_read,
         test_enrollment_tokens,
         test_detections,
+        test_detection_rules,
         test_risk,
         test_ai,
         test_incidents,

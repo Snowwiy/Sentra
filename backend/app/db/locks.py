@@ -28,6 +28,9 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "retention": _BASE + 4,
     "discovery": _BASE + 5,
 }
+# Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
+# prueba histórica concurrente en todo el despliegue para no saturar la base de datos.
+RULE_TEST_LOCK_KEY = _BASE + 6
 
 
 @contextmanager

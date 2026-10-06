@@ -23,8 +23,8 @@ from app.schemas.detection import (
     DetectionAction,
     DetectionDetail,
     DetectionList,
-    DetectionRuleList,
 )
+from app.schemas.detection_rule import RULE_UID_PATTERN
 from app.services import audit_service
 from app.services.auth_service import AuthContext
 from app.services.detection_service import DetectionFilter, DetectionService
@@ -54,7 +54,7 @@ def list_detections(
     # Esta severidad o superior.
     min_severity: DetectionSeverity | None = None,
     confidence: DetectionConfidence | None = None,
-    rule_id: Annotated[str | None, Query(max_length=32, pattern=r"^[A-Z]+-\d{3}$")] = None,
+    rule_id: Annotated[str | None, Query(max_length=32, pattern=RULE_UID_PATTERN)] = None,
     asset_id: UUID | None = None,
     # Rango sobre la última actividad (last_seen_at).
     since: datetime | None = None,
@@ -80,16 +80,6 @@ def list_detections(
         limit,
         offset,
     )
-
-
-@router.get("/detection-rules", response_model=DetectionRuleList, dependencies=[READ])
-def list_detection_rules(service: Service) -> DetectionRuleList:
-    """Catálogo de reglas (solo lectura: las reglas viven en código, sin CRUD todavía).
-
-    Abierto a monitoring:read y no solo a admin: la UI lo usa para el filtro por regla y
-    para explicar cada detección, y no contiene nada sensible.
-    """
-    return service.rules()
 
 
 @router.get(

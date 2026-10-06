@@ -30,6 +30,24 @@ import type {
   DetectionDetail,
   DetectionList,
   DetectionRuleList,
+  CompileStatus,
+  HistoricalTestResult,
+  RuleCatalog,
+  RuleContentInput,
+  RuleDefinition,
+  RuleDetail,
+  RuleDiff,
+  RuleSort,
+  RuleSource,
+  RuleStatus,
+  RuleTestResult,
+  RuleValidation,
+  RuleVersionDetail,
+  RuleVersionList,
+  SigmaImportResult,
+  SigmaPreview,
+  SigmaSource,
+  SyntheticEventInput,
   DetectionSeverity,
   DetectionStatus,
   DiscoveryJobDetail,
@@ -328,6 +346,98 @@ export const detectionsApi = {
   resolve: (detectionId: string, note?: string) =>
     apiPost<DetectionDetail>(`/detections/${encodeURIComponent(detectionId)}/resolve`, {
       note: note?.trim() ? note.trim() : null,
+    }),
+};
+
+export interface RuleQuery {
+  source?: RuleSource;
+  status?: RuleStatus;
+  enabled?: boolean;
+  compileStatus?: CompileStatus;
+  severity?: DetectionSeverity;
+  logsource?: string;
+  mitre?: string;
+  q?: string;
+  sort?: RuleSort;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+const rulePath = (ruleId: string) => `/detection-rules/${encodeURIComponent(ruleId)}`;
+
+/**
+ * Reglas de detección (Fase 5A). Leer: rules:read; validar/probar/vista previa Sigma:
+ * rules:test; crear, editar, activar, importar y prueba histórica: rules:manage.
+ */
+export const rulesApi = {
+  list: (query: RuleQuery, signal?: AbortSignal) =>
+    apiGet<DetectionRuleList>(
+      `/detection-rules${queryString({
+        source: query.source,
+        status: query.status,
+        // queryString omite false: el filtro se manda como texto.
+        enabled: query.enabled === undefined ? undefined : String(query.enabled),
+        compile_status: query.compileStatus,
+        severity: query.severity,
+        logsource: query.logsource,
+        mitre: query.mitre,
+        q: query.q,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  catalog: (signal?: AbortSignal) => apiGet<RuleCatalog>("/detection-rules/catalog", { signal }),
+  get: (ruleId: string, signal?: AbortSignal) => apiGet<RuleDetail>(rulePath(ruleId), { signal }),
+  versions: (ruleId: string, signal?: AbortSignal) =>
+    apiGet<RuleVersionList>(`${rulePath(ruleId)}/versions`, { signal }),
+  version: (ruleId: string, version: number, signal?: AbortSignal) =>
+    apiGet<RuleVersionDetail>(`${rulePath(ruleId)}/versions/${version}`, { signal }),
+  diff: (ruleId: string, from: number, to: number, signal?: AbortSignal) =>
+    apiGet<RuleDiff>(`${rulePath(ruleId)}/diff${queryString({ from, to })}`, { signal }),
+  exportRule: (ruleId: string) => apiGet<Record<string, unknown>>(`${rulePath(ruleId)}/export`),
+  sigmaSource: (ruleId: string, signal?: AbortSignal) =>
+    apiGet<SigmaSource>(`${rulePath(ruleId)}/sigma-source`, { signal }),
+  audit: (ruleId: string, signal?: AbortSignal) =>
+    apiGet<AuditEventList>(`${rulePath(ruleId)}/audit${queryString({ limit: 50 })}`, { signal }),
+  validate: (definition: RuleDefinition, extra: Partial<RuleContentInput> = {}) =>
+    apiPost<RuleValidation>("/detection-rules/validate", {
+      definition,
+      category: extra.category ?? null,
+      mitre_tactic: extra.mitre_tactic ?? null,
+      mitre_technique: extra.mitre_technique ?? null,
+      mitre_subtechnique: extra.mitre_subtechnique ?? null,
+    }),
+  test: (target: { definition: RuleDefinition } | { rule_id: string }, events: SyntheticEventInput[]) =>
+    apiPost<RuleTestResult>("/detection-rules/test", { ...target, events }),
+  testHistorical: (
+    target: { definition: RuleDefinition } | { rule_id: string },
+    range: { since?: string; until?: string; asset_id?: string },
+  ) => apiPost<HistoricalTestResult>("/detection-rules/test/historical", { ...target, ...range }),
+  create: (body: RuleContentInput) => apiPost<RuleDetail>("/detection-rules", body),
+  update: (ruleId: string, body: Partial<RuleContentInput> & { revision: number; acknowledge_partial?: boolean }) =>
+    apiPatch<RuleDetail>(rulePath(ruleId), body),
+  setState: (
+    ruleId: string,
+    action: "enable" | "disable" | "retire" | "unretire",
+    revision: number,
+    acknowledgePartial = false,
+  ) =>
+    apiPost<RuleDetail>(`${rulePath(ruleId)}/${action}`, {
+      revision,
+      acknowledge_partial: acknowledgePartial,
+    }),
+  restore: (ruleId: string, version: number, revision: number) =>
+    apiPost<RuleDetail>(`${rulePath(ruleId)}/versions/${version}/restore`, { revision }),
+  sigmaPreview: (yaml: string) => apiPost<SigmaPreview>("/sigma/preview", { yaml }),
+  sigmaImport: (yaml: string, update?: { revision: number }) =>
+    apiPost<SigmaImportResult>("/sigma/import", {
+      yaml,
+      on_duplicate: update ? "update" : "reject",
+      revision: update?.revision ?? null,
     }),
 };
 

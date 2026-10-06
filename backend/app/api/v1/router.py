@@ -12,6 +12,7 @@ from app.api.v1.routes import (
     console,
     console_discovery,
     dashboard,
+    detection_rules,
     detections,
     discovery,
     enrollment_tokens,
@@ -45,6 +46,7 @@ api_router.include_router(assets.router, responses=_COMMON)
 api_router.include_router(telemetry.router, responses=_COMMON)
 api_router.include_router(alerts.router, responses=_COMMON)
 api_router.include_router(detections.router, responses=_COMMON)
+api_router.include_router(detection_rules.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(incidents.router, responses=_COMMON)
 api_router.include_router(ai.router, responses=_COMMON)

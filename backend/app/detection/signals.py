@@ -46,6 +46,9 @@ class SignalKind(enum.StrEnum):
     PORT_EXPOSED = "port_exposed"
     ASSET_DISCOVERED = "asset_discovered"
     ASSET_DISAPPEARED = "asset_disappeared"
+    # Fase 5A: evento del sistema en bruto para reglas personalizadas por canal. Solo se
+    # registra para canales con alguna regla activa (recorder.py): sin reglas, cero filas.
+    EVENT = "event"
 
 
 class SourceType(enum.StrEnum):
@@ -361,6 +364,51 @@ def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> 
             signal = _draft_factory(event)(SignalKind.POWERSHELL_SUSPICIOUS, None, {})
         if signal is not None:
             drafts.append(signal)
+    return drafts
+
+
+# Mensaje evaluable por reglas personalizadas: suficiente para "contains" sobre el texto
+# habitual de un evento sin copiar los 4000 caracteres completos a cada señal.
+RAW_MESSAGE_MAX = 1024
+
+
+def raw_event_signals(
+    events: Iterable[SystemEvent], not_before: datetime, channels: frozenset[str]
+) -> list[SignalDraft]:
+    """Señales EVENT (Fase 5A): copia acotada de cada evento de un canal con reglas activas.
+
+    Mismas garantías que las demás señales: no se generan para backlog antiguo y los datos
+    van saneados (texto de una línea, longitud acotada). Las claves son las rutas del
+    catálogo de campos (app/detection/custom/catalog.py).
+    """
+    drafts: list[SignalDraft] = []
+    for event in events:
+        if event.occurred_at < not_before or event.channel not in channels:
+            continue
+        values: dict[str, Any] = {
+            "channel": event.channel,
+            "code": event.event_code,
+            "provider": event.provider,
+            "level": event.level.value,
+            "computer": text.clean_or_none(event.computer, 255),
+            "record_id": event.record_id,
+            "message": text.clean(event.message, RAW_MESSAGE_MAX) or None,
+        }
+        for key, value in list(_event_data(event).items())[: text.MAX_FIELDS]:
+            if isinstance(value, str):
+                values[f"data.{text.clean(key, 64)}"] = text.clean(value)
+        drafts.append(
+            SignalDraft(
+                kind=SignalKind.EVENT,
+                occurred_at=event.occurred_at,
+                source_type=SourceType.SYSTEM_EVENT,
+                subject=f"{event.channel}:{event.event_code}"[:255],
+                source_id=str(event.public_id),
+                # Sin bounded_data: necesita más campos (base + hasta 24 de EventData) y el
+                # mensaje más largo; cada valor ya se limpia y acota arriba.
+                data={key: value for key, value in values.items() if value is not None},
+            )
+        )
     return drafts
 
 

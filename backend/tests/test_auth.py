@@ -184,7 +184,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
     assert body["user"]["username"] == "ana" and body["user"]["role"] == "analyst"
     assert set(body["permissions"]) == {
         "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
-        "incidents:read", "incidents:manage",
+        "incidents:read", "incidents:manage", "rules:read", "rules:test",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -452,16 +452,21 @@ def test_last_admin_guard_in_the_service(db: Session) -> None:
 
 def test_role_permissions_are_least_privilege() -> None:
     # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer;
-    # incidents:read (Fase 4K) solo lectura de casos.
-    reads = {Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ}
+    # incidents:read (Fase 4K) solo lectura de casos; rules:read (Fase 5A) solo el catálogo.
+    reads = {
+        Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
+        Permission.RULES_READ,
+    }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
     assert not writes & ROLE_PERMISSIONS[Role.VIEWER]
     assert ROLE_PERMISSIONS[Role.ANALYST] == {
         Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DETECTIONS_MANAGE,
         Permission.DISCOVERY_RUN, Permission.AI_USE, Permission.INCIDENTS_READ,
-        Permission.INCIDENTS_MANAGE,
+        Permission.INCIDENTS_MANAGE, Permission.RULES_READ, Permission.RULES_TEST,
     }  # fmt: skip
+    # Crear, editar, activar e importar reglas (rules:manage) es solo de admin (Fase 5A).
+    assert Permission.RULES_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Cerrar, reabrir, fusionar y asignar a otros (incidents:admin) es solo de admin.
     assert Permission.INCIDENTS_ADMIN not in ROLE_PERMISSIONS[Role.ANALYST]
     assert ROLE_PERMISSIONS[Role.ADMIN] == set(Permission)
@@ -567,6 +572,8 @@ def _concrete(path: str) -> str:
         "model_id", "benchmark_id", "incident_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
+    # Fase 5A: reglas por identificador estable y versión numérica.
+    path = path.replace("{rule_id}", "SENTRA-CUSTOM-999999").replace("{version}", "1")
     assert "{" not in path, path
     return path
 

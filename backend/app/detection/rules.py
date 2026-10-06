@@ -71,6 +71,9 @@ class RuleMeta:
     # Cooldown tomado de la configuración (atributo de DetectionConfig) en vez de fijo: la
     # oleada de AUTH-001 dura lo que su ventana configurada.
     cooldown_setting: str | None = None
+    # Fase 5A: origen de la regla (builtin, custom, sigma). Las reglas de este fichero son
+    # todas builtin; las personalizadas se construyen desde la BD (custom/runtime.py).
+    source: str = "builtin"
 
     def cooldown_for(self, config: DetectionConfig) -> timedelta:
         if self.cooldown_setting:
