@@ -57,6 +57,10 @@ class AlertRule(enum.StrEnum):
     # Fase 4I: el riesgo del activo cruzó hacia "critical" (Risk Engine). Solo al subir y
     # con cooldown; se resuelve sola cuando el activo sale de critical.
     RISK_CRITICAL = "risk_critical"
+    # Fase 5B: cambio relevante en vulnerabilidades del activo (nueva confirmada crítica,
+    # alta confirmada con el servicio expuesto, o una resuelta que reaparece). Una alerta
+    # activa por activo que acumula ocurrencias; los findings potenciales nunca alertan.
+    VULNERABILITY = "vulnerability"
 
 
 class AlertSeverity(enum.StrEnum):

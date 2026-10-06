@@ -32,6 +32,7 @@ from app.repositories.alert_repository import AlertRepository
 from app.risk.queue import request_recalculation
 from app.services.asset_context_service import merge_context
 from app.services.identification import refresh_identity
+from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
 
@@ -164,6 +165,8 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     # etiquetas, historial...) sobrevive a la instalación del agente.
     merge_context(session, source=source, target=target)
     request_recalculation(session, [target.id])
+    # Fase 5B: los puertos del activo descubierto pasan al del agente (exposición).
+    mark_dirty(session, [target.id], "merge")
     logger.info(
         "discovered asset merged into agent asset",
         extra={"from": str(source.public_id), "into": str(target.public_id)},

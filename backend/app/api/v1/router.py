@@ -25,6 +25,7 @@ from app.api.v1.routes import (
     risk,
     telemetry,
     users,
+    vulnerabilities,
 )
 
 # Statuses every route with input can answer. FastAPI would otherwise document 422 with its
@@ -49,6 +50,7 @@ api_router.include_router(detections.router, responses=_COMMON)
 api_router.include_router(detection_rules.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(incidents.router, responses=_COMMON)
+api_router.include_router(vulnerabilities.router, responses=_COMMON)
 api_router.include_router(ai.router, responses=_COMMON)
 api_router.include_router(ai_local.router, responses=_COMMON)
 api_router.include_router(inventory.router, responses=_COMMON)

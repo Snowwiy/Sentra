@@ -116,6 +116,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `DETECTION_*` | Motor de detección y correlación (Fase 4H): activado por defecto; ventanas, umbrales, alerta mínima (`DETECTION_ALERT_MIN_SEVERITY=high`), reglas desactivadas y retención de detecciones resueltas. Todas en [docs/detection-engine.md](docs/detection-engine.md) |
 | `SIGMA_DEFAULT_CONFIDENCE`, `RULE_TEST_MAX_HOURS`, `RULE_TEST_MAX_ROWS`, `RULE_TEST_TIMEOUT_SECONDS`, `RULE_TEST_PER_MINUTE` | Reglas personalizadas y Sigma (Fase 5A): confianza inicial de las reglas Sigma importadas (`low`) y límites de la prueba histórica (72 h, 20 000 filas, 10 s, 6 por usuario y minuto). [docs/custom-detection-rules.md](docs/custom-detection-rules.md) |
 | `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
+| `VULN_*` | Vulnerabilidades (Fase 5B): evaluación por cola (`VULN_EVAL_INTERVAL_SECONDS=30`, reevaluación completa cada 24 h), evidencia antigua (72 h), capturas sin el componente antes de resolver (2), límites del catálogo (64 MiB, 200 000 registros), lotes de importación y alertas `vulnerability` con cooldown. Todas en [docs/vulnerability-management.md](docs/vulnerability-management.md) |
 | `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) Gestor de modelos locales (Fase 4J.2): `AI_RUNTIME`, `AI_MODEL_DIRECTORIES`, contexto, margen de memoria y benchmark en [docs/local-model-manager.md](docs/local-model-manager.md) |
 | `TRUSTED_PROXIES` | Proxies (IPs/redes) cuyos `X-Forwarded-For/Proto` se aceptan (Fase 4M; por defecto `127.0.0.1,::1`) |
 | `RATE_LIMIT_BACKEND`, `API_MUTATIONS_PER_USER_PER_MINUTE`, `API_SEARCHES_PER_USER_PER_MINUTE` | Rate limiting compartido en PostgreSQL en producción (`auto`) y límites por usuario del dashboard (120/min) |
@@ -178,6 +179,8 @@ cd backend
 | POST/PATCH | `/api/v1/detection-rules`, `PATCH /{rule_id}`, `/{rule_id}/enable\|disable\|retire\|unretire`, `/{rule_id}/versions/{v}/restore` | Crear, versionar y gestionar reglas personalizadas (`rules:manage`, admin; `revision` obligatoria, 409 si otro admin la cambió) |
 | POST | `/api/v1/detection-rules/validate`, `/test`, `/test/historical` | Validar y probar sin efectos: sintética (`rules:test`) e histórica de solo lectura (`rules:manage`) |
 | POST | `/api/v1/sigma/preview`, `/sigma/import` | Vista previa (`rules:test`) e importación Sigma (`rules:manage`; siempre desactivada) ([docs/sigma-support.md](docs/sigma-support.md)) |
+| GET | `/api/v1/vulnerabilities/overview`, `/vulnerabilities/findings?status=&active=&severity=&match_state=&confidence=&exposure=&asset_id=&vulnerability_id=&source=&stale=&q=&sort=&order=&limit=&offset=`, `/findings/{id}` (`/history`, `/audit`), `/vulnerabilities/exposure`, `/vulnerabilities/catalog`, `/assets/{id}/vulnerabilities` | Vulnerabilidades y exposición (Fase 5B, `vulnerabilities:read`): [docs/vulnerability-management.md](docs/vulnerability-management.md) |
+| POST | `/api/v1/vulnerabilities/findings/{id}/acknowledge\|mitigating\|resolve\|incident` (`vulnerabilities:manage`), `/accept-risk\|false-positive\|reopen`, `/vulnerabilities/catalog/preview\|import`, `/vulnerabilities/evaluate` (`vulnerabilities:admin`) | Flujo de trabajo (`version` obligatoria, 409 `vulnerability_conflict`), catálogo local con previsualización y reevaluación |
 | GET | `/api/v1/risk/overview` | Riesgo (Fase 4I): activos por nivel y confianza, factores principales, transiciones recientes |
 | GET | `/api/v1/risk/assets?level=&confidence=&device_type=&status=&criticality=&min_score=&q=&sort=&order=&limit=&offset=` | Activos por riesgo, el más alto primero |
 | GET | `/api/v1/risk/assets/{asset_id}`, `/history?range=24h\|7d\|30d`, `/contributions?snapshot_id=` | Detalle explicable, tendencia y contribuciones |
@@ -251,6 +254,15 @@ sin efectos y auditoría completa. Se ejecutan en el mismo motor de 4H, con reca
 entre workers. La importación Sigma admite un subconjunto honesto y marca como no soportado
 lo que Sentra no recoge ([docs/custom-detection-rules.md](docs/custom-detection-rules.md),
 [docs/sigma-support.md](docs/sigma-support.md)).
+**Vulnerabilidades y exposición** (Fase 5B): un administrador importa un catálogo local
+(sin descargas externas) y Sentra lo cruza con el software inventariado por los agentes y con
+la exposición observada. Cada finding indica si es confirmado, probable o potencial (las
+potenciales siempre aparte), con su porqué, evidencia, exposición y prioridad; flujo de
+trabajo con concurrencia optimista, riesgo aceptado con caducidad (admin), integración en el
+riesgo sin doble conteo, alertas solo en cambios relevantes, incidentes manuales e IA de solo
+lectura. Un puerto abierto nunca es una vulnerabilidad
+([docs/vulnerability-management.md](docs/vulnerability-management.md),
+[docs/vulnerability-catalog.md](docs/vulnerability-catalog.md)).
 **Riesgo** (Fase 4I): cada activo tiene un score 0-100 determinista con nivel y confianza
 separados, calculado a partir de sus detecciones, su exposición, su criticidad y su tipo, con
 contribuciones explicables, historial de cambios y tendencia; página Riesgo y sección Riesgo

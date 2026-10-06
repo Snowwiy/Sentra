@@ -50,10 +50,12 @@ from app.models.incident import (
     IncidentLevel,
     IncidentNote,
     IncidentStatus,
+    IncidentVulnerability,
     ResolutionCategory,
 )
 from app.models.risk import AssetRisk, RiskSnapshot
 from app.models.user import User
+from app.models.vulnerability import VulnerabilityFinding
 from app.schemas.asset_context import AssetContextSnapshot
 from app.schemas.incident import (
     IncidentAlertRef,
@@ -73,11 +75,27 @@ from app.schemas.incident import (
     IncidentSummary,
     IncidentUpdate,
     IncidentUserRef,
+    IncidentVulnerabilityRef,
 )
 from app.services import audit_service
 from app.services.asset_context_service import context_values
 from app.services.audit_service import Actor
 from app.services.risk_service import _contribution
+
+# Fase 5B: estados de trabajo de un finding desde los que se puede abrir un caso, y cómo se
+# traduce su severidad/confianza a la escala de incidentes ("informational" -> low).
+VULNERABILITY_ACTIVE = frozenset({"open", "acknowledged", "mitigating"})
+_VULNERABILITY_LEVEL = {
+    "informational": IncidentLevel.LOW,
+    "low": IncidentLevel.LOW,
+    "medium": IncidentLevel.MEDIUM,
+    "high": IncidentLevel.HIGH,
+    "critical": IncidentLevel.CRITICAL,
+}
+_VULNERABILITY_CONFIDENCE = {
+    "confirmed": IncidentConfidence.HIGH,
+    "probable": IncidentConfidence.MEDIUM,
+}
 
 # Detalle: relaciones mostradas en la respuesta (el resto en /evidence y en el timeline).
 DETAIL_RELATIONS_LIMIT = 50
@@ -379,6 +397,104 @@ class IncidentService:
         )
         self._session.commit()
         return incident
+
+    def promote_vulnerability(self, finding_id: UUID, payload: IncidentPromote) -> Incident:
+        """Fase 5B: abre un caso desde un finding de vulnerabilidad (nunca automático).
+
+        Solo findings que necesitan trabajo (open, acknowledged, mitigating) y que no estén
+        ya en un caso activo. La gravedad sale de la severidad normalizada del catálogo; la
+        confianza, del estado técnico del match (confirmed alta, probable media, resto baja).
+        """
+        row = self._session.execute(
+            select(VulnerabilityFinding, Asset)
+            .join(Asset, Asset.id == VulnerabilityFinding.asset_id)
+            .where(VulnerabilityFinding.public_id == finding_id)
+            .with_for_update(of=VulnerabilityFinding)
+        ).first()
+        if row is None:
+            raise NotFoundError("Vulnerability finding not found")
+        finding, asset = row[0], row[1]
+        if finding.status not in VULNERABILITY_ACTIVE:
+            raise IncidentStateError(
+                "Only open, acknowledged or mitigating findings can open an incident"
+            )
+        existing = self._session.scalar(
+            select(Incident)
+            .join(IncidentVulnerability, IncidentVulnerability.incident_id == Incident.id)
+            .where(
+                IncidentVulnerability.finding_id == finding.id,
+                Incident.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(Incident.number)
+            .limit(1)
+        )
+        if existing is not None:
+            key = incident_key(existing.number)
+            raise IncidentAlreadyLinkedError(
+                f"Already part of active incident {key}; open it instead",
+                details=[{"incident_id": str(existing.public_id), "key": key}],
+            )
+        now = _now()
+        severity = _VULNERABILITY_LEVEL.get(finding.severity, IncidentLevel.LOW)
+        priority = payload.priority or self._suggested_priority(severity, [asset])
+        incident = self._new_incident(
+            payload.title or f"{finding.vuln_external_id}: {finding.title}"[:200],
+            payload.description if payload.description is not None else finding.rationale,
+            severity,
+            priority,
+            _VULNERABILITY_CONFIDENCE.get(finding.match_state, IncidentConfidence.LOW),
+            now,
+        )
+        self._link_vulnerability(incident, finding, asset, "vulnerability", now)
+        self._snapshot_risk(incident, now, "created")
+        self._audit(
+            "incident_created",
+            incident,
+            {
+                "source": "vulnerability",
+                "finding": str(finding.public_id),
+                "vulnerability": finding.vuln_external_id,
+            },
+        )
+        return incident
+
+    def _link_vulnerability(
+        self,
+        incident: Incident,
+        finding: VulnerabilityFinding,
+        asset: Asset,
+        source: str,
+        now: datetime,
+    ) -> None:
+        self._session.add(
+            IncidentVulnerability(
+                incident_id=incident.id,
+                finding_id=finding.id,
+                finding_public_id=finding.public_id,
+                vulnerability_id=finding.vuln_external_id,
+                title=finding.title[:300],
+                severity=finding.severity,
+                component=finding.component_name[:512],
+                installed_version=finding.installed_version,
+                asset_name=asset.display_name[:255],
+                source=source,
+                attached_at=now,
+                attached_by_user_id=self.op.user.id,
+            )
+        )
+        self._session.flush()
+        self._widen_window(incident, finding.first_seen_at, finding.last_seen_at)
+        self._activity(
+            incident,
+            "vulnerability_attached",
+            f"Vulnerabilidad {finding.vuln_external_id} adjuntada: {finding.component_name}"
+            + (f" {finding.installed_version}" if finding.installed_version else ""),
+            now,
+            "vulnerability",
+            finding.public_id,
+            {"vulnerability": finding.vuln_external_id, "source": source},
+        )
+        self._link_asset(incident, asset, source[:16], now)
 
     def _suggested_priority(
         self, severity: IncidentLevel, assets: Sequence[Asset]
@@ -940,7 +1056,7 @@ class IncidentService:
         return target
 
     def _copy_relations(self, source: Incident, target: Incident, now: datetime) -> dict[str, int]:
-        counts = {"detections": 0, "alerts": 0, "assets": 0}
+        counts = {"detections": 0, "alerts": 0, "assets": 0, "vulnerabilities": 0}
         user_id = self.op.user.id
         have_detections = set(
             self._session.scalars(
@@ -1017,6 +1133,36 @@ class IncidentService:
                 )
             )
             counts["assets"] += 1
+        # Fase 5B: findings de vulnerabilidad del caso absorbido (sin duplicar).
+        have_findings = set(
+            self._session.scalars(
+                select(IncidentVulnerability.finding_public_id).where(
+                    IncidentVulnerability.incident_id == target.id
+                )
+            )
+        )
+        for v in self._session.scalars(
+            select(IncidentVulnerability).where(IncidentVulnerability.incident_id == source.id)
+        ):
+            if v.finding_public_id in have_findings:
+                continue
+            self._session.add(
+                IncidentVulnerability(
+                    incident_id=target.id,
+                    finding_id=v.finding_id,
+                    finding_public_id=v.finding_public_id,
+                    vulnerability_id=v.vulnerability_id,
+                    title=v.title,
+                    severity=v.severity,
+                    component=v.component,
+                    installed_version=v.installed_version,
+                    asset_name=v.asset_name,
+                    source="merge",
+                    attached_at=now,
+                    attached_by_user_id=user_id,
+                )
+            )
+            counts["vulnerabilities"] += 1
         return counts
 
     # --- Contexto del activo (Fase 4L, solo lectura) -------------------------------------------
@@ -1256,6 +1402,48 @@ def alert_refs(
     return refs
 
 
+def vulnerability_links(
+    incident_ids: Sequence[int],
+) -> Select[IncidentVulnerability, VulnerabilityFinding, Asset]:
+    # Una fila por finding aunque llegue por varios incidentes de la familia (merge).
+    first = (
+        select(func.min(IncidentVulnerability.id))
+        .where(IncidentVulnerability.incident_id.in_(incident_ids))
+        .group_by(IncidentVulnerability.finding_public_id)
+    )
+    return (
+        select(IncidentVulnerability, VulnerabilityFinding, Asset)
+        .outerjoin(
+            VulnerabilityFinding, VulnerabilityFinding.id == IncidentVulnerability.finding_id
+        )
+        .outerjoin(Asset, Asset.id == VulnerabilityFinding.asset_id)
+        .where(IncidentVulnerability.id.in_(first))
+    )
+
+
+def vulnerability_refs(
+    session: Session, stmt: Select[IncidentVulnerability, VulnerabilityFinding, Asset]
+) -> list[IncidentVulnerabilityRef]:
+    return [
+        IncidentVulnerabilityRef(
+            finding_id=link.finding_public_id,
+            vulnerability_id=link.vulnerability_id,
+            title=link.title,
+            severity=finding.severity if finding else link.severity,
+            component=link.component,
+            installed_version=finding.installed_version if finding else link.installed_version,
+            status=finding.status if finding else None,
+            match_state=finding.match_state if finding else None,
+            available=finding is not None,
+            asset_id=asset.public_id if asset else None,
+            hostname=asset.display_name if asset else link.asset_name,
+            source=link.source,
+            attached_at=link.attached_at,
+        )
+        for link, finding, asset in session.execute(stmt)
+    ]
+
+
 def _points(raw: object) -> float:
     if not isinstance(raw, dict):
         return 0.0
@@ -1350,6 +1538,14 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
             DETAIL_RELATIONS_LIMIT
         ),
     )
+    vulns_stmt = vulnerability_links(family)
+    vulns_total = session.scalar(select(func.count()).select_from(vulns_stmt.subquery())) or 0
+    vulnerabilities = vulnerability_refs(
+        session,
+        vulns_stmt.order_by(IncidentVulnerability.attached_at, IncidentVulnerability.id).limit(
+            DETAIL_RELATIONS_LIMIT
+        ),
+    )
     notes_total = (
         session.scalar(
             select(func.count())
@@ -1418,6 +1614,8 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
         detections_total=detections_total,
         alerts=alerts,
         alerts_total=alerts_total,
+        vulnerabilities=vulnerabilities,
+        vulnerabilities_total=vulns_total,
         notes_total=notes_total,
         metrics=IncidentMetrics(
             # Edad hasta la resolución/cierre si ya terminó: dato observado, no un SLA.

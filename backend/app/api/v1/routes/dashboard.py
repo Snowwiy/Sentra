@@ -21,4 +21,7 @@ def dashboard_summary(
 ) -> DashboardSummary:
     """Contadores del dashboard en SQL agregado (Fase 4M): nunca descarga activos."""
     service = DashboardService(session, timedelta(seconds=settings.heartbeat_timeout_seconds))
-    return service.summary(include_incidents=ctx.has(Permission.INCIDENTS_READ))
+    return service.summary(
+        include_incidents=ctx.has(Permission.INCIDENTS_READ),
+        include_vulnerabilities=ctx.has(Permission.VULNERABILITIES_READ),
+    )

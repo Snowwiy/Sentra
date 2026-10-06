@@ -322,6 +322,13 @@ export function DashboardPage() {
           {kpis.active_alerts} alertas activas
         </p>
       )}
+      {kpis?.vulnerabilities && (
+        <p className="muted small" aria-label="Resumen de vulnerabilidades">
+          <Link to="/vulnerabilities">Vulnerabilidades</Link>: críticas {kpis.vulnerabilities.by_severity.critical ?? 0} ·
+          altas {kpis.vulnerabilities.by_severity.high ?? 0} · {kpis.vulnerabilities.assets_affected} activos afectados
+          · {kpis.vulnerabilities.potential} potenciales sin confirmar
+        </p>
+      )}
 
       <IncidentsOverviewPanel />
 

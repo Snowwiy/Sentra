@@ -44,6 +44,10 @@ class MetricsRegistry:
         # con cientos de reglas personalizadas la cardinalidad se dispararía; el detalle por
         # regla está en GET /detection-rules (detection_rule_stats).
         self._rules: dict[str, list[float]] = {}
+        # Fase 5B: totales de la evaluación de vulnerabilidades por RESULTADO (created,
+        # resolved...). Nunca por CVE ni por activo: la cardinalidad sería ilimitada.
+        self._vulns: dict[str, int] = defaultdict(int)
+        self._vuln_seconds = 0.0
 
     def observe_request(self, method: str, route: str, status: int, seconds: float) -> None:
         status_class = f"{status // 100}xx"
@@ -71,6 +75,12 @@ class MetricsRegistry:
             totals[1] += matches
             totals[2] += errors
             totals[3] += seconds
+
+    def observe_vulnerabilities(self, totals: dict[str, int], seconds: float) -> None:
+        with self._lock:
+            for outcome, count in totals.items():
+                self._vulns[outcome] += count
+            self._vuln_seconds += seconds
 
     def rate_limited(self, scope: str) -> None:
         with self._lock:
@@ -149,6 +159,19 @@ class MetricsRegistry:
                     value = totals[index]
                     shown = f"{value:.6f}" if index == 3 else f"{int(value)}"
                     lines.append(f"{name}{_labels((('source', source),))} {shown}")
+            lines += [
+                "# HELP sentra_vulnerability_evaluations_total Resultados de la evaluación de"
+                " vulnerabilidades (activos, findings creados, resueltos...).",
+                "# TYPE sentra_vulnerability_evaluations_total counter",
+            ]
+            for outcome, count in sorted(self._vulns.items()):
+                labels = _labels((("outcome", outcome),))
+                lines.append(f"sentra_vulnerability_evaluations_total{labels} {count}")
+            lines += [
+                "# HELP sentra_vulnerability_evaluation_seconds_total Tiempo total evaluando.",
+                "# TYPE sentra_vulnerability_evaluation_seconds_total counter",
+                f"sentra_vulnerability_evaluation_seconds_total {self._vuln_seconds:.6f}",
+            ]
         return lines
 
 

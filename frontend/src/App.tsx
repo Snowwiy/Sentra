@@ -25,6 +25,17 @@ const IncidentDetailPage = lazy(() =>
 );
 const incidentsFallback = <LoadingState label="Cargando incidentes…" />;
 // Reglas de detección (Fase 5A): también en su propio chunk (editor e importación Sigma).
+// Vulnerabilidades (Fase 5B) en su propio chunk.
+const VulnerabilitiesPage = lazy(() =>
+  import("./pages/VulnerabilitiesPage").then((m) => ({ default: m.VulnerabilitiesPage })),
+);
+const VulnerabilityDetailPage = lazy(() =>
+  import("./pages/VulnerabilityDetailPage").then((m) => ({ default: m.VulnerabilityDetailPage })),
+);
+const VulnerabilityCatalogPage = lazy(() =>
+  import("./pages/VulnerabilityCatalogPage").then((m) => ({ default: m.VulnerabilityCatalogPage })),
+);
+const ExposurePage = lazy(() => import("./pages/ExposurePage").then((m) => ({ default: m.ExposurePage })));
 const RulesPage = lazy(() => import("./pages/RulesPage").then((m) => ({ default: m.RulesPage })));
 const RuleDetailPage = lazy(() => import("./pages/RuleDetailPage").then((m) => ({ default: m.RuleDetailPage })));
 const RuleEditorPage = lazy(() => import("./pages/RuleEditorPage").then((m) => ({ default: m.RuleEditorPage })));
@@ -91,6 +102,46 @@ export function AppRoutes() {
             }
           />
           <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
+          <Route
+            path="vulnerabilities"
+            element={
+              <RequirePermission permission="vulnerabilities:read">
+                <Suspense fallback={incidentsFallback}>
+                  <VulnerabilitiesPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="vulnerabilities/exposure"
+            element={
+              <RequirePermission permission="vulnerabilities:read">
+                <Suspense fallback={incidentsFallback}>
+                  <ExposurePage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="vulnerabilities/catalog"
+            element={
+              <RequirePermission permission="vulnerabilities:admin">
+                <Suspense fallback={incidentsFallback}>
+                  <VulnerabilityCatalogPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="vulnerabilities/:findingId"
+            element={
+              <RequirePermission permission="vulnerabilities:read">
+                <Suspense fallback={incidentsFallback}>
+                  <VulnerabilityDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
           <Route
             path="incidents"
             element={

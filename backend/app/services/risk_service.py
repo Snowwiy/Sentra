@@ -576,6 +576,7 @@ def _contribution(raw: dict[str, Any]) -> RiskContributionRead:
         points=_float(raw.get("points")) or 0.0,
         nominal_points=_float(raw.get("nominal_points")),
         detection_id=_uuid(raw.get("detection_id")),
+        finding_id=_uuid(raw.get("finding_id")),
         rule_id=str(raw["rule_id"])[:32] if raw.get("rule_id") else None,
         port=_int(raw.get("port")),
         details=details if isinstance(details, dict) else {},

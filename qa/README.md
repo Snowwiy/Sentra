@@ -102,6 +102,24 @@ el contexto actual y guarda el snapshot; el resumen de amenaza cuenta deteccione
 incidentes; dos admins con la misma `version`: el primero guarda y el segundo recibe 409
 `asset_context_conflict` sin sobrescritura; y los filtros de contexto del listado.
 
+Fase 5B (`qa/e2e_vulnerabilities.py`, mismo entorno que `e2e_api.py`): cinco escenarios con
+un catálogo sintético propio por ejecución (fuente `qa-vuln-<aleatorio>`, `CVE-2099-*`).
+(1) Catálogo: previsualizar no escribe, importar con otra huella da 409, una referencia
+`javascript:` es un registro inválido, JSON muy anidado 422, analyst y viewer 403 al importar.
+(2) Windows: inventario → finding confirmado con su porqué; una coincidencia solo por nombre
+no se confirma; un activo con un puerto abierto y sin inventario no tiene findings.
+(3) Flujo: viewer 403, analyst reconoce, versión obsoleta 409 `vulnerability_conflict`,
+analyst no acepta riesgo (403), admin acepta con caducidad y reabre. (4) Ciclo de vida:
+actualizar a la versión corregida resuelve (`resolved_by_inventory_change`), volver a la
+vulnerable reabre, con historial. (5) Integraciones: incidente manual (viewer 403), vínculo
+en ambos sentidos, IA de solo lectura (409 si está desactivada), contribución en el riesgo
+y auditoría. Fuerza la evaluación con `POST /vulnerabilities/evaluate`; el riesgo espera al
+job (`RISK_EVAL_INTERVAL_SECONDS=2` lo acelera).
+
+```powershell
+backend\.venv\Scripts\python.exe qa\e2e_vulnerabilities.py
+```
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell
@@ -158,6 +176,21 @@ historial, las opciones y el resumen de amenaza, con sentencias SQL por petició
 crea (por prefijo, también restos de una ejecución interrumpida). Ejecútalo con la API QA
 parada: sus jobs de riesgo compiten por las mismas filas al borrar. Resultados de referencia en
 [docs/asset-context.md](../docs/asset-context.md).
+
+### Rendimiento de vulnerabilidades
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_vulnerabilities.py   # --assets 10000 --records 100000
+```
+
+Con 10 000 activos sintéticos (100 000 programas), un catálogo de 100 000 registros y ~50 000
+findings mide la importación por la ruta de la CLI, la evaluación completa y una reevaluación
+sin cambios (activos/s) y las lecturas de la UI (resumen, listado con filtros, orden y
+búsqueda, findings de un activo y exposición) con sentencias SQL por petición. Borra lo que
+crea. Ejecútalo con la API QA parada. Resultados de referencia en
+[docs/vulnerability-management.md](../docs/vulnerability-management.md).
 
 ### Fase 4M: producción y dashboard paginado
 

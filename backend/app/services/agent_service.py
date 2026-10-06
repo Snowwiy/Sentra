@@ -4,7 +4,7 @@ from uuid import UUID
 
 from sqlalchemy import func, update
 from sqlalchemy.exc import IntegrityError
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, object_session
 
 from app.core.exceptions import (
     AgentRevokedError,
@@ -32,6 +32,7 @@ from app.services.alert_service import resolve_offline_alert
 from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered
+from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,9 @@ def record_contact(session: Session, asset: Asset, now: datetime) -> None:
 
 
 def apply_host_info(asset: Asset, host: HostInfo) -> None:
+    # Fase 5B: un cambio de SO (actualización de build, kernel nuevo) cambia qué
+    # vulnerabilidades de SO aplican; se encola su evaluación, nunca en cada heartbeat.
+    os_changed = (asset.os_name, asset.os_version) != (host.os_name, host.os_version)
     # Plain attribute assignment: SQLAlchemy only issues an UPDATE (and bumps updated_at)
     # for values that actually changed.
     asset.hostname = host.hostname
@@ -70,6 +74,9 @@ def apply_host_info(asset: Asset, host: HostInfo) -> None:
     # El agente es la fuente autoritativa del nombre y del tipo: se recalcula con lo que
     # acaba de reportar (sin escrituras si nada cambió).
     refresh_identity(asset)
+    session = object_session(asset)
+    if os_changed and session is not None and asset.id is not None:
+        mark_dirty(session, [asset.id], "os_change")
 
 
 def authenticate_agent(assets: AssetRepository, agent_id: UUID, token: str | None) -> Asset:

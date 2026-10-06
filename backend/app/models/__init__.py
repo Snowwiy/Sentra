@@ -44,6 +44,7 @@ from app.models.incident import (
     IncidentDetection,
     IncidentFeedback,
     IncidentNote,
+    IncidentVulnerability,
 )
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
@@ -57,6 +58,14 @@ from app.models.risk import (
 )
 from app.models.telemetry import TelemetrySample
 from app.models.user import User, UserSession
+from app.models.vulnerability import (
+    AssetVulnerabilityState,
+    Vulnerability,
+    VulnerabilityAffected,
+    VulnerabilityFinding,
+    VulnerabilityFindingHistory,
+    VulnerabilitySource,
+)
 
 __all__ = [
     "AIInsight",
@@ -81,6 +90,7 @@ __all__ = [
     "AssetRole",
     "AssetStatus",
     "AssetTag",
+    "AssetVulnerabilityState",
     "AuditEvent",
     "ChangeCategory",
     "ChangeKind",
@@ -110,6 +120,7 @@ __all__ = [
     "IncidentDetection",
     "IncidentFeedback",
     "IncidentNote",
+    "IncidentVulnerability",
     "MonitoringMethod",
     "NetworkZone",
     "PortStateValue",
@@ -124,4 +135,9 @@ __all__ = [
     "TelemetrySample",
     "User",
     "UserSession",
+    "Vulnerability",
+    "VulnerabilityAffected",
+    "VulnerabilityFinding",
+    "VulnerabilityFindingHistory",
+    "VulnerabilitySource",
 ]

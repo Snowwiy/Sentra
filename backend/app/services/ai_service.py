@@ -53,6 +53,7 @@ from app.models.asset import Asset
 from app.models.detection import Detection
 from app.models.incident import Incident
 from app.models.risk import RiskSnapshot
+from app.models.vulnerability import VulnerabilityFinding
 from app.risk.config import RiskConfig
 from app.schemas.ai import AIProviderState, AIStatus, InsightList, InsightRead, InsightResult
 from app.services import audit_service
@@ -265,6 +266,19 @@ class AIInsightService:
             refresh=refresh,
         )
 
+    def analyze_vulnerability(self, finding_id: UUID, refresh: bool) -> InsightRead:
+        """Fase 5B: explicación de solo lectura de un finding de vulnerabilidad.
+
+        Nunca cambia el finding (estado, match, prioridad) ni consulta fuentes externas: solo
+        interpreta lo que Sentra ya guardó.
+        """
+        return self._run(
+            InsightKind.VULNERABILITY_ANALYSIS,
+            lambda b: b.vulnerability(finding_id),
+            entity=f"vulnerability:{finding_id}",
+            refresh=refresh,
+        )
+
     def ask(
         self,
         question: str,
@@ -355,7 +369,9 @@ class AIInsightService:
             now,
         )
         ctx = build(builder)  # 404 si la entidad no existe (antes de auditar nada).
-        version = data_version(self._session, ctx.asset_pk, ctx.detection_pk, ctx.incident_pk)
+        version = data_version(
+            self._session, ctx.asset_pk, ctx.detection_pk, ctx.incident_pk, ctx.vulnerability_pk
+        )
         cache_key = self._cache_key(kind, entity, version, question)
         base = {
             "kind": kind.value,
@@ -415,6 +431,7 @@ class AIInsightService:
             asset_id=ctx.asset_pk,
             detection_id=ctx.detection_pk,
             incident_id=ctx.incident_pk,
+            vulnerability_finding_id=ctx.vulnerability_pk,
             risk_snapshot_id=ctx.risk_snapshot_pk,
             question=question[:500] if question else None,
             cache_key=cache_key,
@@ -536,15 +553,24 @@ class AIInsightService:
 
     # --- Lectura de insights ----------------------------------------------------------------
 
-    def _base(self) -> Select[AIInsight, Asset, UUID, UUID, UUID]:
+    def _base(self) -> Select[AIInsight, Asset, UUID, UUID, UUID, UUID]:
         stmt = (
             select(
-                AIInsight, Asset, Detection.public_id, RiskSnapshot.public_id, Incident.public_id
+                AIInsight,
+                Asset,
+                Detection.public_id,
+                RiskSnapshot.public_id,
+                Incident.public_id,
+                VulnerabilityFinding.public_id,
             )
             .outerjoin(Asset, Asset.id == AIInsight.asset_id)
             .outerjoin(Detection, Detection.id == AIInsight.detection_id)
             .outerjoin(RiskSnapshot, RiskSnapshot.id == AIInsight.risk_snapshot_id)
             .outerjoin(Incident, Incident.id == AIInsight.incident_id)
+            .outerjoin(
+                VulnerabilityFinding,
+                VulnerabilityFinding.id == AIInsight.vulnerability_finding_id,
+            )
         )
         # Las preguntas de Ask son privadas de quien las hizo.
         return stmt.where(
@@ -559,10 +585,13 @@ class AIInsightService:
         limit: int,
         offset: int,
         incident_id: UUID | None = None,
+        vulnerability_finding_id: UUID | None = None,
     ) -> InsightList:
         stmt = self._base()
         if incident_id is not None:
             stmt = stmt.where(Incident.public_id == incident_id)
+        if vulnerability_finding_id is not None:
+            stmt = stmt.where(VulnerabilityFinding.public_id == vulnerability_finding_id)
         if kind:
             stmt = stmt.where(AIInsight.kind == kind)
         if asset_id is not None:
@@ -575,9 +604,9 @@ class AIInsightService:
             .limit(limit)
             .offset(offset)
         ).all()
-        versions: dict[tuple[int | None, int | None, int | None], str] = {}
+        versions: dict[tuple[str, int | None, int | None, int | None], str] = {}
         return InsightList(
-            items=[self._to_read(r[0], r[1], r[2], r[3], r[4], False, versions) for r in rows],
+            items=[self._to_read(*r, False, versions) for r in rows],
             total=total,
         )
 
@@ -585,11 +614,11 @@ class AIInsightService:
         row = self._session.execute(self._base().where(AIInsight.public_id == insight_id)).first()
         if row is None:
             raise NotFoundError("Insight not found")
-        return self._to_read(row[0], row[1], row[2], row[3], row[4], False, {})
+        return self._to_read(*row, False, {})
 
     def _read(self, insight: AIInsight, cached: bool) -> InsightRead:
         row = self._session.execute(self._base().where(AIInsight.id == insight.id)).one()
-        return self._to_read(row[0], row[1], row[2], row[3], row[4], cached, {})
+        return self._to_read(*row, cached, {})
 
     def _to_read(
         self,
@@ -598,8 +627,9 @@ class AIInsightService:
         detection_public: UUID | None,
         snapshot_public: UUID | None,
         incident_public: UUID | None,
+        vulnerability_public: UUID | None,
         cached: bool,
-        versions: dict[tuple[int | None, int | None, int | None], str],
+        versions: dict[tuple[str, int | None, int | None, int | None], str],
     ) -> InsightRead:
         stale_reason = self._stale_reason(insight, versions)
         return InsightRead(
@@ -610,6 +640,7 @@ class AIInsightService:
             asset_name=asset.display_name if asset else None,
             detection_id=detection_public,
             incident_id=incident_public,
+            vulnerability_finding_id=vulnerability_public,
             risk_snapshot_id=snapshot_public,
             question=insight.question,
             provider=insight.provider,
@@ -630,7 +661,7 @@ class AIInsightService:
     def _stale_reason(
         self,
         insight: AIInsight,
-        versions: dict[tuple[int | None, int | None, int | None], str],
+        versions: dict[tuple[str, int | None, int | None, int | None], str],
     ) -> str | None:
         if insight.scope == "asset" and insight.asset_id is None:
             return "entity_deleted"
@@ -638,16 +669,26 @@ class AIInsightService:
             return "entity_deleted"
         if insight.scope == "detection" and insight.detection_id is None:
             return "entity_deleted"
+        if insight.scope == "vulnerability" and insight.vulnerability_finding_id is None:
+            return "entity_deleted"
         if insight.expires_at <= datetime.now(UTC):
             return "expired"
+        # Clave de la huella: (alcance, activo, detección o incidente o finding).
+        key: tuple[str, int | None, int | None, int | None]
         if insight.scope == "incident":
-            key: tuple[int | None, int | None, int | None] = (None, None, insight.incident_id)
+            key = ("incident", None, None, insight.incident_id)
+        elif insight.scope == "vulnerability":
+            key = ("vulnerability", None, None, insight.vulnerability_finding_id)
         else:
             key = (
+                "entity",
                 insight.asset_id,
                 insight.detection_id if insight.scope == "detection" else None,
                 None,
             )
         if key not in versions:
-            versions[key] = data_version(self._session, key[0], key[1], key[2])
+            if key[0] == "vulnerability":
+                versions[key] = data_version(self._session, None, None, None, key[3])
+            else:
+                versions[key] = data_version(self._session, key[1], key[2], key[3])
         return "data_changed" if versions[key] != insight.data_version else None

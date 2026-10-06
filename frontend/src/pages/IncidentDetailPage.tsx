@@ -188,6 +188,33 @@ function Overview({ incident }: { incident: IncidentDetail }) {
         </section>
       )}
 
+      {incident.vulnerabilities.length > 0 && (
+        <section className="panel panel--padded" aria-label="Vulnerabilidades">
+          <h2>Vulnerabilidades ({incident.vulnerabilities_total})</h2>
+          <p className="muted small">Snapshot al vincularlas y estado actual del finding.</p>
+          <ul>
+            {incident.vulnerabilities.map((v) => (
+              <li key={v.finding_id}>
+                {v.available ? (
+                  <Link className="vuln-id" to={`/vulnerabilities/${v.finding_id}`}>
+                    {v.vulnerability_id}
+                  </Link>
+                ) : (
+                  <span className="vuln-id">{v.vulnerability_id}</span>
+                )}{" "}
+                {v.title} · {v.component} {v.installed_version ?? ""}
+                {v.hostname && ` · ${v.hostname}`}
+                <span className="muted small">
+                  {" "}
+                  · {v.severity}
+                  {v.status ? ` · ${v.status}` : " · ya no existe"}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="panel panel--padded" aria-label="Riesgo">
         <h2>Riesgo</h2>
         <p className="muted small">

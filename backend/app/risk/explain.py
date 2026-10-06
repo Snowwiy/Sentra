@@ -29,7 +29,8 @@ CONFIDENCE_LABELS = {
 REDUCTION_LABELS = {
     "decay": "Antigüedad de la actividad (decay temporal)",
     "resolved": "Detecciones resueltas (memoria reciente que decae)",
-    "acknowledged": "Detecciones reconocidas (siguen activas, peso algo menor)",
+    # Fase 5B: también vulnerabilidades reconocidas, en mitigación o con riesgo aceptado.
+    "acknowledged": "Detecciones o vulnerabilidades en gestión (siguen activas, peso menor)",
     "absorbed": "Señales ya contadas en una correlación o en el mismo puerto (sin doble conteo)",
     "diminishing": "Rendimientos decrecientes por varias señales",
 }

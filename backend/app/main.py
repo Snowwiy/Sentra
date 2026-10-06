@@ -29,6 +29,7 @@ from app.services.background import (
     purge_old_data,
     run_detection_engine,
     run_risk_engine,
+    run_vulnerability_engine,
     sweep_offline_assets,
 )
 from app.services.discovery_runner import stop_discovery_runner
@@ -78,6 +79,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if settings.risk_enabled:
             jobs.append(
                 PeriodicJob("risk-engine", settings.risk_eval_interval_seconds, run_risk_engine)
+            )
+        # Fase 5B: cola de evaluación de vulnerabilidades, refresco y caducidad de riesgos
+        # aceptados, fuera de las peticiones (nunca en cada heartbeat).
+        if settings.vuln_enabled:
+            jobs.append(
+                PeriodicJob(
+                    "vulnerability-engine",
+                    settings.vuln_eval_interval_seconds,
+                    run_vulnerability_engine,
+                )
             )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:

@@ -2001,3 +2001,98 @@ td > .badge:first-child {
   border: 1px solid var(--border);
   border-radius: 6px;
 }
+
+/* --- Fase 5B: vulnerabilidades ------------------------------------------------------------ */
+
+.vmatch {
+  display: inline-block;
+  padding: 0 7px;
+  font-size: 0.72rem;
+  font-weight: 600;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+.vmatch__confidence {
+  font-weight: 400;
+  color: var(--text-muted);
+}
+
+.vmatch--confirmed {
+  color: var(--crit);
+  border-color: var(--crit);
+}
+
+.vmatch--probable {
+  color: #f97316;
+  border-color: #f97316;
+}
+
+/* Potencial: borde discontinuo para que nunca se lea como confirmada. */
+.vmatch--potential,
+.vmatch--unknown {
+  color: var(--text-muted);
+  border-style: dashed;
+}
+
+.vmatch--not_affected {
+  color: var(--ok);
+}
+
+.vstatus {
+  font-weight: 600;
+}
+
+.vstatus--open {
+  color: var(--warn);
+}
+
+.vstatus--acknowledged,
+.vstatus--mitigating {
+  color: var(--accent);
+}
+
+.vstatus--resolved,
+.vstatus--false_positive {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.vstatus--accepted_risk {
+  color: var(--idle);
+}
+
+.vexposure {
+  font-size: 0.8rem;
+  white-space: nowrap;
+}
+
+.vexposure--internet_exposed {
+  color: var(--crit);
+  font-weight: 600;
+}
+
+.vexposure--observed {
+  color: #f97316;
+}
+
+.vexposure--listening {
+  color: var(--warn);
+}
+
+.vexposure--not_observed,
+.vexposure--unknown {
+  color: var(--text-muted);
+}
+
+.vuln-id {
+  font-family: var(--mono);
+  white-space: nowrap;
+}
+
+.vuln-refs {
+  margin: 0;
+  padding-left: 18px;
+  word-break: break-all;
+}

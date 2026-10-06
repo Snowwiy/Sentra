@@ -12,6 +12,7 @@ import secrets
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from uuid import UUID
 
 from pydantic import ValidationError
@@ -20,9 +21,10 @@ from sqlalchemy.orm import Session
 
 from app.core import passwords
 from app.core.config import get_settings
-from app.core.exceptions import ConflictError, NotFoundError, PolicyError
+from app.core.exceptions import CatalogError, ConflictError, NotFoundError, PolicyError
 from app.core.permissions import Role
-from app.db.session import get_sessionmaker
+from app.db.locks import VULN_CATALOG_LOCK_KEY, singleton_lock
+from app.db.session import get_engine, get_sessionmaker
 from app.detection.config import DetectionConfig
 from app.detection.engine import DetectionEngine, EngineRun
 from app.discovery.targets import TargetError
@@ -52,6 +54,9 @@ from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import oui_database, refresh_identity
 from app.services.preflight import migration_state, production_report
 from app.services.retention_service import RetentionPolicy, RetentionService
+from app.services.vulnerability_catalog_service import VulnerabilityCatalogService
+from app.vulnerabilities.engine import VulnerabilityConfig, VulnerabilityEngine, VulnerabilityRun
+from app.vulnerabilities.queue import mark_dirty
 
 
 def _list_agents(session: Session) -> None:
@@ -139,6 +144,85 @@ def _risk(session: Session, everything: bool) -> int:
     print(
         f"{total.assets} assets evaluated: {total.snapshots} history points,"
         f" {total.transitions} level changes, {total.alerts} alerts, {total.errors} errors"
+    )
+    return 1 if total.errors else 0
+
+
+def _vuln_catalog_import(session: Session, file: str, skip_invalid: bool) -> int:
+    """Fase 5B: importa un catálogo local grande por lotes (la API acepta tamaños menores).
+
+    Solo lee el fichero indicado (nunca descarga nada). El lock del catálogo se mantiene en
+    una conexión propia durante toda la importación: ni otra CLI ni la API importan a la vez.
+    """
+    settings = get_settings()
+    service = VulnerabilityCatalogService(session, settings)
+    with singleton_lock(get_engine, VULN_CATALOG_LOCK_KEY) as acquired:
+        if not acquired:
+            print("another catalog import is in progress", file=sys.stderr)
+            return 1
+        try:
+            result, created = service.import_file(
+                Path(file),
+                audit_service.CLI,
+                skip_invalid=skip_invalid,
+                batch_size=settings.vuln_import_batch_size,
+                progress=lambda done, total: print(f"  {done}/{total} records", flush=True),
+            )
+        except CatalogError as exc:
+            print(f"refused ({exc.code}): {exc.message}", file=sys.stderr)
+            return 2
+        audit_service.record(
+            session,
+            audit_service.CLI,
+            "vulnerability_catalog_imported" if created else "vulnerability_catalog_updated",
+            target_type="vulnerability_catalog",
+            target_id=result.source,
+            details={
+                "sha256": result.sha256,
+                "revision": result.revision,
+                "new": result.new,
+                "updated": result.updated,
+                "unchanged": result.unchanged,
+                "invalid": result.invalid,
+                "assets_queued": result.assets_queued,
+                "via": "cli",
+            },
+        )
+    print(
+        f"catalog {result.source} revision {result.revision}: {result.new} new,"
+        f" {result.updated} updated, {result.unchanged} unchanged, {result.invalid} invalid;"
+        f" {result.assets_queued} assets queued for evaluation"
+    )
+    return 0
+
+
+def _vuln_evaluate(session: Session, everything: bool) -> int:
+    """Fase 5B: procesa ya la cola de evaluación de vulnerabilidades (con --all, todo).
+
+    Útil tras importar un catálogo con la API parada. Repetirlo es seguro: un activo cuyo
+    inventario y catálogo no cambiaron deja sus findings como estaban.
+    """
+    settings = get_settings()
+    engine = VulnerabilityEngine(
+        session,
+        VulnerabilityConfig.from_settings(settings),
+        AlertThresholds.from_settings(settings),
+    )
+    engine.seed_missing(limit=1_000_000)
+    if everything:
+        assets = session.scalars(select(Asset.id).where(Asset.agent_id.is_not(None))).all()
+        mark_dirty(session, assets, "manual")
+        session.commit()
+    total = VulnerabilityRun()
+    while True:
+        run = engine.process_dirty()
+        total.add(run)
+        if run.assets == 0 or run.errors == run.assets:
+            break
+    print(
+        f"{total.assets} assets evaluated: {total.created} findings created, {total.updated}"
+        f" updated, {total.resolved} resolved, {total.reopened} reopened, {total.alerts} alerts,"
+        f" {total.errors} errors"
     )
     return 1 if total.errors else 0
 
@@ -566,6 +650,20 @@ def main(argv: list[str] | None = None) -> int:
     risk.add_argument(
         "--all", action="store_true", help="recalculate every asset, not only the queued ones"
     )
+    catalog = commands.add_parser(
+        "vuln-catalog-import",
+        help="import a local vulnerability catalog file (sentra-vuln-catalog/1, Fase 5B)",
+    )
+    catalog.add_argument("file", help="local JSON file (never a URL)")
+    catalog.add_argument(
+        "--skip-invalid", action="store_true", help="import the valid records, skip the rest"
+    )
+    evaluate = commands.add_parser(
+        "vuln-evaluate", help="process the vulnerability evaluation queue now (Fase 5B)"
+    )
+    evaluate.add_argument(
+        "--all", action="store_true", help="evaluate every agent asset, not only the queued ones"
+    )
     discover = commands.add_parser(
         "discover", help="run network discovery now over the allowed networks (or one target)"
     )
@@ -637,6 +735,10 @@ def main(argv: list[str] | None = None) -> int:
             return _detections(session, args.reevaluate_hours)
         if args.command == "run-risk":
             return _risk(session, args.all)
+        if args.command == "vuln-catalog-import":
+            return _vuln_catalog_import(session, args.file, args.skip_invalid)
+        if args.command == "vuln-evaluate":
+            return _vuln_evaluate(session, args.all)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

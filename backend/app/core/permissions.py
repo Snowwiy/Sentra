@@ -63,6 +63,15 @@ class Permission(enum.StrEnum):
     # contra datos históricos. Solo admin: una regla cambia lo que Sentra detecta (o deja de
     # detectar) para todos.
     RULES_MANAGE = "rules:manage"
+    # Vulnerability & Exposure Management (Fase 5B). Ver findings, su evidencia, historial,
+    # exposición y el catálogo local importado (nunca el inventario completo de otro modo).
+    VULNERABILITIES_READ = "vulnerabilities:read"
+    # Trabajar findings: reconocer, marcar en mitigación, resolver (con motivo) y abrir un
+    # incidente desde un finding.
+    VULNERABILITIES_MANAGE = "vulnerabilities:manage"
+    # Decisiones que ocultan riesgo o cambian lo que Sentra evalúa: aceptar riesgo, falso
+    # positivo, reabrir, importar el catálogo y forzar una reevaluación. Solo admin.
+    VULNERABILITIES_ADMIN = "vulnerabilities:admin"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -72,6 +81,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.AI_USE,
             Permission.INCIDENTS_READ,
             Permission.RULES_READ,
+            Permission.VULNERABILITIES_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -87,6 +97,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.INCIDENTS_MANAGE,
             Permission.RULES_READ,
             Permission.RULES_TEST,
+            Permission.VULNERABILITIES_READ,
+            Permission.VULNERABILITIES_MANAGE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

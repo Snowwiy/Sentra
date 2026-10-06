@@ -146,6 +146,46 @@ class AssetTagLimitError(SentraError):
     code = "asset_tag_limit"
 
 
+class VulnerabilityConflictError(ConflictError):
+    # Fase 5B: el finding cambió desde que el cliente lo leyó (`version` obsoleta, p. ej. la
+    # evaluación lo actualizó o lo cambió otro analista). `details` lleva versión y estado.
+    code = "vulnerability_conflict"
+
+
+class VulnerabilityStateError(ConflictError):
+    # Acción no permitida desde el estado actual del finding (resolver uno ya resuelto,
+    # reconocer un falso positivo...). 409: lo impide el estado, no la petición.
+    code = "vulnerability_invalid_state"
+
+
+class VulnerabilityEvidenceError(SentraError):
+    # Resolver a mano un finding cuya evidencia dice vulnerable (confirmed/probable) sin
+    # confirmarlo explícitamente con override_evidence y motivo.
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "vulnerability_evidence_vulnerable"
+
+
+class CatalogError(SentraError):
+    # Catálogo de vulnerabilidades rechazado (formato, tamaño, profundidad, registros...).
+    # El código concreto (catalog_too_large, catalog_invalid_json...) va en `code`.
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "catalog_invalid"
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class CatalogChangedError(ConflictError):
+    # El fichero confirmado no es el previsualizado (sha256 distinto): se vuelve a revisar.
+    code = "catalog_changed"
+
+
+class CatalogBusyError(ConflictError):
+    # Otra importación del catálogo está en curso (API o CLI): una sola a la vez.
+    code = "catalog_import_in_progress"
+
+
 class DiscoveryTargetError(SentraError):
     # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
     # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.

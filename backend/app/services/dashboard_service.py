@@ -17,6 +17,7 @@ from app.models.detection import Detection, DetectionSeverity, DetectionStatus
 from app.models.incident import ACTIVE_STATUSES as INCIDENT_ACTIVE
 from app.models.incident import Incident, IncidentLevel
 from app.models.risk import AssetRisk, RiskLevel
+from app.models.vulnerability import VulnerabilityFinding
 from app.repositories.asset_repository import effective_status_expr
 from app.schemas.dashboard import (
     DashboardAssets,
@@ -24,7 +25,10 @@ from app.schemas.dashboard import (
     DashboardIncidents,
     DashboardRisk,
     DashboardSummary,
+    DashboardVulnerabilities,
 )
+from app.vulnerabilities.catalog import SEVERITIES
+from app.vulnerabilities.workflow import ACTIVE_STATUSES as VULNERABILITY_ACTIVE
 
 DETECTION_ACTIVE = (DetectionStatus.OPEN, DetectionStatus.ACKNOWLEDGED)
 
@@ -34,7 +38,9 @@ class DashboardService:
         self._session = session
         self._timeout = heartbeat_timeout
 
-    def summary(self, include_incidents: bool) -> DashboardSummary:
+    def summary(
+        self, include_incidents: bool, include_vulnerabilities: bool = False
+    ) -> DashboardSummary:
         now = datetime.now(UTC)
         assets = self.asset_summary(now)
         return DashboardSummary(
@@ -47,6 +53,7 @@ class DashboardService:
                 select(func.count()).select_from(Alert).where(Alert.status.in_(ALERT_ACTIVE))
             )
             or 0,
+            vulnerabilities=self._vulnerabilities() if include_vulnerabilities else None,
         )
 
     def asset_summary(self, now: datetime) -> DashboardAssets:
@@ -104,3 +111,23 @@ class DashboardService:
         ):
             severities[str(severity)] = count
         return DashboardDetections(active=sum(severities.values()), by_severity=severities)
+
+    def _vulnerabilities(self) -> DashboardVulnerabilities:
+        active = VulnerabilityFinding.status.in_(sorted(VULNERABILITY_ACTIVE))
+        evidenced = VulnerabilityFinding.match_state.in_(("confirmed", "probable"))
+        severities = {s: 0 for s in SEVERITIES}
+        for severity, count in self._session.execute(
+            select(VulnerabilityFinding.severity, func.count())
+            .where(active, evidenced)
+            .group_by(VulnerabilityFinding.severity)
+        ):
+            severities[str(severity)] = count
+        potential, assets = self._session.execute(
+            select(
+                func.count().filter(VulnerabilityFinding.match_state == "potential"),
+                func.count(func.distinct(VulnerabilityFinding.asset_id)).filter(evidenced),
+            ).where(active)
+        ).one()
+        return DashboardVulnerabilities(
+            by_severity=severities, potential=potential or 0, assets_affected=assets or 0
+        )

@@ -339,6 +339,55 @@ class IncidentAlert(Base):
     )
 
 
+class IncidentVulnerability(Base):
+    """Finding de vulnerabilidad vinculado a un caso (Fase 5B).
+
+    Igual que detecciones y alertas: referencia + snapshot mínimo (CVE, título, severidad,
+    componente, versión, activo). El catálogo y la evidencia completos siguen en el finding;
+    el caso nunca los copia. SET NULL si el finding desaparece (borrado del activo).
+    """
+
+    __tablename__ = "incident_vulnerabilities"
+    __table_args__ = (
+        Index(
+            "uq_incident_vulnerabilities_finding",
+            "incident_id",
+            "finding_id",
+            unique=True,
+            postgresql_where=text("finding_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_incident_vulnerabilities_finding",
+            "finding_id",
+            postgresql_where=text("finding_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_incident_vulnerabilities_attached_by",
+            "attached_by_user_id",
+            postgresql_where=text("attached_by_user_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"))
+    finding_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vulnerability_findings.id", ondelete="SET NULL")
+    )
+    finding_public_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    vulnerability_id: Mapped[str] = mapped_column(String(64))
+    title: Mapped[str] = mapped_column(String(300))
+    severity: Mapped[str] = mapped_column(String(16))
+    component: Mapped[str] = mapped_column(String(512))
+    installed_version: Mapped[str | None] = mapped_column(String(128))
+    asset_name: Mapped[str] = mapped_column(String(255))
+    # vulnerability (caso creado desde el finding) o merge.
+    source: Mapped[str] = mapped_column(String(16))
+    attached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attached_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
+
+
 class IncidentNote(Base):
     """Nota del analista. Append-only en 4K: no hay edición ni borrado desde la API."""
 

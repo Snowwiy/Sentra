@@ -18,6 +18,14 @@ Fórmula (detalle y justificación en docs/risk-engine.md):
    exposición a Internet confirmada) con su propio tope (x1,25). Desconocido = 1,0.
 5. Saturación: lineal hasta el codo (70) y asintótica hasta 100 por encima.
 
+Fase 5B (fórmula v3): cada finding de vulnerabilidad activo aporta como una "señal" más:
+severidad del catálogo x evidencia del match x exposición del servicio x estado de trabajo.
+Una vulnerabilidad NO es un ataque: sus puntos (crítica = 40) quedan muy por debajo de una
+detección crítica (90), una crítica sola nunca lleva a 100 y las potenciales aportan poco.
+Se agrupa con la exposición de su puerto (mismo hecho, sin doble conteo) y entra en los
+rendimientos decrecientes y la saturación como cualquier otro grupo. Sin findings, el
+resultado es idéntico a v2.
+
 El ledger de contribuciones suma exactamente el score antes de redondear: cada factor que
 sube o baja la puntuación aparece con sus puntos.
 """
@@ -59,6 +67,7 @@ _EXPOSURE_CONFIDENCE = 0.85
 # Factores de contribución.
 DETECTION = "detection"
 EXPOSURE = "exposure"
+VULNERABILITY = "vulnerability"
 CRITICALITY = "criticality"
 ASSET_TYPE = "asset_type"
 # Fase 4L: un factor de contexto de negocio (entorno, sensibilidad, exposición confirmada)
@@ -113,6 +122,27 @@ class ExposureInput:
 
 
 @dataclass(frozen=True)
+class VulnerabilityInput:
+    """Finding de vulnerabilidad activo del activo (Fase 5B)."""
+
+    id: int
+    public_id: UUID
+    vulnerability_id: str
+    title: str
+    # Severidad normalizada del catálogo (informational..critical).
+    severity: str
+    # confirmed, probable o potential (unknown y not_affected no llegan aquí).
+    match_state: str
+    # open, acknowledged, mitigating o accepted_risk.
+    status: str
+    # internet_exposed, observed, listening, not_observed o unknown.
+    exposure_state: str
+    first_seen_at: datetime
+    # Puertos del servicio afectado observados abiertos: se agrupa con su exposición.
+    ports: tuple[int, ...] = ()
+
+
+@dataclass(frozen=True)
 class AssetContext:
     criticality: AssetCriticality = AssetCriticality.MEDIUM
     device_type: str | None = None
@@ -132,6 +162,7 @@ class RiskInputs:
     asset: AssetContext
     detections: Sequence[DetectionInput] = ()
     exposure: Sequence[ExposureInput] = ()
+    vulnerabilities: Sequence[VulnerabilityInput] = ()
 
 
 @dataclass(frozen=True)
@@ -148,10 +179,12 @@ class RiskContribution:
     rule_id: str | None = None
     port: int | None = None
     details: dict[str, Any] = field(default_factory=dict)
+    # Fase 5B: finding de vulnerabilidad al que se refiere (id público).
+    finding_public_id: UUID | None = None
 
     def to_json(self) -> dict[str, Any]:
         """Forma guardada en asset_risk.contributions (sin ids internos)."""
-        return {
+        data = {
             "factor": self.factor,
             "category": self.category,
             "label": self.label,
@@ -162,6 +195,9 @@ class RiskContribution:
             "port": self.port,
             "details": self.details,
         }
+        if self.finding_public_id is not None:
+            data["finding_id"] = str(self.finding_public_id)
+        return data
 
 
 @dataclass(frozen=True)
@@ -175,7 +211,8 @@ class RiskResult:
 
     @property
     def top_factor(self) -> str | None:
-        positive = [c for c in self.contributions if c.factor in (DETECTION, EXPOSURE)]
+        evidence = (DETECTION, EXPOSURE, VULNERABILITY)
+        positive = [c for c in self.contributions if c.factor in evidence]
         positive = [c for c in positive if c.points > 0]
         return positive[0].label if positive else None
 
@@ -185,6 +222,14 @@ class RiskResult:
             str(c.detection_public_id)
             for c in self.contributions
             if c.detection_public_id is not None and c.points >= min_points
+        }
+
+    def finding_ids(self, min_points: float = 0.0) -> set[str]:
+        """Findings de vulnerabilidad (id público) que aportan al menos `min_points`."""
+        return {
+            str(c.finding_public_id)
+            for c in self.contributions
+            if c.finding_public_id is not None and c.points >= min_points
         }
 
 
@@ -202,6 +247,7 @@ class _Item:
     order: tuple[Any, ...]
     detection: DetectionInput | None = None
     exposure: ExposureInput | None = None
+    vulnerability: VulnerabilityInput | None = None
 
 
 def half_life_factor(age_seconds: float, half_life_seconds: float) -> float:
@@ -295,6 +341,31 @@ def _exposure_item(e: ExposureInput, config: RiskConfig, now: datetime) -> _Item
     )
 
 
+def _vulnerability_item(v: VulnerabilityInput, config: RiskConfig) -> _Item | None:
+    points = config.vulnerability_points.get(v.severity, 0.0)
+    match = config.vulnerability_match_factor.get(v.match_state, 0.0)
+    status = config.vulnerability_status_factor.get(v.status, 0.0)
+    exposure = config.vulnerability_exposure_factor.get(v.exposure_state, 1.0)
+    nominal = points * match * exposure
+    if nominal <= 0 or status <= 0:
+        return None
+    return _Item(
+        key=f"v:{v.id}",
+        effective=nominal * status,
+        nominal=nominal,
+        recency=1.0,
+        status_factor=status,
+        category="vulnerability",
+        confidence_value=_MATCH_CONFIDENCE.get(v.match_state, 0.35),
+        order=(-v.first_seen_at.timestamp(), v.vulnerability_id, v.id),
+        vulnerability=v,
+    )
+
+
+# Calidad de la evidencia de un finding para la confianza del riesgo (como las detecciones).
+_MATCH_CONFIDENCE = {"confirmed": 0.9, "probable": 0.65, "potential": 0.35}
+
+
 class _Groups:
     """Union-find mínimo para formar grupos de evidencia relacionada."""
 
@@ -341,12 +412,24 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         item = _exposure_item(port, config, now)
         if item is not None:
             items.append(item)
+    for vulnerability in inputs.vulnerabilities[: config.max_vulnerabilities]:
+        item = _vulnerability_item(vulnerability, config)
+        if item is not None:
+            items.append(item)
 
     # --- Agrupación (sin doble conteo) ----------------------------------------------------
     groups = _Groups()
     present = {item.key for item in items}
     for item in items:
         groups.find(item.key)
+        v = item.vulnerability
+        if v is not None:
+            # Vulnerabilidad de un servicio expuesto + exposición de ese puerto: el mismo
+            # hecho; cuenta el más fuerte de los dos.
+            for number in v.ports:
+                if f"p:{number}" in present:
+                    groups.union(item.key, f"p:{number}")
+            continue
         d = item.detection
         if d is None:
             continue
@@ -638,8 +721,11 @@ def _lead_contribution(
                 "last_seen_at": d.last_seen_at.isoformat(),
             },
         )
+    v = lead.vulnerability
+    if v is not None:
+        return _vulnerability_contribution(v, _round(points), _round(lead.nominal), common)
     e = lead.exposure
-    assert e is not None  # noqa: S101  (un _Item es detección o exposición)
+    assert e is not None  # noqa: S101  (un _Item es detección, exposición o vulnerabilidad)
     return RiskContribution(
         factor=EXPOSURE,
         category="exposure",
@@ -676,6 +762,9 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
                 "last_seen_at": d.last_seen_at.isoformat(),
             },
         )
+    v = item.vulnerability
+    if v is not None:
+        return _vulnerability_contribution(v, 0.0, _round(item.nominal), {"absorbed_by": ref})
     e = item.exposure
     assert e is not None  # noqa: S101
     return RiskContribution(
@@ -689,7 +778,42 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
     )
 
 
+_MATCH_LABELS = {"confirmed": "confirmada", "probable": "probable", "potential": "potencial"}
+
+
+def _vulnerability_contribution(
+    v: VulnerabilityInput, points: float, nominal: float, details: dict[str, Any]
+) -> RiskContribution:
+    return RiskContribution(
+        factor=VULNERABILITY,
+        category="vulnerability",
+        label=(
+            f"Vulnerabilidad {v.vulnerability_id} ({v.severity},"
+            f" {_MATCH_LABELS.get(v.match_state, v.match_state)})"
+        ),
+        points=points,
+        nominal_points=nominal,
+        port=v.ports[0] if v.ports else None,
+        finding_public_id=v.public_id,
+        details=details
+        | {
+            "finding_id": str(v.public_id),
+            "vulnerability_id": v.vulnerability_id,
+            "title": v.title[:200],
+            "severity": v.severity,
+            "match_state": v.match_state,
+            "status": v.status,
+            "exposure_state": v.exposure_state,
+        },
+    )
+
+
 def _ref(item: _Item) -> dict[str, Any]:
+    if item.vulnerability is not None:
+        return {
+            "finding_id": str(item.vulnerability.public_id),
+            "vulnerability_id": item.vulnerability.vulnerability_id,
+        }
     if item.detection is not None:
         return {
             "detection_id": str(item.detection.public_id),

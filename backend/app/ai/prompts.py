@@ -31,6 +31,8 @@ class InsightKind(StrEnum):
     INCIDENT_TIMELINE = "incident_timeline"
     INCIDENT_EVIDENCE = "incident_evidence"
     INCIDENT_NEXT_STEPS = "incident_next_steps"
+    # Fase 5B: explicación de solo lectura de un finding de vulnerabilidad.
+    VULNERABILITY_ANALYSIS = "vulnerability_analysis"
 
 
 # Versión de la política común: forma parte de la versión efectiva de cada plantilla.
@@ -165,5 +167,15 @@ TEMPLATES: dict[InsightKind, PromptTemplate] = {
         "Sugiere los siguientes pasos DEFENSIVOS de investigación (qué revisar, qué validar, "
         "a quién preguntar) basados en la evidencia citada. No propongas comandos, cambios "
         "en equipos ni acciones automáticas; la decisión es del analista.",
+    ),
+    InsightKind.VULNERABILITY_ANALYSIS: PromptTemplate(
+        InsightKind.VULNERABILITY_ANALYSIS,
+        1,
+        "Explica el finding de vulnerabilidad: qué componente y versión comparó Sentra, por "
+        "qué el resultado es el indicado en match_state, qué significa la exposición "
+        "observada y cómo afecta al riesgo del activo. Si match_state es potential o unknown, "
+        "di claramente que NO está confirmado y qué dato falta. No afirmes que existe un "
+        "exploit ni que el activo está comprometido, no busques ni cites fuentes externas y "
+        "no propongas comandos: solo pasos de validación y remediación prudentes.",
     ),
 }

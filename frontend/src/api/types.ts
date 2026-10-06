@@ -310,6 +310,13 @@ export interface DashboardDetections {
   by_severity: Record<string, number>;
 }
 
+/** Fase 5B: findings activos con evidencia (confirmed/probable); potenciales aparte. */
+export interface DashboardVulnerabilities {
+  by_severity: Record<string, number>;
+  potential: number;
+  assets_affected: number;
+}
+
 export interface DashboardSummary {
   generated_at: string;
   assets: DashboardAssets;
@@ -318,6 +325,8 @@ export interface DashboardSummary {
   incidents: DashboardIncidents | null;
   detections: DashboardDetections;
   active_alerts: number;
+  /** null si el rol no puede leer vulnerabilidades (vulnerabilities:read). */
+  vulnerabilities?: DashboardVulnerabilities | null;
 }
 
 export type CheckStatus = "ok" | "error";
@@ -357,7 +366,8 @@ export type AlertRule =
   | "port_closed"
   | "monitoring_lost"
   | "security_detection"
-  | "risk_critical";
+  | "risk_critical"
+  | "vulnerability";
 export type AlertSeverity = "info" | "warning" | "critical";
 /** "acknowledged": seen by an operator, still active (not resolved). */
 export type AlertStatus = "open" | "acknowledged" | "resolved";
@@ -481,6 +491,9 @@ export interface Inventory {
   connections?: NetworkConnection[];
   accounts?: AccountInfo[];
   network?: NetworkSummary | null;
+  /** Fase 5B (agentes nuevos): origen del software y secciones que fallaron al recogerse. */
+  software_source?: "windows_registry" | "dpkg" | "rpm" | null;
+  incomplete_sections?: string[] | null;
 }
 
 /** One process of the latest process snapshot (refreshed every minute by the agent). */
@@ -824,7 +837,10 @@ export type Permission =
   | "incidents:admin"
   | "rules:read"
   | "rules:test"
-  | "rules:manage";
+  | "rules:manage"
+  | "vulnerabilities:read"
+  | "vulnerabilities:manage"
+  | "vulnerabilities:admin";
 
 export interface CurrentUser {
   user_id: string;
@@ -1295,6 +1311,8 @@ export interface RiskContribution {
   detection_id: string | null;
   rule_id: string | null;
   port: number | null;
+  /** Fase 5B: finding de vulnerabilidad que aporta esta contribución. */
+  finding_id?: string | null;
   details: Record<string, unknown>;
 }
 
@@ -1445,8 +1463,9 @@ export type InsightKind =
   | "incident_summary"
   | "incident_timeline"
   | "incident_evidence"
-  | "incident_next_steps";
-export type InsightScope = "asset" | "detection" | "incident" | "fleet";
+  | "incident_next_steps"
+  | "vulnerability_analysis";
+export type InsightScope = "asset" | "detection" | "incident" | "vulnerability" | "fleet";
 /** Vocabulario de certeza que exige el backend a cada hallazgo. */
 export type Certainty = "observed" | "detected" | "correlated" | "possible" | "requires_validation";
 export type AIWindow = "24h" | "7d" | "30d";
@@ -1492,6 +1511,8 @@ export interface Insight {
   asset_name: string | null;
   detection_id: string | null;
   incident_id: string | null;
+  /** Fase 5B: finding de vulnerabilidad analizado. */
+  vulnerability_finding_id?: string | null;
   risk_snapshot_id: string | null;
   question: string | null;
   provider: string;
@@ -1940,6 +1961,26 @@ export interface IncidentDetail extends IncidentSummary {
   notes_total: number;
   metrics: IncidentMetrics;
   allowed_transitions: IncidentStatus[];
+  /** Fase 5B: findings de vulnerabilidad del caso. */
+  vulnerabilities: IncidentVulnerabilityRef[];
+  vulnerabilities_total: number;
+}
+
+/** Finding de vulnerabilidad de un incidente: snapshot mínimo + estado actual. */
+export interface IncidentVulnerabilityRef {
+  finding_id: string;
+  vulnerability_id: string;
+  title: string;
+  severity: string;
+  component: string;
+  installed_version: string | null;
+  status: string | null;
+  match_state: string | null;
+  available: boolean;
+  asset_id: string | null;
+  hostname: string | null;
+  source: string;
+  attached_at: string;
 }
 
 export interface IncidentNote {
@@ -2061,5 +2102,311 @@ export interface IncidentAuditEvent {
 
 export interface IncidentAuditList {
   items: IncidentAuditEvent[];
+  total: number;
+}
+
+// --- Fase 5B: Vulnerability & Exposure Management ------------------------------------------
+
+export type VulnSeverity = "informational" | "low" | "medium" | "high" | "critical";
+/** Estado técnico (lo decide la evaluación): nunca se confunde con el estado de trabajo. */
+export type MatchState = "confirmed" | "probable" | "potential" | "not_affected" | "unknown";
+export type MatchConfidence = "high" | "medium" | "low";
+/** Estado de trabajo (lo deciden las personas). */
+export type FindingStatus = "open" | "acknowledged" | "mitigating" | "resolved" | "accepted_risk" | "false_positive";
+export type ExposureState = "internet_exposed" | "observed" | "listening" | "not_observed" | "unknown";
+export type FindingSort = "priority" | "cvss" | "severity" | "asset_risk" | "last_seen" | "first_seen";
+export type FindingAction = "acknowledge" | "mitigating" | "resolve" | "accept-risk" | "false-positive" | "reopen";
+
+export interface VulnerabilityAssetRef {
+  asset_id: string;
+  name: string;
+  primary_ip: string;
+  criticality: string;
+  os_name: string | null;
+  risk_score: number | null;
+  risk_level: string | null;
+}
+
+export interface FindingSummary {
+  finding_id: string;
+  asset: VulnerabilityAssetRef;
+  vulnerability_id: string;
+  title: string;
+  severity: VulnSeverity;
+  cvss_score: number | null;
+  cvss_version: string | null;
+  component_name: string;
+  component_vendor: string | null;
+  component_type: string;
+  installed_version: string | null;
+  fixed_version: string | null;
+  match_state: MatchState;
+  confidence: MatchConfidence;
+  status: FindingStatus;
+  exposure_state: ExposureState;
+  priority_score: number;
+  priority_level: string;
+  source: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  /** La evidencia (inventario) es antigua: el activo puede estar offline. */
+  stale: boolean;
+  version: number;
+}
+
+export interface FindingList {
+  items: FindingSummary[];
+  total: number;
+}
+
+export interface CatalogRecordRef {
+  source: string;
+  source_name: string;
+  catalog_version: string | null;
+  imported_at: string;
+  record_version: number;
+  id_type: string;
+  aliases: string[];
+  description: string | null;
+  source_severity: string | null;
+  cvss_vector: string | null;
+  published_at: string | null;
+  modified_at: string | null;
+  /** Solo http/https (validado en la importación y otra vez al pintar). */
+  references: string[];
+  cwe: string[];
+  remediation: string | null;
+  metadata: Record<string, unknown>;
+}
+
+export interface FindingIncidentRef {
+  incident_id: string;
+  key: string;
+  title: string;
+  status: string;
+  attached_at: string;
+}
+
+export interface FindingEvidenceInstance {
+  name: string;
+  version: string | null;
+  architecture: string | null;
+  result: string;
+}
+
+/** Qué se comparó y con qué resultado (solo el componente afectado, nunca el inventario). */
+export interface FindingEvidence {
+  source?: string;
+  kind?: string;
+  collected_at?: string | null;
+  component?: Record<string, string | null>;
+  instances?: FindingEvidenceInstance[];
+  rule?: Record<string, unknown>;
+  checks?: FindingCheck[];
+}
+
+export interface FindingCheck {
+  check: string;
+  result: string;
+}
+
+export interface FindingExposure {
+  state?: ExposureState;
+  labels?: string[];
+  service_ports?: number[];
+  observed_open?: number[];
+  listening?: number[];
+  internet_exposed?: boolean | null;
+}
+
+export interface PriorityFactor {
+  factor: string;
+  label: string;
+  points: number;
+}
+
+export interface FindingDetail extends FindingSummary {
+  rationale: string;
+  affected_range: string | null;
+  status_reason: string | null;
+  status_changed_at: string;
+  status_changed_by: string;
+  resolution: string | null;
+  resolved_at: string | null;
+  accepted_until: string | null;
+  review_basis: Record<string, unknown> | null;
+  evidence_kind: string;
+  evidence: FindingEvidence;
+  exposure: FindingExposure;
+  priority_factors: PriorityFactor[];
+  inventory_observed_at: string | null;
+  evaluated_at: string;
+  missing_count: number;
+  reopen_count: number;
+  catalog: CatalogRecordRef | null;
+  incidents: FindingIncidentRef[];
+  /** Acciones que el usuario actual puede ejecutar ahora (más "incident"). */
+  actions: string[];
+}
+
+export interface FindingHistoryItem {
+  occurred_at: string;
+  action: string;
+  actor: string;
+  from_value: string | null;
+  to_value: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface FindingHistory {
+  items: FindingHistoryItem[];
+  total: number;
+}
+
+export interface VulnerabilityOverview {
+  by_severity: Record<string, number>;
+  confirmed: number;
+  probable: number;
+  potential: number;
+  insufficient_evidence: number;
+  open: number;
+  accepted_risk: number;
+  false_positive: number;
+  resolved: number;
+  assets_affected: number;
+  stale: number;
+  catalog_records: number;
+  catalog_sources: number;
+  last_import_at: string | null;
+  evaluation_pending: number;
+  last_evaluated_at: string | null;
+}
+
+export interface AssetVulnerabilityStatus {
+  evaluated_at: string | null;
+  inventory_collected_at: string | null;
+  inventory_complete: boolean | null;
+  stale: boolean;
+  components: number;
+  pending: boolean;
+  error: string | null;
+  limitations: string[];
+}
+
+export interface AssetVulnerabilities {
+  asset_id: string;
+  status: AssetVulnerabilityStatus;
+  by_severity: Record<string, number>;
+  items: FindingSummary[];
+  total: number;
+}
+
+export interface CatalogSource {
+  source: string;
+  name: string;
+  kind: string;
+  catalog_version: string | null;
+  generated_at: string | null;
+  status: string;
+  records: number;
+  revision: number;
+  last_import_at: string | null;
+  last_import_by: string | null;
+  last_import_sha256: string | null;
+  last_import_result: Record<string, number> | null;
+  last_error: string | null;
+}
+
+export interface CatalogRecordSummary {
+  source: string;
+  vulnerability_id: string;
+  id_type: string;
+  title: string;
+  severity: VulnSeverity;
+  cvss_score: number | null;
+  cvss_version: string | null;
+  published_at: string | null;
+  affected: number;
+  findings: number;
+}
+
+export interface CatalogList {
+  sources: CatalogSource[];
+  items: CatalogRecordSummary[];
+  total: number;
+}
+
+export interface CatalogInvalidRecord {
+  index: number;
+  vulnerability_id: string | null;
+  code: string;
+  message: string;
+}
+
+export interface CatalogPreview {
+  format: string;
+  source: string;
+  source_name: string;
+  catalog_version: string | null;
+  generated_at: string | null;
+  sha256: string;
+  size_bytes: number;
+  total: number;
+  valid: number;
+  new: number;
+  updated: number;
+  unchanged: number;
+  invalid: number;
+  invalid_records: CatalogInvalidRecord[];
+  existing_source: boolean;
+  assets_to_evaluate: number;
+}
+
+export interface CatalogImportResult {
+  source: string;
+  revision: number;
+  sha256: string;
+  new: number;
+  updated: number;
+  unchanged: number;
+  invalid: number;
+  assets_queued: number;
+}
+
+export interface EvaluateResult {
+  mode: "immediate" | "queued";
+  assets: number;
+  created: number;
+  updated: number;
+  resolved: number;
+  reopened: number;
+}
+
+export interface ExposureVulnerabilityRef {
+  finding_id: string;
+  vulnerability_id: string;
+  severity: VulnSeverity;
+  match_state: MatchState;
+}
+
+export interface ExposureItem {
+  asset: VulnerabilityAssetRef;
+  protocol: string;
+  port: number;
+  service_hint: string | null;
+  sensitive: boolean;
+  first_seen_at: string;
+  opened_at: string;
+  last_seen_at: string;
+  new: boolean;
+  internet_exposed: boolean | null;
+  labels: string[];
+  process: string | null;
+  vulnerabilities: ExposureVulnerabilityRef[];
+  vulnerabilities_total: number;
+}
+
+export interface ExposureOverview {
+  items: ExposureItem[];
   total: number;
 }

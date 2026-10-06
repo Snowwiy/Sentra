@@ -1,5 +1,22 @@
 import { apiGet, apiPatch, apiPost } from "./client";
 import type {
+  AssetVulnerabilities,
+  CatalogImportResult,
+  CatalogList,
+  CatalogPreview,
+  EvaluateResult,
+  ExposureOverview,
+  ExposureState,
+  FindingAction,
+  FindingDetail,
+  FindingHistory,
+  FindingList,
+  FindingSort,
+  FindingStatus,
+  MatchConfidence,
+  MatchState,
+  VulnSeverity,
+  VulnerabilityOverview,
   AIStatus,
   LocalBenchmark,
   LocalHardware,
@@ -548,12 +565,15 @@ export const aiApi = {
   socSummary: (window: AIWindow, refresh = false) => apiPost<Insight>("/ai/soc/analyze", { window, refresh }),
   analyzeIncident: (incidentId: string, task: IncidentTask, refresh = false) =>
     apiPost<Insight>(`/ai/incidents/${encodeURIComponent(incidentId)}/analyze`, { task, refresh }),
+  analyzeVulnerability: (findingId: string, refresh = false) =>
+    apiPost<Insight>(`/ai/vulnerabilities/${encodeURIComponent(findingId)}/analyze`, { refresh }),
   list: (
     query: {
       kind?: InsightKind;
       assetId?: string;
       detectionId?: string;
       incidentId?: string;
+      vulnerabilityFindingId?: string;
       limit?: number;
       offset?: number;
     },
@@ -565,6 +585,7 @@ export const aiApi = {
         asset_id: query.assetId,
         detection_id: query.detectionId,
         incident_id: query.incidentId,
+        vulnerability_finding_id: query.vulnerabilityFindingId,
         limit: query.limit,
         offset: query.offset,
       })}`,
@@ -729,4 +750,144 @@ export const incidentsApi = {
     apiPost<IncidentDetail>(`${inc(incidentId)}/detections/${encodeURIComponent(detectionId)}`),
   attachAlert: (incidentId: string, alertId: string) =>
     apiPost<IncidentDetail>(`${inc(incidentId)}/alerts/${encodeURIComponent(alertId)}`),
+};
+
+// --- Fase 5B: vulnerabilidades y exposición ------------------------------------------------------
+
+export interface FindingQuery {
+  status?: FindingStatus;
+  /** Solo los que necesitan trabajo (open, acknowledged, mitigating); se ignora con `status`. */
+  active?: boolean;
+  severity?: VulnSeverity;
+  matchState?: MatchState;
+  confidence?: MatchConfidence;
+  exposure?: ExposureState;
+  assetId?: string;
+  vulnerabilityId?: string;
+  source?: string;
+  /** "true"/"false" como texto: queryString omite el booleano false. */
+  stale?: "true" | "false";
+  q?: string;
+  sort?: FindingSort;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface ExposureQuery {
+  sensitive?: boolean;
+  new?: boolean;
+  withVulnerabilities?: boolean;
+  assetId?: string;
+  port?: number;
+  limit?: number;
+  offset?: number;
+}
+
+/** Datos opcionales de cada acción del flujo (el servidor valida cuáles exige). */
+export interface FindingActionInput {
+  reason?: string;
+  overrideEvidence?: boolean;
+  acceptedUntil?: string | null;
+}
+
+function finding(findingId: string): string {
+  return `/vulnerabilities/findings/${encodeURIComponent(findingId)}`;
+}
+
+export const vulnerabilitiesApi = {
+  overview: (signal?: AbortSignal) => apiGet<VulnerabilityOverview>("/vulnerabilities/overview", { signal }),
+  list: (query: FindingQuery, signal?: AbortSignal) =>
+    apiGet<FindingList>(
+      `/vulnerabilities/findings${queryString({
+        status: query.status,
+        active: query.active,
+        severity: query.severity,
+        match_state: query.matchState,
+        confidence: query.confidence,
+        exposure: query.exposure,
+        asset_id: query.assetId,
+        vulnerability_id: query.vulnerabilityId,
+        source: query.source,
+        stale: query.stale,
+        q: query.q,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  get: (findingId: string, signal?: AbortSignal) => apiGet<FindingDetail>(finding(findingId), { signal }),
+  history: (findingId: string, signal?: AbortSignal) =>
+    apiGet<FindingHistory>(`${finding(findingId)}/history${queryString({ limit: 100 })}`, { signal }),
+  audit: (findingId: string, signal?: AbortSignal) =>
+    apiGet<AuditEventList>(`${finding(findingId)}/audit${queryString({ limit: 50 })}`, { signal }),
+  asset: (
+    assetId: string,
+    query: { active?: boolean; severity?: VulnSeverity; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    apiGet<AssetVulnerabilities>(
+      `/assets/${encodeURIComponent(assetId)}/vulnerabilities${queryString({
+        active: query.active,
+        severity: query.severity,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  exposure: (query: ExposureQuery, signal?: AbortSignal) =>
+    apiGet<ExposureOverview>(
+      `/vulnerabilities/exposure${queryString({
+        sensitive: query.sensitive,
+        new: query.new,
+        with_vulnerabilities: query.withVulnerabilities,
+        asset_id: query.assetId,
+        port: query.port,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  catalog: (
+    query: { source?: string; severity?: VulnSeverity; q?: string; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) =>
+    apiGet<CatalogList>(
+      `/vulnerabilities/catalog${queryString({
+        source: query.source,
+        severity: query.severity,
+        q: query.q,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  catalogPreview: (content: string) => apiPost<CatalogPreview>("/vulnerabilities/catalog/preview", { content }),
+  /** Importa exactamente lo previsualizado: si el contenido cambió, el servidor responde 409. */
+  catalogImport: (content: string, expectedSha256: string, skipInvalid: boolean) =>
+    apiPost<CatalogImportResult>("/vulnerabilities/catalog/import", {
+      content,
+      expected_sha256: expectedSha256,
+      skip_invalid: skipInvalid,
+    }),
+  evaluate: (assetId?: string) =>
+    apiPost<EvaluateResult>("/vulnerabilities/evaluate", { asset_id: assetId ?? null }),
+  act: (findingId: string, action: FindingAction, version: number, input: FindingActionInput = {}) => {
+    const body: Record<string, unknown> = { version, reason: input.reason?.trim() || null };
+    if (action === "resolve") body.override_evidence = input.overrideEvidence ?? false;
+    if (action === "accept-risk") body.accepted_until = input.acceptedUntil ?? null;
+    return apiPost<FindingDetail>(`${finding(findingId)}/${action}`, body);
+  },
+  createIncident: (
+    findingId: string,
+    version: number,
+    input: { title?: string; priority?: IncidentLevel } = {},
+  ) =>
+    apiPost<IncidentDetail>(`${finding(findingId)}/incident`, {
+      version,
+      title: input.title?.trim() || null,
+      priority: input.priority ?? null,
+    }),
 };

@@ -53,6 +53,7 @@ from app.models.incident import (
     IncidentNote,
 )
 from app.models.risk import RiskSnapshot
+from app.models.vulnerability import Vulnerability, VulnerabilityFinding
 from app.risk.config import RiskConfig
 from app.services.asset_context_service import (
     COMPLETENESS_FIELDS,
@@ -77,6 +78,7 @@ RefType = Literal[
     "change",
     "incident",
     "note",
+    "vulnerability",
 ]
 
 # Prefijo del identificador corto de cada tipo (lo que ve el modelo).
@@ -93,6 +95,8 @@ _PREFIX: dict[str, str] = {
     # Fase 4K: el incidente y sus notas (texto del analista, no confiable).
     "incident": "I",
     "note": "N",
+    # Fase 5B: finding de vulnerabilidad (la V ya es evidencia).
+    "vulnerability": "F",
 }
 
 # Claves de diccionarios no confiables que se seudonimizan como campo estructurado.
@@ -161,6 +165,7 @@ class AIContext:
     detection_pk: int | None = None
     risk_snapshot_pk: int | None = None
     incident_pk: int | None = None
+    vulnerability_pk: int | None = None
     # Hay datos sustantivos sobre los que razonar (si no, no se llama al modelo).
     has_data: bool = True
     omitted: dict[str, int] = field(default_factory=dict)
@@ -223,6 +228,7 @@ class ContextBuilder:
         detection_pk: int | None = None,
         risk_snapshot_pk: int | None = None,
         incident_pk: int | None = None,
+        vulnerability_pk: int | None = None,
     ) -> AIContext:
         if self._omitted:
             # El modelo debe saber que hay más datos de los que ve (y decirlo).
@@ -240,6 +246,7 @@ class ContextBuilder:
             detection_pk=detection_pk,
             risk_snapshot_pk=risk_snapshot_pk,
             incident_pk=incident_pk,
+            vulnerability_pk=vulnerability_pk,
         )
 
     # --- Saneado de datos no confiables ------------------------------------------------------
@@ -825,6 +832,83 @@ class ContextBuilder:
         ]
         ctx = self._finish("incident", data, incident_pk=incident.id)
         return ctx
+
+    def vulnerability(self, public_id: UUID) -> AIContext:
+        """Finding de vulnerabilidad (Fase 5B): qué dice el catálogo, qué se comparó y con qué
+        resultado, la exposición observada y el riesgo del activo.
+
+        Solo datos ya guardados por Sentra. Las referencias externas del catálogo (URLs) no se
+        envían: el modelo no puede abrirlas y no debe presentarlas como verificadas.
+        """
+        row = self._session.execute(
+            select(VulnerabilityFinding, Vulnerability, Asset)
+            .join(Vulnerability, Vulnerability.id == VulnerabilityFinding.vulnerability_id)
+            .join(Asset, Asset.id == VulnerabilityFinding.asset_id)
+            .where(VulnerabilityFinding.public_id == public_id)
+        ).first()
+        if row is None:
+            raise NotFoundError("Vulnerability finding not found")
+        finding, vuln, asset = row
+        public = str(asset.public_id)
+        data: dict[str, Any] = {"generated_for": "vulnerability", "now": self._now}
+        data["asset"] = self._asset_item(asset)
+        evidence = finding.evidence if isinstance(finding.evidence, dict) else {}
+        data["vulnerability_finding"] = {
+            "ref": self._ref(
+                "vulnerability",
+                str(finding.public_id),
+                f"{finding.vuln_external_id}: {finding.title}",
+                public,
+            ),
+            "id": self._text(finding.vuln_external_id, 64),
+            "title": self._text(finding.title, 200),
+            # Texto del catálogo importado (no confiable): dato, nunca instrucción.
+            "catalog_description": self._text(vuln.description, 600),
+            "severity": finding.severity,
+            "cvss_score": float(finding.cvss_score) if finding.cvss_score is not None else None,
+            "cvss_version": vuln.cvss_version,
+            "match_state": finding.match_state,
+            "match_confidence": finding.confidence,
+            "rationale": self._text(finding.rationale, 500),
+            "status": finding.status,
+            "status_reason": self._text(finding.status_reason, 300),
+            "component": {
+                "type": finding.component_type,
+                "name": self._text(finding.component_name, 160),
+                "vendor": self._text(finding.component_vendor, 120),
+                "installed_version": self._text(finding.installed_version, 64),
+                "affected_range": self._text(finding.affected_range, 200),
+                "fixed_version": self._text(finding.fixed_version, 64),
+            },
+            "evidence": self._safe(
+                {
+                    "source": evidence.get("source"),
+                    "collected_at": evidence.get("collected_at"),
+                    "instances": evidence.get("instances"),
+                    "checks": evidence.get("checks"),
+                }
+            ),
+            "exposure": self._safe(finding.exposure),
+            "priority": {"score": finding.priority_score, "level": finding.priority_level},
+            "first_seen_at": finding.first_seen_at,
+            "last_seen_at": finding.last_seen_at,
+            "inventory_observed_at": finding.inventory_observed_at,
+            "remediation": self._text(vuln.remediation, 400),
+            "note": (
+                "match_state lo decidió el matcher determinista de Sentra: confirmed y "
+                "probable tienen evidencia de versión; potential y unknown NO confirman que "
+                "el activo sea vulnerable."
+            ),
+        }
+        data["exposure"] = self._exposure(asset, timedelta(hours=24))
+        data["risk"] = self._risk_block(asset, contributions_limit=6)
+        return self._finish(
+            "vulnerability",
+            data,
+            asset_pk=asset.id,
+            risk_snapshot_pk=self._latest_snapshot_pk(asset),
+            vulnerability_pk=finding.id,
+        )
 
     def fleet(
         self,

@@ -25,6 +25,7 @@ from app.models.detection import Detection, DetectionEvidence, DetectionStatus
 from app.models.exposure import AssetPort
 from app.models.incident import Incident, IncidentDetection, IncidentNote
 from app.models.risk import AssetRisk, RiskSnapshot
+from app.models.vulnerability import Vulnerability, VulnerabilityFinding
 
 
 def _digest(parts: list[Any]) -> str:
@@ -140,13 +141,39 @@ def incident_version(session: Session, incident_pk: int) -> str:
     )
 
 
+def vulnerability_version(session: Session, finding_pk: int) -> str:
+    """Fase 5B: cambia cuando el finding cambia de forma material (su `version` sube con
+    estado, versión instalada, match, severidad, exposición o prioridad), cuando se
+    actualiza el registro del catálogo o cuando cambia el nivel de riesgo del activo."""
+    finding = session.get(VulnerabilityFinding, finding_pk)
+    if finding is None:
+        return _digest(["vulnerability", "deleted"])
+    record = session.scalar(
+        select(Vulnerability.record_version).where(Vulnerability.id == finding.vulnerability_id)
+    )
+    risk = session.get(AssetRisk, finding.asset_id)
+    return _digest(
+        [
+            "vulnerability",
+            finding.version,
+            finding.status,
+            record,
+            risk.level.value if risk and risk.calculated_at else None,
+        ]
+    )
+
+
 def data_version(
     session: Session,
     asset_pk: int | None,
     detection_pk: int | None,
     incident_pk: int | None = None,
+    vulnerability_pk: int | None = None,
 ) -> str:
-    """Huella según el alcance del insight: incidente, detección, activo o flota."""
+    """Huella según el alcance del insight: vulnerabilidad, incidente, detección, activo o
+    flota."""
+    if vulnerability_pk is not None:
+        return vulnerability_version(session, vulnerability_pk)
     if incident_pk is not None:
         return incident_version(session, incident_pk)
     if detection_pk is not None:

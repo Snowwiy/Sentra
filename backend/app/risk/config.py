@@ -23,7 +23,9 @@ from app.models.risk import RiskLevel
 # Versión de la fórmula guardada en cada cálculo y snapshot.
 # v2 (Fase 4L): factores de contexto de negocio acotados (entorno, sensibilidad de datos,
 # exposición a Internet confirmada). Con contexto desconocido el resultado es idéntico a v1.
-FORMULA_VERSION = 2
+# v3 (Fase 5B): findings de vulnerabilidad activos como evidencia acotada (ver
+# VULNERABILITY_POINTS). Sin findings el resultado es idéntico a v2.
+FORMULA_VERSION = 3
 
 
 # Puntos base por severidad: impacto si la detección es cierta, en la escala 0-100. No es
@@ -96,6 +98,27 @@ INFRASTRUCTURE_TYPES = frozenset({"server", "nas", "router", "network_switch", "
 INFRASTRUCTURE_FACTOR = 1.1
 
 
+# Fase 5B: puntos de un finding de vulnerabilidad por severidad del catálogo. Debilidad, no
+# ataque: una crítica confirmada (40) en un activo de criticidad media queda en "medium";
+# solo con exposición, criticidad y contexto se acerca a "high"/"critical", nunca a 100.
+VULNERABILITY_POINTS: Mapping[str, float] = MappingProxyType(
+    {"informational": 0.0, "low": 4.0, "medium": 14.0, "high": 28.0, "critical": 40.0}
+)
+# Evidencia del match: una potencial aporta poco (posible backport, versión no comparable).
+VULNERABILITY_MATCH_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"confirmed": 1.0, "probable": 0.7, "potential": 0.25}
+)
+# Servicio afectado observado (o con Internet confirmada): más fácil de explotar.
+VULNERABILITY_EXPOSURE_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"internet_exposed": 1.3, "observed": 1.15, "listening": 1.05}
+)
+# Estado de trabajo: mitigando pesa menos; un riesgo ACEPTADO sigue existiendo (aceptar no
+# es corregir) pero a la mitad; resueltos y falsos positivos no llegan al cálculo.
+VULNERABILITY_STATUS_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"open": 1.0, "acknowledged": 0.9, "mitigating": 0.6, "accepted_risk": 0.5}
+)
+
+
 @dataclass(frozen=True)
 class RiskConfig:
     # Límites inferiores de low, medium, high y critical.
@@ -133,6 +156,17 @@ class RiskConfig:
     # Saturación: lineal hasta `saturation_knee` y asintótica hasta 100 por encima, para que
     # una avalancha de señales nunca lleve "automáticamente" a 100.
     saturation_knee: float = 70.0
+
+    # Fase 5B: findings de vulnerabilidad (ver constantes VULNERABILITY_*). Como mucho
+    # `max_vulnerabilities` por activo (los de más prioridad); con beta 0,5 el resto apenas
+    # sumaría y así el cálculo sigue acotado.
+    vulnerability_points: Mapping[str, float] = field(default=VULNERABILITY_POINTS)
+    vulnerability_match_factor: Mapping[str, float] = field(default=VULNERABILITY_MATCH_FACTOR)
+    vulnerability_exposure_factor: Mapping[str, float] = field(
+        default=VULNERABILITY_EXPOSURE_FACTOR
+    )
+    vulnerability_status_factor: Mapping[str, float] = field(default=VULNERABILITY_STATUS_FACTOR)
+    max_vulnerabilities: int = 20
 
     # Exposición observada por discovery (no vulnerabilidad): puntos por puerto sensible.
     exposure_admin_points: float = 10.0

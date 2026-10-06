@@ -9,12 +9,15 @@ import sys
 
 import pytest
 
+from sentra_agent import inventory
 from sentra_agent.inventory import (
     _installed_dpkg_lines,
+    collect_inventory,
     collect_services,
     collect_software,
     parse_package_list,
     parse_systemd_services,
+    software_source,
 )
 
 linux_only = pytest.mark.skipif(sys.platform != "linux", reason="reads this Linux host")
@@ -110,3 +113,39 @@ def test_real_services_are_valid_or_empty_without_systemd() -> None:
     for service in services:
         assert service["name"] and service["status"]
         assert len(service["status"]) <= 32
+
+
+@pytest.mark.parametrize(
+    ("platform", "present", "expected"),
+    [
+        ("win32", set(), "windows_registry"),
+        ("linux", {"/usr/bin/dpkg-query", "/usr/bin/rpm"}, "dpkg"),
+        ("linux", {"/usr/bin/rpm"}, "rpm"),
+        ("linux", set(), None),
+    ],
+)
+def test_software_source_follows_the_collector_preference(
+    monkeypatch: pytest.MonkeyPatch, platform: str, present: set[str], expected: str | None
+) -> None:
+    # El servidor compara versiones con las reglas del gestor que dio el inventario: el origen
+    # declarado tiene que ser el mismo que usa collect_software (dpkg antes que rpm).
+    monkeypatch.setattr(sys, "platform", platform)
+    monkeypatch.setattr(os.path, "isfile", lambda path: path in present)
+
+    assert software_source() == expected
+
+
+def test_failed_sections_are_reported_as_incomplete(monkeypatch: pytest.MonkeyPatch) -> None:
+    def broken() -> list[dict[str, str]]:
+        raise OSError("dpkg-query failed (2): database locked")
+
+    sections = {"software": broken, "disks": lambda: [], "network": broken}
+    monkeypatch.setattr(inventory, "SECTIONS", sections)
+
+    snapshot = collect_inventory()
+
+    # Vacía, pero marcada: el servidor no debe leerla como "se desinstaló todo".
+    assert snapshot["software"] == []
+    assert snapshot["network"] is None
+    assert snapshot["incomplete_sections"] == ["software", "network"]
+    assert "software_source" in snapshot

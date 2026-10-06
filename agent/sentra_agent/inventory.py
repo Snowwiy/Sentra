@@ -408,6 +408,21 @@ def _linux_packages() -> list[dict[str, Any]]:
     return []  # other package managers: not supported yet
 
 
+def software_source() -> str | None:
+    """Origen del inventario de software, en el mismo orden de preferencia que la recogida.
+
+    El servidor lo usa para saber con qué reglas comparar versiones (dpkg y rpm no ordenan
+    igual) y para no confundir paquetes de la distribución con aplicaciones (Fase 5B).
+    """
+    if sys.platform == "win32":
+        return "windows_registry"
+    if _first_existing(_DPKG_QUERY) is not None:
+        return "dpkg"
+    if _first_existing(_RPM) is not None:
+        return "rpm"
+    return None
+
+
 def _epoch_date(raw: str) -> str | None:
     text = raw.strip()
     if not text.isdigit():
@@ -683,10 +698,16 @@ _EMPTY: dict[str, Any] = {"network": None}
 
 def collect_inventory() -> dict[str, Any]:
     snapshot: dict[str, Any] = {"collected_at": datetime.now(UTC).isoformat()}
+    failed = []
     for section, collector in SECTIONS.items():
         try:
             snapshot[section] = collector()
         except Exception:
             logger.warning("inventory section failed", extra={"section": section}, exc_info=True)
             snapshot[section] = _EMPTY.get(section, [])
+            failed.append(section)
+    # Una sección fallida se envía vacía; el servidor necesita saber que está incompleta para
+    # no tomar "sin software" como "el software se desinstaló" (Fase 5B).
+    snapshot["incomplete_sections"] = failed
+    snapshot["software_source"] = software_source()
     return snapshot

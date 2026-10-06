@@ -1,7 +1,8 @@
 import { useCallback } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
-import { aiApi, sentraApi } from "../api/sentra";
+import { aiApi, sentraApi, vulnerabilitiesApi } from "../api/sentra";
+import { useAuth } from "../auth/AuthContext";
 import { AlertsView } from "../components/AlertsView";
 import { AgentPanel } from "../components/asset/AgentPanel";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
@@ -16,6 +17,7 @@ import { ProcessesTab } from "../components/asset/ProcessesTab";
 import { ServicesTab } from "../components/asset/ServicesTab";
 import { SoftwareTab } from "../components/asset/SoftwareTab";
 import { UsersTab } from "../components/asset/UsersTab";
+import { countBySoftware, VulnerabilitiesTab } from "../components/asset/VulnerabilitiesTab";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { MethodBadge } from "../components/NetworkBadges";
 import { StatusBadge } from "../components/StatusBadge";
@@ -35,13 +37,16 @@ const TABS = [
   { key: "users", label: "Users" },
   { key: "events", label: "Events" },
   { key: "exposure", label: "Exposure" },
+  { key: "vulnerabilities", label: "Vulnerabilidades" },
   { key: "alerts", label: "Alerts" },
 ] as const;
 
 type Tab = (typeof TABS)[number]["key"];
 
 // Without an agent only what the network shows exists: no inventory, telemetry or events.
-const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "alerts"];
+// Fase 5B: la pestaña de vulnerabilidades también aparece sin agente (explica por qué no hay
+// evaluación) pero solo con vulnerabilities:read.
+const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "alerts"];
 
 // Tabs fed by the inventory snapshot (sent every 15 min): polled only while one is visible.
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
@@ -59,6 +64,8 @@ function isTab(value: string | null): value is Tab {
 
 export function AssetDetailPage() {
   const { assetId = "" } = useParams();
+  const auth = useAuth();
+  const canVulns = auth.can("vulnerabilities:read");
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const requested: Tab = isTab(raw) ? raw : "overview";
@@ -73,8 +80,10 @@ export function AssetDetailPage() {
   const notFound =
     !asset && error instanceof ApiError && (error.status === 404 || error.status === 422);
   const managed = asset ? asset.monitoring_method === "agent" : true;
-  const tabs = managed ? TABS : TABS.filter((t) => NETWORK_TABS.includes(t.key));
-  const tab: Tab = managed || NETWORK_TABS.includes(requested) ? requested : "overview";
+  const tabs = (managed ? TABS : TABS.filter((t) => NETWORK_TABS.includes(t.key))).filter(
+    (t) => t.key !== "vulnerabilities" || canVulns,
+  );
+  const tab: Tab = tabs.some((t) => t.key === requested) ? requested : "overview";
 
   const fetchInventory = useCallback(
     (signal: AbortSignal) => sentraApi.getInventory(assetId, signal),
@@ -86,6 +95,12 @@ export function AssetDetailPage() {
     Boolean(asset) && managed && INVENTORY_TABS.includes(tab),
   );
   const noInventory = inventory.error instanceof ApiError && inventory.error.status === 404;
+  // Fase 5B: "Vulnerabilidades conocidas" por programa en la pestaña Software.
+  const fetchKnown = useCallback(
+    (signal: AbortSignal) => vulnerabilitiesApi.asset(assetId, { active: true, limit: 200 }, signal),
+    [assetId],
+  );
+  const known = usePolling(fetchKnown, INVENTORY_REFRESH_MS, Boolean(asset) && canVulns && tab === "software");
 
   if (loading) return <LoadingState label="Cargando activo…" />;
 
@@ -149,7 +164,7 @@ export function AssetDetailPage() {
         return (
           <div className="stack">
             <section className="panel">
-              <SoftwareTab software={inv.software} />
+              <SoftwareTab software={inv.software} known={known.data ? countBySoftware(known.data.items) : undefined} />
             </section>
             {collected}
             <ChangesList assetId={asset.asset_id} category="software" title="Cambios de software" />
@@ -236,6 +251,7 @@ export function AssetDetailPage() {
         {tab === "exposure" && <ExposureTab assetId={asset.asset_id} managed={managed} />}
         {tab === "risk" && <RiskPanel assetId={asset.asset_id} />}
         {tab === "context" && <ContextTab assetId={asset.asset_id} />}
+        {tab === "vulnerabilities" && <VulnerabilitiesTab assetId={asset.asset_id} />}
         {tab === "alerts" && <AlertsView assetId={asset.asset_id} />}
       </div>
     </div>

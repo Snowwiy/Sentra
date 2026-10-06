@@ -24,6 +24,7 @@ from app.core.proxy import is_trusted, parse_ip
 from app.db.session import get_engine
 from app.models.detection import DetectionSignal
 from app.models.risk import AssetRisk
+from app.models.vulnerability import AssetVulnerabilityState
 from app.services.dashboard_service import DashboardService
 
 router = APIRouter(tags=["metrics"])
@@ -65,7 +66,7 @@ def metrics(request: Request, settings: AppSettings, session: DbSession) -> Plai
     # Valores globales de la base (iguales en todos los workers), agregados en SQL.
     summary = DashboardService(
         session, timedelta(seconds=settings.heartbeat_timeout_seconds)
-    ).summary(include_incidents=True)
+    ).summary(include_incidents=True, include_vulnerabilities=True)
     assets = summary.assets
     lines += gauge(
         "sentra_assets",
@@ -95,6 +96,15 @@ def metrics(request: Request, settings: AppSettings, session: DbSession) -> Plai
                 ({"kind": "critical"}, summary.incidents.critical),
             ],
         )
+    if summary.vulnerabilities is not None:
+        # Solo severidad y evidencia: nunca etiquetas por CVE ni por activo (cardinalidad).
+        vulns = summary.vulnerabilities
+        lines += gauge(
+            "sentra_vulnerability_findings_active",
+            "Findings de vulnerabilidad activos (confirmed/probable por severidad; potential).",
+            [({"severity": s}, float(c)) for s, c in vulns.by_severity.items()]
+            + [({"severity": "potential"}, float(vulns.potential))],
+        )
     lines += gauge("sentra_alerts_active", "Alertas activas.", [({}, summary.active_alerts)])
     risk_queue = session.scalar(
         select(func.count()).select_from(AssetRisk).where(AssetRisk.dirty_at.is_not(None))
@@ -104,12 +114,18 @@ def metrics(request: Request, settings: AppSettings, session: DbSession) -> Plai
         .select_from(DetectionSignal)
         .where(DetectionSignal.evaluated_at.is_(None))
     )
+    vuln_queue = session.scalar(
+        select(func.count())
+        .select_from(AssetVulnerabilityState)
+        .where(AssetVulnerabilityState.dirty_at.is_not(None))
+    )
     lines += gauge(
         "sentra_queue_pending",
-        "Trabajo pendiente de los motores (riesgo por recalcular, señales por evaluar).",
+        "Trabajo pendiente de los motores (riesgo, señales y vulnerabilidades por evaluar).",
         [
             ({"queue": "risk"}, float(risk_queue or 0)),
             ({"queue": "detection"}, float(signals or 0)),
+            ({"queue": "vulnerability"}, float(vuln_queue or 0)),
         ],
     )
     lines += gauge(

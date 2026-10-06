@@ -11,6 +11,7 @@ export const KIND_LABELS: Record<InsightKind, string> = {
   incident_timeline: "Timeline de incidente",
   incident_evidence: "Evidencia de incidente",
   incident_next_steps: "Siguientes pasos de incidente",
+  vulnerability_analysis: "Análisis de vulnerabilidad",
 };
 
 // El lenguaje refleja la certeza: "posible" nunca se pinta igual que "detectado".
@@ -34,6 +35,7 @@ export const REF_TYPE_LABELS: Record<string, string> = {
   change: "Cambio",
   incident: "Incidente",
   note: "Nota del analista",
+  vulnerability: "Vulnerabilidad",
 };
 
 export const STALE_LABELS: Record<NonNullable<Insight["stale_reason"]>, string> = {
@@ -52,6 +54,8 @@ export function refLink(ref: EvidenceRef): string | null {
       return `/assets/${encodeURIComponent(ref.id)}`;
     case "incident":
       return `/incidents/${encodeURIComponent(ref.id)}`;
+    case "vulnerability":
+      return `/vulnerabilities/${encodeURIComponent(ref.id)}`;
     case "risk_contribution":
     case "risk_snapshot":
       return asset ? `/assets/${asset}?tab=risk` : null;

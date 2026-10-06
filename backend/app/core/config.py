@@ -328,6 +328,32 @@ class Settings(BaseSettings):
     # Snapshots de riesgo más antiguos se borran. Sin valor (por defecto) no se borra nada.
     risk_history_retention_days: int | None = Field(default=None, ge=1)
 
+    # --- Fase 5B: Vulnerability & Exposure Management (ver docs/vulnerability-management.md) ---
+    # Desactivarlo detiene la evaluación automática; los findings guardados se siguen viendo
+    # y gestionando. Sin catálogo importado no hay nada que evaluar (no se descarga ninguno).
+    vuln_enabled: bool = True
+    # Cada cuánto el job atiende la cola de activos pendientes (inventario, SO, puertos,
+    # contexto o catálogo cambiados). Nunca en cada heartbeat.
+    vuln_eval_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    # Reevaluación completa de cada activo aunque no cambie nada (caducidad de riesgos
+    # aceptados, evidencia antigua, exposición).
+    vuln_full_refresh_hours: int = Field(default=24, ge=1, le=720)
+    vuln_batch_size: int = Field(default=50, ge=1, le=1000)
+    # Inventario más antiguo que esto: la evidencia se marca como antigua (no se resuelve).
+    vuln_stale_inventory_hours: int = Field(default=72, ge=1, le=8760)
+    # Capturas COMPLETAS consecutivas sin el componente antes de resolver por desinstalación.
+    vuln_missing_threshold: int = Field(default=2, ge=1, le=10)
+    # Catálogo local: tamaño máximo del fichero (la API además está limitada por
+    # MAX_REQUEST_BYTES; los catálogos grandes se importan por CLI, por lotes) y registros.
+    vuln_catalog_max_mb: int = Field(default=64, ge=1, le=2048)
+    vuln_catalog_max_records: int = Field(default=200_000, ge=1, le=2_000_000)
+    # Registros por transacción en la importación por CLI.
+    vuln_import_batch_size: int = Field(default=1000, ge=50, le=20_000)
+    # Alertas internas solo por cambios relevantes (crítica confirmada, alta confirmada con
+    # el servicio expuesto, reaparición, pasa a estar expuesta); las potenciales nunca.
+    vuln_alert_enabled: bool = True
+    vuln_alert_cooldown_hours: int = Field(default=24, ge=0, le=720)
+
     # --- Fase 4J: AI Security Insights (ver docs/ai-security-insights.md) ---
     # Apagado por defecto: Sentra funciona completo sin IA. Encenderlo solo habilita el
     # análisis bajo demanda; la ingesta, las detecciones y el riesgo nunca dependen de él.

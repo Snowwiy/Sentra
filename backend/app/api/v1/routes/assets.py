@@ -64,6 +64,7 @@ from app.services.inventory_service import InventoryService
 from app.services.process_service import ProcessService
 from app.services.risk_service import RiskService
 from app.services.telemetry_service import TelemetryService
+from app.vulnerabilities.queue import mark_dirty
 
 # Solo lectura del dashboard: cualquier rol con monitoring:read (viewer incluido).
 router = APIRouter(prefix="/assets", tags=["assets"], dependencies=[READ])
@@ -185,6 +186,8 @@ def update_asset_context(
         # En la misma transacción que el cambio: si el recálculo inmediato fallara, el job
         # lo hará en su siguiente vuelta.
         request_recalculation(session, [result.asset.id])
+        # Fase 5B: exposición a Internet, entorno y datos cambian la prioridad de findings.
+        mark_dirty(session, [result.asset.id], "context")
     session.commit()
     if result.risk_relevant:
         RiskEngine(session, config, AlertThresholds.from_settings(get_settings())).recalculate(
@@ -325,6 +328,7 @@ def set_asset_criticality(
     # Se encola primero (va en la misma transacción que el cambio): si el recálculo
     # inmediato fallara, el job lo hará en su siguiente vuelta.
     request_recalculation(session, [asset.id])
+    mark_dirty(session, [asset.id], "context")
     audit_service.record(
         session,
         actor(ctx),

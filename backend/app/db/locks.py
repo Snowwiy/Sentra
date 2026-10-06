@@ -27,10 +27,15 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "risk-engine": _BASE + 3,
     "retention": _BASE + 4,
     "discovery": _BASE + 5,
+    # Fase 5B: evaluación de vulnerabilidades (_BASE + 6 es el lock de pruebas de reglas).
+    "vulnerability-engine": _BASE + 7,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.
 RULE_TEST_LOCK_KEY = _BASE + 6
+# Fase 5B: importación del catálogo de vulnerabilidades (lock de transacción): una sola
+# importación a la vez, también entre la API y la CLI.
+VULN_CATALOG_LOCK_KEY = _BASE + 8
 
 
 @contextmanager

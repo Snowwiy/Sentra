@@ -133,6 +133,22 @@ def analyze_incident(
     return service.analyze_incident(incident_id, request.task, request.refresh)
 
 
+@router.post(
+    "/vulnerabilities/{finding_id}/analyze",
+    response_model=InsightRead,
+    responses=_ANALYSIS_ERRORS,
+    dependencies=[Depends(require_permission(Permission.VULNERABILITIES_READ))],
+)
+def analyze_vulnerability(
+    finding_id: UUID, service: Service, body: AnalyzeRequest | None = None
+) -> InsightRead:
+    """Fase 5B: explicar un finding de vulnerabilidad con los datos de Sentra.
+
+    Solo lectura: genera un insight y nunca cambia el finding ni consulta fuentes externas.
+    """
+    return service.analyze_vulnerability(finding_id, bool(body and body.refresh))
+
+
 @router.post("/soc/analyze", response_model=InsightRead, responses=_ANALYSIS_ERRORS)
 def soc_summary(service: Service, body: SocSummaryRequest | None = None) -> InsightRead:
     """Resumen SOC: detecciones graves, activos con más riesgo y cambios recientes."""
@@ -147,11 +163,14 @@ def list_insights(
     asset_id: UUID | None = None,
     detection_id: UUID | None = None,
     incident_id: UUID | None = None,
+    vulnerability_finding_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=100)] = 25,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
 ) -> InsightList:
     """Historial de análisis (más recientes primero) con su estado stale actual."""
-    return service.list(kind, asset_id, detection_id, limit, offset, incident_id)
+    return service.list(
+        kind, asset_id, detection_id, limit, offset, incident_id, vulnerability_finding_id
+    )
 
 
 @router.get("/insights/{insight_id}", response_model=InsightRead, responses=error_responses(404))

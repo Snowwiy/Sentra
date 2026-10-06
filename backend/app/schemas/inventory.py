@@ -1,5 +1,5 @@
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, BaseModel, Field, IPvAnyAddress, field_validator
@@ -18,6 +18,10 @@ MAX_DISKS = 64
 MAX_CONNECTIONS = 1000
 MAX_ACCOUNTS = 1000
 MAX_PATH = 1024
+
+# Nombre de sección tal como lo envía el agente; acotado pero no enumerado, para que un agente
+# más nuevo con una sección extra no haga rechazar todo el inventario.
+SectionName = Annotated[str, Field(min_length=1, max_length=32, pattern=r"^[a-z_]+$")]
 
 
 class _Item(RequestModel):
@@ -127,6 +131,12 @@ class InventorySections(BaseModel):
     # host's gateways/DNS servers.
     accounts: list[AccountInfo] = Field(default_factory=list, max_length=MAX_ACCOUNTS)
     network: NetworkSummary | None = None
+    # Fase 5B (agentes nuevos): de dónde sale el software (el gestor de paquetes decide el
+    # ecosistema con el que se comparan versiones) y qué secciones fallaron al recogerse.
+    # Sin esto una lista vacía por fallo parecería "no hay software" y resolvería findings.
+    # None = agente antiguo que no lo informa (completitud desconocida), distinto de [].
+    software_source: Literal["windows_registry", "dpkg", "rpm"] | None = None
+    incomplete_sections: list[SectionName] | None = Field(default=None, max_length=32)
 
 
 class InventoryCreate(InventorySections, RequestModel):

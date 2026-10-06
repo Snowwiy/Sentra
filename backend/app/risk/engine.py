@@ -42,12 +42,14 @@ from app.models.risk import (
     RiskLevel,
     RiskSnapshot,
 )
+from app.models.vulnerability import VulnerabilityFinding
 from app.risk.calculator import (
     AssetContext,
     DetectionInput,
     ExposureInput,
     RiskInputs,
     RiskResult,
+    VulnerabilityInput,
     calculate,
 )
 from app.risk.config import FORMULA_VERSION, RiskConfig
@@ -313,6 +315,8 @@ class RiskEngine:
                 )
             )
 
+        vulnerabilities = self._vulnerabilities(ids)
+
         # Fase 4L: contexto de negocio confirmado, en una consulta por lote. Un activo sin
         # fila de contexto entra con todo desconocido (neutro en la fórmula).
         business = contexts_by_asset(self._session, ids)
@@ -328,9 +332,66 @@ class RiskEngine:
                 ),
                 detections=detections[asset.id],
                 exposure=exposure[asset.id],
+                vulnerabilities=vulnerabilities.get(asset.id, []),
             )
             for asset in asset_list
         }
+
+    def _vulnerabilities(self, ids: Sequence[int]) -> dict[int, list[VulnerabilityInput]]:
+        """Fase 5B: findings activos con evidencia (confirmed, probable, potential), como
+        mucho `max_vulnerabilities` por activo (los de más prioridad). Una consulta por lote."""
+        ranked = (
+            select(
+                VulnerabilityFinding.id,
+                VulnerabilityFinding.public_id,
+                VulnerabilityFinding.asset_id,
+                VulnerabilityFinding.vuln_external_id,
+                VulnerabilityFinding.title,
+                VulnerabilityFinding.severity,
+                VulnerabilityFinding.match_state,
+                VulnerabilityFinding.status,
+                VulnerabilityFinding.exposure_state,
+                VulnerabilityFinding.exposure,
+                VulnerabilityFinding.first_seen_at,
+                func.row_number()
+                .over(
+                    partition_by=VulnerabilityFinding.asset_id,
+                    order_by=(
+                        VulnerabilityFinding.priority_score.desc(),
+                        VulnerabilityFinding.id,
+                    ),
+                )
+                .label("rank"),
+            )
+            .where(
+                VulnerabilityFinding.asset_id.in_(ids),
+                VulnerabilityFinding.status.in_(
+                    ("open", "acknowledged", "mitigating", "accepted_risk")
+                ),
+                VulnerabilityFinding.match_state.in_(("confirmed", "probable", "potential")),
+            )
+            .subquery()
+        )
+        result: dict[int, list[VulnerabilityInput]] = {}
+        for row in self._session.execute(
+            select(ranked).where(ranked.c.rank <= self._config.max_vulnerabilities)
+        ):
+            observed = (row.exposure or {}).get("observed_open") or []
+            result.setdefault(row.asset_id, []).append(
+                VulnerabilityInput(
+                    id=row.id,
+                    public_id=row.public_id,
+                    vulnerability_id=row.vuln_external_id,
+                    title=row.title,
+                    severity=row.severity,
+                    match_state=row.match_state,
+                    status=row.status,
+                    exposure_state=row.exposure_state,
+                    first_seen_at=row.first_seen_at,
+                    ports=tuple(p for p in (_port(v) for v in observed) if p is not None),
+                )
+            )
+        return result
 
     def _correlation_members(
         self, correlations: Sequence[int], singles: Sequence[int]
@@ -368,9 +429,9 @@ class RiskEngine:
         evaluated_before = row.calculated_at is not None
         previous_level = row.level if evaluated_before else None
         previous_ids = {
-            str(c.get("detection_id"))
+            str(c.get("detection_id") or c.get("finding_id"))
             for c in row.contributions or []
-            if c.get("detection_id")
+            if (c.get("detection_id") or c.get("finding_id"))
             and float(c.get("points") or 0) >= self._config.new_contribution_min_points
         }
 
@@ -459,7 +520,8 @@ class RiskEngine:
             return "level_change"
         if abs(result.score - row.last_snapshot_score) >= self._config.snapshot_min_delta:
             return "material_change"
-        if result.detection_ids(self._config.new_contribution_min_points) - previous_ids:
+        minimum = self._config.new_contribution_min_points
+        if (result.detection_ids(minimum) | result.finding_ids(minimum)) - previous_ids:
             return "new_contribution"
         if (
             result.score != row.last_snapshot_score

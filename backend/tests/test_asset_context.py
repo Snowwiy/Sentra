@@ -29,7 +29,7 @@ from app.models.audit import AuditEvent
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
 from app.models.detection import DetectionConfidence, DetectionSeverity, DetectionStatus
 from app.risk.calculator import AssetContext, DetectionInput, RiskInputs, calculate
-from app.risk.config import CONTEXT_FACTOR_CAP, RiskConfig
+from app.risk.config import CONTEXT_FACTOR_CAP, FORMULA_VERSION, RiskConfig
 from app.services import asset_context_service
 from app.services.reconciliation import merge_into
 from tests.conftest import _alembic_config, authenticate
@@ -656,7 +656,7 @@ def test_context_change_recalculates_risk_and_explains_it(
                criticality="high"))  # fmt: skip
     after = _ok(client.get(f"{API}/risk/assets/{asset.public_id}"))
     assert after["score"] > before["score"]  # recalculado en la misma petición
-    assert after["formula_version"] == 2
+    assert after["formula_version"] == FORMULA_VERSION
     labels = [item["label"] for item in after["explanation"]["context"]]
     assert any(label.startswith("Criticidad del activo") for label in labels)
     assert any("producción" in label for label in labels)

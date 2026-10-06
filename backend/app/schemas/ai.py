@@ -22,6 +22,7 @@ InsightKindName = Literal[
     "incident_timeline",
     "incident_evidence",
     "incident_next_steps",
+    "vulnerability_analysis",
 ]
 # Fase 4K: tareas de asistencia sobre un incidente (todas de solo lectura).
 IncidentTask = Literal["summary", "timeline", "evidence", "next_steps"]
@@ -55,7 +56,7 @@ class EvidenceRefRead(ResponseModel):
     # Identificador corto que citó el modelo (D1, C2...), válido solo dentro del insight.
     ref: str
     # asset, detection, event, evidence, exposure, risk_contribution, risk_snapshot, alert,
-    # change, incident, note.
+    # change, incident, note, vulnerability (finding de la Fase 5B).
     type: str
     # Id público de Sentra (UUID) o compuesto ("<activo>:tcp/3389", "<activo>#0").
     id: str
@@ -92,11 +93,13 @@ class InsightResult(ResponseModel):
 class InsightRead(ResponseModel):
     insight_id: UUID
     kind: InsightKindName
-    scope: Literal["asset", "detection", "incident", "fleet"]
+    scope: Literal["asset", "detection", "incident", "vulnerability", "fleet"]
     asset_id: UUID | None
     asset_name: str | None
     detection_id: UUID | None
     incident_id: UUID | None
+    # Finding de vulnerabilidad analizado (Fase 5B).
+    vulnerability_finding_id: UUID | None = None
     risk_snapshot_id: UUID | None
     question: str | None
     provider: str

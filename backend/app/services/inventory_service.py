@@ -26,6 +26,7 @@ from app.services.alert_service import AlertService, AlertThresholds
 from app.services.change_detection import admin_changes, diff_inventory
 from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered, interface_identity, primary_mac
+from app.vulnerabilities.queue import mark_dirty
 
 # Services start one by one after a reboot: their state changes are not news then.
 BOOT_GRACE = timedelta(minutes=10)
@@ -80,6 +81,8 @@ class InventoryService:
                 self._record_changes(asset, previous, document, data.collected_at, now)
             self._alerts.evaluate_services(asset, document.get("services") or [])
             self._reconcile(asset, document.get("interfaces"))
+            # Fase 5B: el job compara la huella del software y solo reevalúa si cambió.
+            mark_dirty(self._session, [asset.id], "inventory")
         self._session.commit()
         return InventoryAccepted(asset_id=asset.public_id, collected_at=data.collected_at)
 

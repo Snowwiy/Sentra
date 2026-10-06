@@ -80,10 +80,21 @@ interface Props {
   detectionId?: string;
   /** Fase 4K: análisis de un incidente (solo lectura; nunca cambia el caso). */
   incidentId?: string;
+  /** Fase 5B: análisis de un finding de vulnerabilidad (solo lectura). */
+  vulnerabilityFindingId?: string;
   run: (refresh: boolean) => Promise<Insight>;
 }
 
-export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId, incidentId, run }: Props) {
+export function AIAnalyzePanel({
+  title,
+  buttonLabel,
+  kind,
+  assetId,
+  detectionId,
+  incidentId,
+  vulnerabilityFindingId,
+  run,
+}: Props) {
   const auth = useAuth();
   const { status, error: statusError } = useAIStatus();
   const [insight, setInsight] = useState<Insight>();
@@ -97,7 +108,14 @@ export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId,
     const controller = new AbortController();
     aiApi
       .list(
-        { kind, assetId: kind === "detection_analysis" ? undefined : assetId, detectionId, incidentId, limit: 1 },
+        {
+          kind,
+          assetId: kind === "detection_analysis" ? undefined : assetId,
+          detectionId,
+          incidentId,
+          vulnerabilityFindingId,
+          limit: 1,
+        },
         controller.signal,
       )
       .then((list) => {
@@ -105,7 +123,7 @@ export function AIAnalyzePanel({ title, buttonLabel, kind, assetId, detectionId,
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [allowed, kind, assetId, detectionId, incidentId]);
+  }, [allowed, kind, assetId, detectionId, incidentId, vulnerabilityFindingId]);
 
   const analyze = useCallback(
     async (refresh: boolean) => {

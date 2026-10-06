@@ -51,6 +51,11 @@ class AIInsight(Base):
             postgresql_where=text("incident_id IS NOT NULL"),
         ),
         Index(
+            "ix_ai_insights_vulnerability",
+            "vulnerability_finding_id",
+            postgresql_where=text("vulnerability_finding_id IS NOT NULL"),
+        ),
+        Index(
             "ix_ai_insights_user",
             "requested_by_user_id",
             postgresql_where=text("requested_by_user_id IS NOT NULL"),
@@ -75,6 +80,10 @@ class AIInsight(Base):
     )
     # Incidente analizado (Fase 4K): asistencia de IA de solo lectura sobre un caso.
     incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id", ondelete="SET NULL"))
+    # Finding de vulnerabilidad analizado (Fase 5B): explicación de solo lectura.
+    vulnerability_finding_id: Mapped[int | None] = mapped_column(
+        ForeignKey("vulnerability_findings.id", ondelete="SET NULL")
+    )
     # Pregunta del analista (solo Ask); acotada y sin datos del contexto.
     question: Mapped[str | None] = mapped_column(String(500))
 

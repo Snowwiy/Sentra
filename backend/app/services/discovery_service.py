@@ -63,6 +63,7 @@ from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.identification import oui_database, record_observation, refresh_identity
 from app.services.reconciliation import interface_identity
+from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
 
@@ -821,6 +822,8 @@ class ResultApplier:
             # La exposición es entrada del Risk Engine (Fase 4I): abrir o cerrar un puerto
             # cambia el riesgo del activo aunque no genere ninguna detección.
             request_recalculation(self._session, [asset.id])
+            # Fase 5B: la exposición de los findings (servicio observado) depende de esto.
+            mark_dirty(self._session, [asset.id], "exposure")
         for port in opened:
             self._change(asset, ChangeCategory.EXPOSURE, ChangeKind.PORT_OPENED, _label(port), now)
         for port in closed:

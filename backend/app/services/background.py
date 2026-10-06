@@ -27,6 +27,7 @@ from app.risk.engine import RiskEngine
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
+from app.vulnerabilities.engine import VulnerabilityConfig, VulnerabilityEngine
 
 logger = logging.getLogger(__name__)
 
@@ -160,6 +161,34 @@ def run_risk_engine() -> None:
         if not _last_risk_decay or now - _last_risk_decay[0] >= config.decay_interval:
             _last_risk_decay[:] = [now]
             engine.process_decay(now)
+
+
+# Refresco completo y caducidad de riesgos aceptados: como mucho cada VULN_REFRESH_EVERY.
+VULN_REFRESH_EVERY = timedelta(minutes=10)
+_last_vuln_refresh: list[datetime] = []
+
+
+def run_vulnerability_engine() -> None:
+    """Fase 5B: crea el estado de activos nuevos, procesa la cola y el refresco periódico.
+
+    Cola (inventario, SO, puertos, contexto o catálogo cambiados) en cada vuelta; refresco
+    completo y caducidad de riesgos aceptados como mucho cada VULN_REFRESH_EVERY. Cada
+    pasada está acotada (lotes x MAX_BATCHES). Un fallo aquí lo registra PeriodicJob y la API
+    sigue sirviendo los findings guardados.
+    """
+    settings = get_settings()
+    config = VulnerabilityConfig.from_settings(settings)
+    with get_sessionmaker()() as session:
+        engine = VulnerabilityEngine(session, config, AlertThresholds.from_settings(settings))
+        engine.seed_missing()
+        engine.process_dirty()
+        now = datetime.now(UTC)
+        if not _last_vuln_refresh or now - _last_vuln_refresh[0] >= VULN_REFRESH_EVERY:
+            _last_vuln_refresh[:] = [now]
+            expired = engine.expire_accepted_audited(now)
+            if expired:
+                logger.info("accepted vulnerability risks expired", extra={"count": expired})
+            engine.process_refresh(now)
 
 
 def purge_old_data() -> None:

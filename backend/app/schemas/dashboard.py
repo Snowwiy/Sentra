@@ -33,6 +33,14 @@ class DashboardDetections(ResponseModel):
     by_severity: dict[str, int]
 
 
+class DashboardVulnerabilities(ResponseModel):
+    # Fase 5B. Findings activos (open, acknowledged, mitigating) con evidencia confirmed o
+    # probable, por severidad. Los potenciales van aparte: nunca cuentan como confirmados.
+    by_severity: dict[str, int]
+    potential: int
+    assets_affected: int
+
+
 class DashboardSummary(ResponseModel):
     """GET /dashboard/summary (Fase 4M): contadores agregados en SQL.
 
@@ -47,3 +55,5 @@ class DashboardSummary(ResponseModel):
     incidents: DashboardIncidents | None
     detections: DashboardDetections
     active_alerts: int
+    # None si el rol no puede leer vulnerabilidades (vulnerabilities:read).
+    vulnerabilities: DashboardVulnerabilities | None = None

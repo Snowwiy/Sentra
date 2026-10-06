@@ -92,6 +92,8 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
     ],
     detections: [],
     detections_total: 0,
+    vulnerabilities: [],
+    vulnerabilities_total: 0,
     alerts: [],
     alerts_total: 0,
     notes_total: 1,

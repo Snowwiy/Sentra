@@ -1,4 +1,5 @@
 import { useMemo } from "react";
+import { Link } from "react-router-dom";
 import type { SoftwareInfo } from "../../api/types";
 import { compareBy, distinct, listPage, matchesText } from "../../lib/listing";
 import { useListState } from "../../lib/useListState";
@@ -15,7 +16,19 @@ const SORTERS: Record<Key, (s: SoftwareInfo) => string | null | undefined> = {
   installed: (s) => s.install_date, // ISO dates sort as text
 };
 
-export function SoftwareTab({ software }: { software: SoftwareInfo[] }) {
+/** Clave nombre+versión del software instalado (la misma que usa `countBySoftware`). */
+export function softwareKey(name: string, version: string | null | undefined): string {
+  return `${name.trim().toLowerCase()}\u0000${(version ?? "").trim()}`;
+}
+
+export function SoftwareTab({
+  software,
+  known,
+}: {
+  software: SoftwareInfo[];
+  /** Fase 5B: vulnerabilidades activas por programa (sin el permiso, no se muestra la columna). */
+  known?: Map<string, number>;
+}) {
   const list = useListState<Key, { publisher: string; arch: string }>(
     { key: "name", dir: "asc" },
     { publisher: "", arch: "" },
@@ -48,6 +61,11 @@ export function SoftwareTab({ software }: { software: SoftwareInfo[] }) {
           <FilterSelect label="Arquitectura" value={list.filters.arch} options={architectures} onChange={(v) => list.setFilter("arch", v)} allLabel="Todas" />
         )}
         <span className="muted small">{software.length} programas instalados</span>
+        {known && (
+          <span className="muted small">
+            Vulnerabilidades conocidas: {[...known.values()].reduce((a, b) => a + b, 0)}
+          </span>
+        )}
       </Toolbar>
       <div className="table-wrap">
         <table className="table">
@@ -58,6 +76,7 @@ export function SoftwareTab({ software }: { software: SoftwareInfo[] }) {
               {header("Editor", "publisher")}
               {header("Instalado", "installed")}
               <th>Arquitectura</th>
+              {known && <th>Vulnerabilidades conocidas</th>}
             </tr>
           </thead>
           <tbody>
@@ -68,6 +87,15 @@ export function SoftwareTab({ software }: { software: SoftwareInfo[] }) {
                 <td className="muted">{s.publisher ?? "—"}</td>
                 <td className="muted">{s.install_date ?? "—"}</td>
                 <td className="muted">{s.architecture ?? "—"}</td>
+                {known && (
+                  <td>
+                    {(known.get(softwareKey(s.name, s.version)) ?? 0) > 0 ? (
+                      <Link to="?tab=vulnerabilities">{known.get(softwareKey(s.name, s.version))}</Link>
+                    ) : (
+                      <span className="muted">0</span>
+                    )}
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>

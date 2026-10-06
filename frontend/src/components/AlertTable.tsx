@@ -19,6 +19,7 @@ export const RULE_LABELS: Record<AlertRule, string> = {
   monitoring_lost: "Monitorización perdida",
   security_detection: "Detección de seguridad",
   risk_critical: "Riesgo crítico",
+  vulnerability: "Vulnerabilidad",
 };
 
 const SEVERITY_LABELS: Record<AlertSeverity, string> = {

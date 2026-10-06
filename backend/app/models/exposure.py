@@ -1,7 +1,16 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, UniqueConstraint
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
@@ -24,6 +33,9 @@ class AssetPort(Base):
     __tablename__ = "asset_ports"
     __table_args__ = (
         UniqueConstraint("asset_id", "protocol", "port", name="uq_asset_ports_asset_port"),
+        # Fase 5B: vista consolidada de exposición (puertos abiertos de todos los activos,
+        # los más recientes primero) paginada sin recorrer la tabla.
+        Index("ix_asset_ports_state_last_seen", "state", "last_seen_at"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
