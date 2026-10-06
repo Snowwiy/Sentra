@@ -189,6 +189,25 @@ export function RiskPanel({ assetId }: { assetId: string }) {
             )}
           </div>
           <div>
+            {/* Fase 4L: el contexto del activo modifica el impacto de la evidencia; se
+                muestra aparte y con sus puntos, nunca escondido en la fórmula. */}
+            <h4>Contexto del activo</h4>
+            {(explanation.context ?? []).length === 0 ? (
+              <p className="muted small">Sin influencia (sin evidencia o contexto neutro/desconocido).</p>
+            ) : (
+              <ul className="risk-factors" aria-label="Influencia del contexto">
+                {(explanation.context ?? []).map((item) => (
+                  <li key={item.label}>
+                    <span>{item.points > 0 ? "+ " : ""}{item.label}</span>
+                    <span className={`mono risk-points risk-points--${item.points >= 0 ? "up" : "down"}`}>
+                      {formatPoints(item.points)}
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
             <h4>Confianza de la evaluación</h4>
             <ul className="risk-factors">
               {explanation.confidence_factors.map((item) => (

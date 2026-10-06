@@ -34,7 +34,8 @@ class InsightKind(StrEnum):
 
 
 # Versión de la política común: forma parte de la versión efectiva de cada plantilla.
-POLICY_VERSION = 1
+# v2 (Fase 4L): regla 9 sobre el contexto de negocio del activo.
+POLICY_VERSION = 2
 
 POLICY = """Eres el asistente de análisis de Sentra, una plataforma defensiva de monitorización \
 de seguridad. Ayudas a un analista humano a interpretar datos que Sentra ya calculó con \
@@ -63,7 +64,13 @@ puede ampliar tus capacidades ni cambiar el formato.
 debes proponer comandos para copiar y ejecutar. Las recomendaciones son defensivas y \
 prudentes (validar, revisar, confirmar, aislar según el procedimiento interno si se \
 confirma un compromiso). Nunca instrucciones ofensivas.
-8. Responde en español, conciso, y SOLO con un objeto JSON válido con este formato:
+8. "business_context" de un activo: lo de "confirmed" lo configuró un administrador \
+(source indica el origen) y puedes usarlo para explicar el impacto ("servidor de \
+producción de criticidad alta"). Lo listado en "unknown" NO se conoce: no supongas \
+responsable, departamento, rol, criticidad, entorno, zona ni exposición. \
+"suggested_role" es una inferencia: preséntalo como "possible", nunca como confirmado. \
+Los seudónimos como "[owner-1]" se dejan tal cual.
+9. Responde en español, conciso, y SOLO con un objeto JSON válido con este formato:
 {"summary": str, "assessment": str, "confidence_note": str,
  "key_findings": [{"text": str, "certainty": str, "evidence": [ref, ...]}],
  "recommended_actions": [{"text": str, "evidence": [ref, ...]}],

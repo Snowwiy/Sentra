@@ -14,6 +14,8 @@ Fórmula (detalle y justificación en docs/risk-engine.md):
    "absorbido" (aparece en la explicación con 0 puntos).
 3. Rendimientos decrecientes: grupos ordenados por valor; el n-ésimo aporta beta^(n-1).
 4. Modificadores acotados del activo: criticidad y tipo (multiplican, nunca crean riesgo).
+   Fase 4L: contexto de negocio (entorno de producción, datos confidenciales/restringidos,
+   exposición a Internet confirmada) con su propio tope (x1,25). Desconocido = 1,0.
 5. Saturación: lineal hasta el codo (70) y asintótica hasta 100 por encima.
 
 El ledger de contribuciones suma exactamente el score antes de redondear: cada factor que
@@ -29,6 +31,7 @@ from uuid import UUID
 
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS
 from app.models.asset import AssetCriticality
+from app.models.asset_context import AssetEnvironment, DataSensitivity
 from app.models.detection import DetectionConfidence, DetectionSeverity, DetectionStatus
 from app.models.risk import RiskConfidence, RiskLevel
 from app.risk.config import (
@@ -58,6 +61,9 @@ DETECTION = "detection"
 EXPOSURE = "exposure"
 CRITICALITY = "criticality"
 ASSET_TYPE = "asset_type"
+# Fase 4L: un factor de contexto de negocio (entorno, sensibilidad, exposición confirmada)
+# y el tope que los limita.
+BUSINESS_CONTEXT = "business_context"
 SATURATION = "saturation"
 
 CRITICALITY_LABELS = {
@@ -115,6 +121,10 @@ class AssetContext:
     os_name: str | None = None
     # Último contacto del agente (para saber si sus datos están al día).
     last_seen_at: datetime | None = None
+    # Fase 4L: Asset Context confirmado. Desconocido por defecto (neutro en la fórmula).
+    environment: AssetEnvironment = AssetEnvironment.UNKNOWN
+    data_sensitivity: DataSensitivity = DataSensitivity.UNKNOWN
+    internet_exposed: bool | None = None
 
 
 @dataclass(frozen=True)
@@ -422,6 +432,7 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
                 details={"device_type": asset.device_type, "factor": type_factor},
             )
         )
+    raw, context_factor = _business_context(asset, config, base, raw, contributions)
     saturated = saturate(raw, config.saturation_knee)
     if saturated < raw:
         contributions.append(
@@ -490,6 +501,7 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         "criticality": asset.criticality.value,
         "criticality_factor": criticality,
         "asset_type_factor": type_factor,
+        "context_factor": context_factor,
         "raw_points": _round(raw),
         "saturated_points": _round(saturated),
         "reductions": {key: _round(value) for key, value in reductions.items()}
@@ -511,6 +523,87 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         breakdown=breakdown,
         calculated_at=now,
     )
+
+
+ENVIRONMENT_LABELS = {AssetEnvironment.PRODUCTION: "producción"}
+SENSITIVITY_LABELS = {
+    DataSensitivity.CONFIDENTIAL: "datos confidenciales",
+    DataSensitivity.RESTRICTED: "datos restringidos",
+}
+
+
+def _business_context(
+    asset: AssetContext,
+    config: RiskConfig,
+    base: float,
+    raw: float,
+    contributions: list[RiskContribution],
+) -> tuple[float, float]:
+    """Aplica el contexto de negocio a `raw` y añade sus líneas al ledger.
+
+    Solo amplifica evidencia existente (base > 0) y solo con valores CONFIRMADOS; con
+    contexto desconocido devuelve `raw` sin cambios. Cada factor aparece con sus puntos
+    ("+ contexto: producción") y, si el producto supera el tope, una línea negativa lo
+    recorta: el ledger sigue sumando exactamente el score.
+    """
+    if base <= 0:
+        return raw, 1.0
+    factors: list[tuple[str, float, dict[str, Any]]] = []
+    env = config.environment_factor.get(asset.environment, 1.0)
+    if env != 1.0:
+        env_label = ENVIRONMENT_LABELS.get(asset.environment, asset.environment.value)
+        factors.append(
+            (
+                f"Contexto: entorno de {env_label}",
+                env,
+                {"environment": asset.environment.value},
+            )
+        )
+    sensitivity = config.data_sensitivity_factor.get(asset.data_sensitivity, 1.0)
+    if sensitivity != 1.0:
+        data_label = SENSITIVITY_LABELS.get(asset.data_sensitivity, asset.data_sensitivity.value)
+        factors.append(
+            (
+                f"Contexto: {data_label}",
+                sensitivity,
+                {"data_sensitivity": asset.data_sensitivity.value},
+            )
+        )
+    if asset.internet_exposed is True:
+        factors.append(
+            (
+                "Contexto: exposición a Internet confirmada",
+                config.internet_exposed_factor,
+                {"internet_exposed": True},
+            )
+        )
+    product = 1.0
+    running = raw
+    for label, factor, details in factors:
+        contributions.append(
+            RiskContribution(
+                factor=BUSINESS_CONTEXT,
+                category="context",
+                label=f"{label} (x{_num(factor)})",
+                points=_round(running * (factor - 1.0)),
+                details=details | {"factor": factor},
+            )
+        )
+        running *= factor
+        product *= factor
+    if product > config.context_factor_cap:
+        capped = raw * config.context_factor_cap
+        contributions.append(
+            RiskContribution(
+                factor=BUSINESS_CONTEXT,
+                category="context",
+                label=f"Tope del contexto de negocio (x{_num(config.context_factor_cap)})",
+                points=_round(capped - running),
+                details={"cap": config.context_factor_cap, "uncapped_factor": round(product, 4)},
+            )
+        )
+        return capped, config.context_factor_cap
+    return running, round(product, 4)
 
 
 def _lead_contribution(

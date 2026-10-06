@@ -147,6 +147,18 @@ class AIConfig:
             max_retries=settings.ai_max_retries,
         )
 
+    @property
+    def effective_redact(self) -> frozenset[str]:
+        """Seudonimización que se aplica de verdad.
+
+        Fase 4L: responsable y departamento de un activo (owners) nunca salen en claro hacia
+        un proveedor que no sea local, aunque AI_REDACT no lo pida (y aunque
+        AI_ALLOW_EXTERNAL lo permita). Con proveedor local se respeta AI_REDACT tal cual.
+        """
+        if self.location == "local":
+            return self.redact
+        return self.redact | {"owners"}
+
     def unavailable_reason(self) -> str | None:
         """Por qué no se puede llamar al modelo (None = utilizable). Texto para la UI.
 

@@ -11,6 +11,7 @@ import {
   DetectionStatusBadge,
 } from "../components/detections/DetectionBadges";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
+import { AssetContextSummary } from "../components/incidents/IncidentTabs";
 import { RelatedIncidentsPanel } from "../components/incidents/RelatedIncidentsPanel";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
@@ -175,6 +176,16 @@ export function DetectionDetailPage() {
               </Link>
             </dd>
           </div>
+          {d.asset_context && (
+            <div className="field">
+              {/* Fase 4L: impacto de negocio del activo, aparte de la severidad (que fija la
+                  regla y no cambia porque el activo sea crítico). */}
+              <dt>Impacto en el negocio (contexto del activo)</dt>
+              <dd>
+                <AssetContextSummary context={d.asset_context} snapshot={null} resolved={null} />
+              </dd>
+            </div>
+          )}
           <div className="field">
             <dt>Regla</dt>
             <dd>

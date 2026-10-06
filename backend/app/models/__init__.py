@@ -2,6 +2,16 @@ from app.models.ai import AIInsight
 from app.models.ai_local import AILocalModel, AILocalSettings, AIModelBenchmark
 from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
+from app.models.asset_context import (
+    AssetBusinessContext,
+    AssetContextChange,
+    AssetEnvironment,
+    AssetRole,
+    AssetTag,
+    ContextSource,
+    DataSensitivity,
+    NetworkZone,
+)
 from app.models.audit import AuditEvent
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
 from app.models.detection import (
@@ -49,16 +59,23 @@ __all__ = [
     "AlertSeverity",
     "AlertStatus",
     "Asset",
+    "AssetBusinessContext",
     "AssetChange",
+    "AssetContextChange",
     "AssetCriticality",
+    "AssetEnvironment",
     "AssetInventory",
     "AssetPort",
     "AssetProcessSnapshot",
     "AssetRisk",
+    "AssetRole",
     "AssetStatus",
+    "AssetTag",
     "AuditEvent",
     "ChangeCategory",
     "ChangeKind",
+    "ContextSource",
+    "DataSensitivity",
     "Detection",
     "DetectionBaseline",
     "DetectionConfidence",
@@ -79,6 +96,7 @@ __all__ = [
     "IncidentFeedback",
     "IncidentNote",
     "MonitoringMethod",
+    "NetworkZone",
     "PortStateValue",
     "RiskConfidence",
     "RiskContributionRecord",

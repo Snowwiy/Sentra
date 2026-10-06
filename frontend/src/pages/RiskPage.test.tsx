@@ -86,6 +86,7 @@ function detail(overrides: Partial<RiskAssetDetail> = {}): RiskAssetDetail {
       increased: [{ label: "CORR-001 · Inicio de sesión tras fallos repetidos", points: 62.5 }],
       reduced: [{ label: "AUTH-001 · Ráfaga de fallos (resuelta)", points: -4 }],
       confidence_factors: [{ effect: "+", label: "Evidencia de varias categorías independientes" }],
+      context: [],
     },
     contributions: [
       {
@@ -421,6 +422,24 @@ describe("RiskPanel", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Permiso insuficiente");
   });
 
+  it("muestra la influencia del contexto del activo por separado", async () => {
+    renderPanel();
+    await screen.findByRole("heading", { name: "84 / Crítico — confianza alta" });
+    expect(screen.getByText(/Sin influencia/)).toBeInTheDocument();
+    cleanup();
+    routes[`GET /risk/assets/${ASSET}`] = () => ({
+      body: detail({
+        explanation: {
+          ...detail().explanation,
+          context: [{ label: "Contexto: entorno de producción (x1,1)", points: 6.2 }],
+        },
+      }),
+    });
+    renderPanel();
+    const list = await screen.findByRole("list", { name: "Influencia del contexto" });
+    expect(within(list).getByText("+ Contexto: entorno de producción (x1,1)")).toBeInTheDocument();
+  });
+
   it("activo pendiente de evaluar", async () => {
     routes[`GET /risk/assets/${ASSET}`] = () => ({
       body: detail({
@@ -434,7 +453,14 @@ describe("RiskPanel", () => {
         active_detections: [],
         active_detections_total: 0,
         recent_changes: [],
-        explanation: { headline: "Pendiente de evaluar", reasons: [], increased: [], reduced: [], confidence_factors: [] },
+        explanation: {
+          headline: "Pendiente de evaluar",
+          reasons: [],
+          increased: [],
+          reduced: [],
+          confidence_factors: [],
+          context: [],
+        },
       }),
     });
     renderPanel();

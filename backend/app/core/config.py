@@ -366,7 +366,8 @@ class Settings(BaseSettings):
     @field_validator("ai_redact")
     @classmethod
     def _check_ai_redact(cls, value: str) -> str:
-        unknown = set(parse_name_list(value.lower())) - {"usernames", "hostnames", "ips", "paths"}
+        allowed = {"usernames", "hostnames", "ips", "paths", "owners"}
+        unknown = set(parse_name_list(value.lower())) - allowed
         if unknown:
             raise ValueError(f"AI_REDACT has unknown values: {sorted(unknown)}")
         return value

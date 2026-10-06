@@ -74,9 +74,203 @@ export interface Asset {
   open_ports: number[];
   /** Fase 4I: criticidad (solo admin la cambia) y riesgo actual; null hasta el primer cálculo. */
   criticality: AssetCriticality;
+  /** Fase 4L: rol confirmado por un admin ("unknown" si nadie lo confirmó). */
+  role: AssetRole;
   risk_score: number | null;
   risk_level: RiskLevel | null;
   risk_confidence: RiskConfidence | null;
+}
+
+// --- Asset Context (Fase 4L) ------------------------------------------------------------------
+
+export type AssetRole =
+  | "workstation"
+  | "server"
+  | "domain_controller"
+  | "database"
+  | "web_server"
+  | "application_server"
+  | "security_server"
+  | "network_device"
+  | "router"
+  | "switch"
+  | "firewall"
+  | "wireless_ap"
+  | "printer"
+  | "iot"
+  | "mobile"
+  | "virtual_machine"
+  | "container_host"
+  | "unknown"
+  | "other";
+export type AssetEnvironment =
+  | "production"
+  | "staging"
+  | "development"
+  | "testing"
+  | "lab"
+  | "personal"
+  | "unknown";
+export type DataSensitivity = "unknown" | "public" | "internal" | "confidential" | "restricted";
+export type NetworkZone =
+  | "unknown"
+  | "user"
+  | "server"
+  | "management"
+  | "dmz"
+  | "guest"
+  | "iot"
+  | "security"
+  | "lab";
+export type ManagedState = "DISCOVERED" | "MONITORED" | "MANAGED";
+/** Configurado por una persona, observado por Sentra o inferido (sugerencia). */
+export type ContextKind = "configured" | "observed" | "inferred";
+export type ConfidenceLevel = "low" | "medium" | "high";
+
+export interface FieldProvenance {
+  /** manual hoy; agent, discovery, inferred y fuentes futuras usan la misma forma. */
+  source: string;
+  kind: ContextKind;
+  /** Solo en datos inferidos: un dato manual nunca lleva confianza. */
+  confidence: ConfidenceLevel | null;
+  updated_at: IsoDateTime | null;
+  updated_by: string | null;
+}
+
+export interface RoleSuggestion {
+  value: AssetRole;
+  source: string;
+  kind: ContextKind;
+  confidence: ConfidenceLevel | null;
+  reason: string | null;
+}
+
+export interface ContextCompleteness {
+  percent: number;
+  complete: boolean;
+  known: string[];
+  missing: string[];
+}
+
+export interface AssetContext {
+  asset_id: string;
+  /** Token de concurrencia (0 = sin contexto guardado). */
+  version: number;
+  criticality: AssetCriticality;
+  criticality_confirmed: boolean;
+  criticality_rationale: string | null;
+  criticality_updated_at: IsoDateTime | null;
+  criticality_updated_by: string | null;
+  role: AssetRole;
+  role_suggestion: RoleSuggestion | null;
+  environment: AssetEnvironment;
+  owner: string | null;
+  department: string | null;
+  data_sensitivity: DataSensitivity;
+  network_zone: NetworkZone;
+  /** null = desconocido (no es "no expuesto"). */
+  internet_exposed: boolean | null;
+  tags: string[];
+  managed_state: ManagedState;
+  visibility_sources: string[];
+  provenance: Record<string, FieldProvenance>;
+  completeness: ContextCompleteness;
+  updated_at: IsoDateTime | null;
+  updated_by: string | null;
+}
+
+/** PATCH parcial: solo los campos presentes cambian. */
+export interface AssetContextUpdate {
+  version: number;
+  criticality?: AssetCriticality;
+  criticality_rationale?: string | null;
+  role?: AssetRole;
+  environment?: AssetEnvironment;
+  owner?: string | null;
+  department?: string | null;
+  data_sensitivity?: DataSensitivity;
+  network_zone?: NetworkZone;
+  internet_exposed?: boolean | null;
+  tags?: string[];
+}
+
+export interface AssetContextBrief {
+  criticality: AssetCriticality;
+  role: AssetRole;
+  environment: AssetEnvironment;
+  owner: string | null;
+  department: string | null;
+  data_sensitivity: DataSensitivity;
+  network_zone: NetworkZone;
+  internet_exposed: boolean | null;
+  context_complete: boolean;
+}
+
+export interface AssetContextSnapshot {
+  criticality: string | null;
+  role: string | null;
+  environment: string | null;
+  data_sensitivity: string | null;
+  network_zone: string | null;
+  internet_exposed: boolean | null;
+  captured_at: IsoDateTime | null;
+}
+
+export interface AssetContextChange {
+  changed_at: IsoDateTime;
+  field: string;
+  old_value: string | null;
+  new_value: string | null;
+  source: string;
+  actor: string;
+}
+
+export interface AssetContextHistory {
+  items: AssetContextChange[];
+  total: number;
+}
+
+export interface AssetContextOptions {
+  criticality: AssetCriticality[];
+  role: AssetRole[];
+  environment: AssetEnvironment[];
+  data_sensitivity: DataSensitivity[];
+  network_zone: NetworkZone[];
+  departments: string[];
+  tags: string[];
+  limits: ContextLimits;
+}
+
+export interface ContextLimits {
+  owner_max: number;
+  department_max: number;
+  rationale_max: number;
+  max_tags: number;
+  tag_max: number;
+  tag_pattern: string;
+}
+
+export interface ThreatRisk {
+  score: number;
+  level: RiskLevel;
+  confidence: RiskConfidence;
+  calculated_at: IsoDateTime | null;
+}
+
+export interface AssetThreatSummary {
+  asset_id: string;
+  window_days: number;
+  active_detection_count: number;
+  high_critical_detection_count: number;
+  open_incident_count: number;
+  highest_incident_severity: string | null;
+  current_risk: ThreatRisk | null;
+  recent_exposure_changes: number;
+  recent_context_changes: number;
+  last_security_activity: IsoDateTime | null;
+  criticality: AssetCriticality;
+  environment: AssetEnvironment;
+  managed_state: ManagedState;
 }
 
 export interface AssetList {
@@ -695,6 +889,8 @@ export interface DetectionDetail extends Detection {
   required_data: string[];
   evidence: DetectionEvidence[];
   evidence_total: number;
+  /** Fase 4L: impacto de negocio del activo, independiente de la severidad de la regla. */
+  asset_context: AssetContextBrief | null;
 }
 
 export interface DetectionRule {
@@ -763,6 +959,8 @@ export interface RiskExplanation {
   increased: RiskExplanationItem[];
   reduced: RiskExplanationItem[];
   confidence_factors: ConfidenceFactor[];
+  /** Fase 4L: cuánto movió el score el contexto del activo (vacío si neutro o sin evidencia). */
+  context: RiskExplanationItem[];
 }
 
 export interface RiskAssetSummary {
@@ -1262,6 +1460,10 @@ export interface IncidentAssetRef {
   primary_ip: string | null;
   source: string;
   added_at: string;
+  /** Fase 4L: contexto actual (null si el activo ya no existe) y snapshots históricos. */
+  context: AssetContextBrief | null;
+  context_snapshot: AssetContextSnapshot | null;
+  resolved_context_snapshot: AssetContextSnapshot | null;
 }
 
 export interface IncidentSummary {

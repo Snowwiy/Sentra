@@ -74,6 +74,7 @@ function detail(overrides: Partial<DetectionDetail> = {}): DetectionDetail {
         data: null,
       },
     ],
+    asset_context: null,
     evidence_total: 2,
     ...overrides,
   };

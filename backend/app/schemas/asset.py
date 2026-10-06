@@ -3,6 +3,7 @@ from uuid import UUID
 
 from app.discovery.device_types import ClassificationConfidence
 from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
+from app.models.asset_context import AssetRole
 from app.models.risk import RiskConfidence, RiskLevel
 from app.schemas.common import ResponseModel
 from app.schemas.telemetry import TelemetrySnapshot
@@ -72,6 +73,9 @@ class AssetRead(ResponseModel):
     # Fase 4I: criticidad (la cambia un admin) y riesgo actual del Risk Engine; null hasta
     # el primer cálculo. El detalle y la explicación están en /risk/assets/{id}.
     criticality: AssetCriticality
+    # Fase 4L: rol confirmado por un admin ("unknown" si nadie lo confirmó). El resto del
+    # contexto está en /assets/{id}/context; aquí solo lo compacto para el listado.
+    role: AssetRole
     risk_score: int | None
     risk_level: RiskLevel | None
     risk_confidence: RiskConfidence | None

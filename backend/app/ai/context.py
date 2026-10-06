@@ -33,6 +33,7 @@ from app.detection.text import clean
 from app.incidents.workflow import incident_key
 from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
+from app.models.asset_context import AssetBusinessContext, AssetRole
 from app.models.change import AssetChange
 from app.models.detection import (
     SEVERITY_RANK,
@@ -53,6 +54,12 @@ from app.models.incident import (
 )
 from app.models.risk import RiskSnapshot
 from app.risk.config import RiskConfig
+from app.services.asset_context_service import (
+    COMPLETENESS_FIELDS,
+    ContextValues,
+    role_suggestion,
+    tags_by_asset,
+)
 from app.services.asset_service import effective_status
 from app.services.incident_service import family_ids
 from app.services.risk_service import RiskService
@@ -284,7 +291,45 @@ class ContextBuilder:
             "status": effective_status(asset, self._now, self._timeout).value,
             "criticality": asset.criticality.value,
             "last_seen_at": asset.last_seen_at or asset.last_network_seen_at,
+            "business_context": self._business_context(asset),
         }
+
+    def _business_context(self, asset: Asset) -> dict[str, Any]:
+        """Asset Context (Fase 4L) con procedencia, para que la IA explique el impacto.
+
+        Solo lo CONFIRMADO va en `confirmed`; lo desconocido se lista en `unknown` para que
+        el modelo no lo suponga, y la sugerencia de rol de la identificación va aparte como
+        inferencia. Responsable y departamento se seudonimizan como "owners" (siempre con
+        proveedor no local; con local, según AI_REDACT).
+        """
+        ctx = self._session.get(AssetBusinessContext, asset.id)
+        values = ContextValues.of(asset, ctx)
+        provenance = (ctx.provenance if ctx else None) or {}
+        confirmed: dict[str, Any] = {}
+        unknown: list[str] = []
+        for name in COMPLETENESS_FIELDS:
+            if not values.known(name):
+                unknown.append(name)
+                continue
+            raw = getattr(values, name)
+            value: Any = getattr(raw, "value", raw)
+            if name in ("owner", "department"):
+                value = self._r.value("owners", clean(value, SHORT_LIMIT))
+            source = provenance.get(name, {}).get("source") if name in provenance else None
+            confirmed[name] = {"value": value, "source": source or "manual"}
+        data: dict[str, Any] = {"confirmed": confirmed, "unknown": unknown}
+        tags = tags_by_asset(self._session, [asset.id]).get(asset.id, [])
+        if tags:
+            data["tags"] = tags[:MAX_LIST]
+        suggestion = role_suggestion(asset, values.role)
+        if suggestion is not None and values.role == AssetRole.UNKNOWN:
+            data["suggested_role"] = {
+                "value": suggestion.value.value,
+                "kind": "inferred",
+                "source": suggestion.source,
+                "confidence": suggestion.confidence.value if suggestion.confidence else None,
+            }
+        return data
 
     def _detection_item(self, d: Detection, asset: Asset) -> dict[str, Any] | None:
         public = str(d.public_id)

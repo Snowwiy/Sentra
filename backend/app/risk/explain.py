@@ -34,6 +34,10 @@ REDUCTION_LABELS = {
     "diminishing": "Rendimientos decrecientes por varias señales",
 }
 
+# Contribuciones que son contexto del activo (no evidencia): criticidad, tipo de
+# infraestructura y contexto de negocio (Fase 4L).
+CONTEXT_FACTORS = frozenset({"criticality", "asset_type", "business_context"})
+
 # Por debajo de esto una reducción no se menciona (ruido de redondeo).
 MIN_POINTS = 0.5
 MAX_ITEMS = 8
@@ -68,7 +72,17 @@ def explain(
                 reduced.append(RiskExplanationItem(label=label, points=-round(value, 2)))
     reduced.sort(key=lambda item: item.points)
 
-    reasons = [str(c.get("label", "")) for c in positive[:4] if c.get("factor") != "criticality"]
+    # Contexto del activo aparte (Fase 4L): modifica la evidencia, no es un motivo en sí.
+    context = [
+        RiskExplanationItem(label=str(c.get("label", "")), points=_points(c))
+        for c in contributions
+        if c.get("factor") in CONTEXT_FACTORS and _points(c) != 0
+    ]
+    reasons = [
+        str(c.get("label", ""))
+        for c in positive[:4]
+        if c.get("factor") not in ("criticality", "business_context")
+    ]
     categories = breakdown.get("independent_categories")
     if isinstance(categories, list) and len(categories) >= 2:
         reasons.append(f"Señales independientes de {len(categories)} tipos")
@@ -89,6 +103,7 @@ def explain(
         increased=increased,
         reduced=reduced[:MAX_ITEMS],
         confidence_factors=factors,
+        context=context,
     )
 
 

@@ -696,6 +696,16 @@ h2 {
   justify-content: flex-start;
 }
 
+/* Fase 4L: filtros de contexto plegables en la lista de activos (no rediseña el panel). */
+.context-filters {
+  padding: 0 16px 8px;
+}
+
+.context-filters > summary {
+  cursor: pointer;
+  padding: 4px 0;
+}
+
 .input--select {
   width: auto;
   min-width: 140px;

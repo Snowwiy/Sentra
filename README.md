@@ -153,7 +153,9 @@ cd backend
 | POST | `/api/v1/telemetry` | Ingest CPU, RAM, disk and uptime (Bearer token) |
 | POST | `/api/v1/events` | Ingest host log events (Bearer token, idempotent) |
 | GET | `/api/v1/events?asset_id=&min_level=&channel=&event_code=&q=&limit=&offset=` | Events, newest first (`has_more` instead of a total) |
-| GET | `/api/v1/assets?method=&status=&device_type=&subnet=&q=` | (filters, all optional) agent and discovered assets |
+| GET | `/api/v1/assets?method=&status=&device_type=&subnet=&q=&criticality=&role=&environment=&network_zone=&data_sensitivity=&internet_exposed=&department=&tag=&sort=&limit=&offset=` | (filters, all optional) agent and discovered assets; filtros de contexto, orden por criticidad y paginación opcional (Fase 4L) |
+| GET/PATCH | `/api/v1/assets/{asset_id}/context`, GET `/{asset_id}/context/history`, `/assets/context/options` | Asset Context (Fase 4L): rol, entorno, owner, equipo, sensibilidad, zona, exposición a Internet y tags con procedencia; PATCH solo admin (`assets:manage`), `version` obligatoria y 409 `asset_context_conflict`: [docs/asset-context.md](docs/asset-context.md) |
+| GET | `/api/v1/assets/{asset_id}/threat-summary` | Contexto de amenaza interno del activo (detecciones, incidentes, riesgo, cambios recientes; sin feeds externos) |
 | GET | `/api/v1/assets/{asset_id}/exposure` | Ports reachable from the Sentra server, correlated with the agent's listeners |
 | GET | `/api/v1/discovery/scope` | Networks and ports discovery may probe (configuration) |
 | GET | `/api/v1/discovery/jobs?limit=` | Recent discovery runs |
@@ -247,6 +249,13 @@ severidad y prioridad separadas, responsable, notas append-only, timeline unific
 resolución con categoría obligatoria, duplicados y fusión (admin), sugerencia de incidentes
 relacionados sin deduplicación automática, snapshot de riesgo de 4I y concurrencia optimista
 (409). La IA solo lee ([docs/incident-management.md](docs/incident-management.md)).
+**Asset Context** (Fase 4L): pestaña Contexto del activo con rol, entorno, owner,
+equipo/departamento, sensibilidad, zona de red, exposición a Internet (sí/no/desconocida),
+estado de gestión y tags, cada dato con su procedencia; lo confirmado por un admin nunca lo
+sobrescribe una heurística. El contexto amplifica de forma acotada la evidencia existente en
+el riesgo (nunca crea riesgo; lo desconocido no suma), aparece en incidentes (actual y
+snapshot), detecciones e IA (sin inventar datos), y cada activo tiene un resumen de amenaza
+interno ([docs/asset-context.md](docs/asset-context.md)).
 Sin HTTPS la contraseña y la cookie viajan en claro: en producción, detrás de un proxy HTTPS.
 
 ## Roadmap

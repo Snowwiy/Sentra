@@ -7,6 +7,7 @@ from uuid import UUID
 from pydantic import Field
 
 from app.models.detection import DetectionConfidence, DetectionSeverity, DetectionStatus
+from app.schemas.asset_context import AssetContextBrief
 from app.schemas.common import RequestModel, ResponseModel
 
 
@@ -71,6 +72,9 @@ class DetectionDetail(DetectionRead):
     # Timeline en orden cronológico (como mucho las 100 evidencias guardadas por detección).
     evidence: list[DetectionEvidenceRead]
     evidence_total: int
+    # Fase 4L: contexto del activo para valorar el IMPACTO de negocio. Es independiente de
+    # la severidad de la detección (que la fija la regla y no cambia por el activo).
+    asset_context: AssetContextBrief | None = None
 
 
 class DetectionAction(RequestModel):

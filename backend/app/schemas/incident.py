@@ -20,6 +20,7 @@ from app.models.incident import (
     IncidentStatus,
     ResolutionCategory,
 )
+from app.schemas.asset_context import AssetContextBrief, AssetContextSnapshot
 from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.risk import RiskContributionRead
 
@@ -120,6 +121,11 @@ class IncidentAssetRef(ResponseModel):
     # manual, detection, alert o merge.
     source: str
     added_at: datetime
+    # Fase 4L: contexto ACTUAL del activo (null si ya no existe) y el contexto crítico
+    # guardado al vincularlo y al resolver el caso (null en vínculos anteriores a 4L).
+    context: AssetContextBrief | None = None
+    context_snapshot: AssetContextSnapshot | None = None
+    resolved_context_snapshot: AssetContextSnapshot | None = None
 
 
 class IncidentSummary(ResponseModel):

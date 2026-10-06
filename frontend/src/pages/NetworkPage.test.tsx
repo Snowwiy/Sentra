@@ -137,6 +137,7 @@ function asset(ip: string, network: string | null = NET): Asset {
     last_network_seen_at: iso(0),
     open_ports: [],
     criticality: "medium",
+    role: "unknown",
     risk_score: null,
     risk_level: null,
     risk_confidence: null,

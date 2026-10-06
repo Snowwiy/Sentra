@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
+from app.models.asset_context import AssetBusinessContext
 from app.models.detection import Detection, DetectionEvidence, DetectionStatus
 from app.models.exposure import AssetPort
 from app.models.incident import Incident, IncidentDetection, IncidentNote
@@ -50,8 +51,13 @@ def _asset_parts(session: Session, asset_pk: int) -> list[Any]:
             Alert.asset_id == asset_pk, Alert.status != AlertStatus.RESOLVED
         )
     ).one()
+    # Fase 4L: un cambio de contexto (version) invalida el insight cacheado del activo.
+    context_version = session.scalar(
+        select(AssetBusinessContext.version).where(AssetBusinessContext.asset_id == asset_pk)
+    )
     return [
         asset.criticality.value,
+        context_version,
         # Nivel y último cambio material: el score fino varía con el decay continuamente.
         risk.level.value if risk and risk.calculated_at else None,
         risk.changed_at if risk else None,

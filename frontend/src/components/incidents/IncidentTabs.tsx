@@ -5,6 +5,8 @@ import { useCallback, useState, type FormEvent } from "react";
 import { Link } from "react-router-dom";
 import { incidentsApi } from "../../api/sentra";
 import type {
+  AssetContextBrief,
+  AssetContextSnapshot,
   RiskContribution,
   IncidentAuditList,
   IncidentDetail,
@@ -17,7 +19,9 @@ import { config } from "../../config";
 import { usePolling } from "../../lib/usePolling";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
 import { ACTION_LABELS, SOURCE_LABELS } from "../../lib/incidents";
-import { formatPoints, RISK_CATEGORY_LABELS } from "../../lib/risk";
+import { CRITICALITY_LABELS, formatPoints, RISK_CATEGORY_LABELS } from "../../lib/risk";
+import { ENVIRONMENT_LABELS, exposureLabel, ROLE_LABELS, ZONE_LABELS } from "../../lib/assetContext";
+import { CriticalityBadge } from "../risk/RiskBadges";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import type { RunAction } from "./IncidentActions";
 
@@ -327,6 +331,50 @@ export function EvidenceTab({ incident }: { incident: IncidentDetail }) {
   );
 }
 
+/** Valor de contexto o "?" si se desconoce (desconocido no es amenaza ni se inventa). */
+function known<T extends string>(value: T | null | undefined, labels: Record<string, string>): string {
+  return value && value !== "unknown" ? (labels[value] ?? value) : "?";
+}
+
+function snapshotLine(snapshot: AssetContextSnapshot): string {
+  return [
+    snapshot.criticality ? `criticidad ${known(snapshot.criticality, CRITICALITY_LABELS)}` : null,
+    `rol ${known(snapshot.role, ROLE_LABELS)}`,
+    `entorno ${known(snapshot.environment, ENVIRONMENT_LABELS)}`,
+  ]
+    .filter(Boolean)
+    .join(" · ");
+}
+
+/**
+ * Fase 4L: contexto ACTUAL del activo (rol, criticidad, entorno, owner, zona, exposición) y,
+ * si difiere, el que tenía al vincularse y al resolver el caso.
+ */
+export function AssetContextSummary({
+  context,
+  snapshot,
+  resolved,
+}: {
+  context: AssetContextBrief | null;
+  snapshot: AssetContextSnapshot | null;
+  resolved: AssetContextSnapshot | null;
+}) {
+  if (!context) return <span className="muted small">—</span>;
+  return (
+    <div className="small">
+      <CriticalityBadge criticality={context.criticality} /> {known(context.role, ROLE_LABELS)} ·{" "}
+      {known(context.environment, ENVIRONMENT_LABELS)}
+      <div className="muted">
+        Owner: {context.owner ?? "?"} · Zona: {known(context.network_zone, ZONE_LABELS)} · Internet:{" "}
+        {exposureLabel(context.internet_exposed)}
+      </div>
+      {!context.context_complete && <div className="muted">Contexto incompleto</div>}
+      {snapshot && <div className="muted">Al vincular: {snapshotLine(snapshot)}</div>}
+      {resolved && <div className="muted">Al resolver: {snapshotLine(resolved)}</div>}
+    </div>
+  );
+}
+
 export function AssetsTab({ incident }: { incident: IncidentDetail }) {
   if (incident.asset_refs.length === 0) return <EmptyState title="Sin activos vinculados" />;
   return (
@@ -337,6 +385,7 @@ export function AssetsTab({ incident }: { incident: IncidentDetail }) {
             <tr>
               <th>Activo</th>
               <th>IP</th>
+              <th>Contexto actual</th>
               <th>Origen</th>
               <th>Añadido</th>
             </tr>
@@ -354,6 +403,13 @@ export function AssetsTab({ incident }: { incident: IncidentDetail }) {
                   )}
                 </td>
                 <td className="mono">{asset.primary_ip ?? "—"}</td>
+                <td>
+                  <AssetContextSummary
+                    context={asset.context}
+                    snapshot={asset.context_snapshot}
+                    resolved={asset.resolved_context_snapshot}
+                  />
+                </td>
                 <td className="muted small">{asset.source}</td>
                 <td>{formatDateTime(asset.added_at)}</td>
               </tr>

@@ -16,11 +16,14 @@ from types import MappingProxyType
 
 from app.core.config import Settings, parse_risk_thresholds
 from app.models.asset import AssetCriticality
+from app.models.asset_context import AssetEnvironment, DataSensitivity
 from app.models.detection import DetectionConfidence, DetectionSeverity, DetectionStatus
 from app.models.risk import RiskLevel
 
 # Versión de la fórmula guardada en cada cálculo y snapshot.
-FORMULA_VERSION = 1
+# v2 (Fase 4L): factores de contexto de negocio acotados (entorno, sensibilidad de datos,
+# exposición a Internet confirmada). Con contexto desconocido el resultado es idéntico a v1.
+FORMULA_VERSION = 2
 
 
 # Puntos base por severidad: impacto si la detección es cierta, en la escala 0-100. No es
@@ -69,6 +72,23 @@ CRITICALITY_FACTOR: Mapping[AssetCriticality, float] = MappingProxyType(
     }
 )
 
+# Contexto de negocio (Fase 4L): modificadores PEQUEÑOS y multiplicativos sobre el riesgo
+# que ya aporta la evidencia. Nunca crean riesgo (0 x f = 0) ni restan: "unknown", entornos
+# no productivos o datos públicos valen 1,0. Un laboratorio no resta porque los atacantes
+# pivotan precisamente desde equipos olvidados; y lo desconocido no es evidencia de nada.
+ENVIRONMENT_FACTOR: Mapping[AssetEnvironment, float] = MappingProxyType(
+    {AssetEnvironment.PRODUCTION: 1.1}
+)
+DATA_SENSITIVITY_FACTOR: Mapping[DataSensitivity, float] = MappingProxyType(
+    {DataSensitivity.CONFIDENTIAL: 1.05, DataSensitivity.RESTRICTED: 1.1}
+)
+# Solo exposición CONFIRMADA por un admin (internet_exposed = true). Un puerto abierto visto
+# desde el servidor de Sentra ya cuenta como "exposure" y no implica Internet.
+INTERNET_EXPOSED_FACTOR = 1.1
+# Tope del producto de los factores de contexto: aunque se acumulen los tres (1,331), el
+# contexto como mucho multiplica la evidencia por 1,25.
+CONTEXT_FACTOR_CAP = 1.25
+
 # Tipo de dispositivo, con prudencia: solo infraestructura compartida pesa algo más (lo que
 # le pase afecta a otros). Ningún tipo resta y "desconocido" es neutro (1,0): no estar
 # identificado no es evidencia de nada.
@@ -85,6 +105,12 @@ class RiskConfig:
     confidence_factor: Mapping[DetectionConfidence, float] = field(default=CONFIDENCE_FACTOR)
     status_factor: Mapping[DetectionStatus, float] = field(default=STATUS_FACTOR)
     criticality_factor: Mapping[AssetCriticality, float] = field(default=CRITICALITY_FACTOR)
+    environment_factor: Mapping[AssetEnvironment, float] = field(default=ENVIRONMENT_FACTOR)
+    data_sensitivity_factor: Mapping[DataSensitivity, float] = field(
+        default=DATA_SENSITIVITY_FACTOR
+    )
+    internet_exposed_factor: float = INTERNET_EXPOSED_FACTOR
+    context_factor_cap: float = CONTEXT_FACTOR_CAP
 
     # Persistencia: ocurrencias (oleadas separadas por el cooldown de la regla, no eventos
     # brutos) suben el peso de forma logarítmica y acotada: 1 + 0,12 * log2(n), máx. 1,35.

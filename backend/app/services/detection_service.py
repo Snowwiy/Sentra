@@ -37,6 +37,7 @@ from app.schemas.detection import (
     DetectionRuleList,
     DetectionRuleRead,
 )
+from app.services.asset_context_service import context_values
 
 # Timeline del detalle: la evidencia está acotada a 100 por detección (engine.MAX_EVIDENCE).
 EVIDENCE_LIMIT = 100
@@ -150,6 +151,7 @@ class DetectionService:
             required_data=list(meta.required_data) if meta else [],
             evidence=[DetectionEvidenceRead.model_validate(item) for item in evidence],
             evidence_total=total,
+            asset_context=context_values(self._session, [asset])[asset.id].brief(),
         )
 
     def rules(self) -> DetectionRuleList:

@@ -87,7 +87,8 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
       ],
     },
     asset_refs: [
-      { asset_id: ASSET, name: "pc-demo", exists: true, primary_ip: "10.0.0.5", source: "detection", added_at: iso(-3_600_000) },
+      { asset_id: ASSET, name: "pc-demo", exists: true, primary_ip: "10.0.0.5", source: "detection", added_at: iso(-3_600_000),
+        context: null, context_snapshot: null, resolved_context_snapshot: null },
     ],
     detections: [],
     detections_total: 0,
@@ -295,6 +296,49 @@ describe("IncidentDetailPage", () => {
     expect(timeline.querySelector("img")).toBeNull();
     fireEvent.click(screen.getByRole("tab", { name: /Notas/ }));
     expect(await screen.findByText("<b>no es html</b>")).toBeInTheDocument();
+  });
+
+  it("muestra el contexto actual del activo y los snapshots al vincular y resolver", async () => {
+    const ref = detail().asset_refs[0]!;
+    routes[`GET /incidents/${ID}`] = () => ({
+      body: detail({
+        asset_refs: [
+          {
+            ...ref,
+            context: {
+              criticality: "high",
+              role: "server",
+              environment: "production",
+              owner: "IT",
+              department: "Infra",
+              data_sensitivity: "unknown",
+              network_zone: "server",
+              internet_exposed: null,
+              context_complete: false,
+            },
+            context_snapshot: {
+              criticality: "medium",
+              role: "unknown",
+              environment: "unknown",
+              data_sensitivity: "unknown",
+              network_zone: "unknown",
+              internet_exposed: null,
+              captured_at: iso(-3_600_000),
+            },
+            resolved_context_snapshot: null,
+          },
+        ],
+      }),
+    });
+    renderAt(`/incidents/${ID}`);
+    const section = await screen.findByRole("region", { name: "Contexto de los activos" });
+    expect(within(section).getByRole("link", { name: "pc-demo" })).toHaveAttribute("href", `/assets/${ASSET}?tab=context`);
+    expect(section).toHaveTextContent("Servidor");
+    expect(section).toHaveTextContent("Producción");
+    expect(section).toHaveTextContent("Owner: IT");
+    expect(section).toHaveTextContent("Internet: Desconocida");
+    fireEvent.click(screen.getByRole("tab", { name: /Activos/ }));
+    expect(await screen.findByText(/Al vincular:/)).toBeInTheDocument();
   });
 
   it("las acciones envían la versión leída y un 409 muestra el conflicto sin sobrescribir", async () => {

@@ -194,7 +194,7 @@ class AIInsightService:
             model=c.model if c.enabled else None,
             location=c.location,
             external_allowed=c.allow_external,
-            redaction=sorted(c.redact),
+            redaction=sorted(c.effective_redact),
             max_context_items=c.max_context_items,
             rate_limit_per_user_per_minute=c.rate_per_user,
             prompt_versions={k.value: t.name for k, t in TEMPLATES.items()},
@@ -309,7 +309,7 @@ class AIInsightService:
             c.provider,
             c.model,
             TEMPLATES[kind].name,
-            sorted(c.redact),
+            sorted(c.effective_redact),
             question.lower() if question else None,
             # Las preguntas son privadas: la caché de Ask no se comparte entre usuarios.
             self._requester.user_id if kind is InsightKind.ASK else None,
@@ -329,7 +329,7 @@ class AIInsightService:
         self._require_available()
         config = self._config
         now = datetime.now(UTC)
-        redactor = Redactor(config.redact)
+        redactor = Redactor(config.effective_redact)
         builder = ContextBuilder(
             self._session,
             RiskConfig.from_settings(self._settings),

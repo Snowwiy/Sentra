@@ -2,15 +2,22 @@ import ipaddress
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import NotFoundError
 from app.discovery.targets import IPNetwork
-from app.models.asset import Asset, AssetStatus, MonitoringMethod
+from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
+from app.models.asset_context import (
+    AssetBusinessContext,
+    AssetEnvironment,
+    AssetRole,
+    DataSensitivity,
+    NetworkZone,
+)
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.risk import AssetRisk
 from app.models.telemetry import TelemetrySample
@@ -18,7 +25,11 @@ from app.repositories.asset_repository import AssetRepository
 from app.repositories.telemetry_repository import TelemetryRepository
 from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence
 from app.schemas.telemetry import TelemetrySnapshot
+from app.services.asset_context_service import filter_statement
 from app.services.identification import network_adapter_vendor
+
+AssetSort = Literal["name", "criticality"]
+_CRITICALITY_RANK = {c: rank for rank, c in enumerate(AssetCriticality)}
 
 
 def effective_status(asset: Asset, now: datetime, timeout: timedelta) -> AssetStatus:
@@ -48,6 +59,42 @@ class AssetFilter:
     subnet: IPNetwork | None = None
     # Case-insensitive text in the name, reverse DNS, address or MAC.
     search: str | None = None
+    # Fase 4L: filtros de contexto. Se aplican en SQL (filter_statement); "unknown" incluye
+    # a los activos sin contexto guardado.
+    criticality: AssetCriticality | None = None
+    role: AssetRole | None = None
+    environment: AssetEnvironment | None = None
+    network_zone: NetworkZone | None = None
+    data_sensitivity: DataSensitivity | None = None
+    # "true", "false" o "unknown" (tri-estado: unknown no es false).
+    internet_exposed: str | None = None
+    department: str | None = None
+    tag: str | None = None
+
+    @property
+    def sql_only(self) -> bool:
+        """True si ningún filtro necesita Python (estado efectivo, subred, búsqueda...)."""
+        return (
+            self.method is None
+            and self.status is None
+            and self.device_type is None
+            and self.subnet is None
+            and not self.search
+        )
+
+    def refine(self, stmt: Select[Asset]) -> Select[Asset]:
+        if self.criticality is not None:
+            stmt = stmt.where(Asset.criticality == self.criticality)
+        return filter_statement(
+            stmt,
+            role=self.role,
+            environment=self.environment,
+            network_zone=self.network_zone,
+            data_sensitivity=self.data_sensitivity,
+            internet_exposed=self.internet_exposed,
+            department=self.department,
+            tag=self.tag,
+        )
 
     def matches(self, asset: Asset, status: AssetStatus) -> bool:
         if self.method is not None and asset.monitoring_method != self.method:
@@ -95,6 +142,18 @@ def open_ports_by_asset(session: Session, asset_ids: Iterable[int]) -> dict[int,
     return {asset_id: sorted(ports) for asset_id, ports in rows}
 
 
+def context_roles(session: Session, asset_ids: list[int]) -> dict[int, AssetRole]:
+    """Rol confirmado de varios activos en una consulta (Fase 4L, columna compacta)."""
+    if not asset_ids:
+        return {}
+    rows = session.execute(
+        select(AssetBusinessContext.asset_id, AssetBusinessContext.role).where(
+            AssetBusinessContext.asset_id.in_(asset_ids)
+        )
+    )
+    return {asset_id: role for asset_id, role in rows}
+
+
 def risk_by_asset(session: Session, asset_ids: list[int]) -> dict[int, AssetRisk]:
     """Riesgo ya calculado de varios activos en una consulta (sin N+1). Solo lectura: las
     filas devueltas no están en la sesión (no se modifican ni se guardan)."""
@@ -135,25 +194,51 @@ class AssetService:
         self._telemetry = TelemetryRepository(session)
         self._timeout = heartbeat_timeout
 
-    def list_assets(self, f: AssetFilter | None = None) -> AssetList:
+    def list_assets(
+        self,
+        f: AssetFilter | None = None,
+        sort: AssetSort = "name",
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> AssetList:
+        """Activos que cumplen el filtro. Sin `limit` devuelve todos (contrato previo a 4L);
+        con `limit`/`offset` pagina y `total` sigue contando todos los que cumplen."""
         f = f or AssetFilter()
         now = datetime.now(UTC)
-        # Status is resolved at read time (see effective_status), so filtering happens here.
-        assets = [
-            asset
-            for asset in self._assets.list_all()
-            if f.matches(asset, effective_status(asset, now, self._timeout))
-        ]
+        if limit is not None and f.sql_only:
+            # Con 10 000 activos, paginar en SQL evita cargar todos en memoria por página.
+            page, total = self._assets.page(f.refine, sort == "criticality", limit, offset)
+            assets = list(page)
+        else:
+            # Status is resolved at read time (see effective_status), so filtering happens here.
+            assets = [
+                asset
+                for asset in self._assets.list_all(f.refine)
+                if f.matches(asset, effective_status(asset, now, self._timeout))
+            ]
+            if sort == "criticality":
+                # Estable: dentro de la misma criticidad se conserva el orden por nombre.
+                assets.sort(key=lambda a: -_CRITICALITY_RANK[a.criticality])
+            total = len(assets)
+            if limit is not None:
+                assets = assets[offset : offset + limit]
+        # Datos derivados solo de la página (una consulta por tipo, sin N+1).
         latest = self._telemetry.latest_by_asset(asset.id for asset in assets)
         ports = open_ports_by_asset(self._session, (asset.id for asset in assets))
         risks = risk_by_asset(self._session, [asset.id for asset in assets])
+        roles = context_roles(self._session, [asset.id for asset in assets])
         items = [
             self._to_read(
-                asset, latest.get(asset.id), now, ports.get(asset.id, []), risks.get(asset.id)
+                asset,
+                latest.get(asset.id),
+                now,
+                ports.get(asset.id, []),
+                risks.get(asset.id),
+                roles.get(asset.id, AssetRole.UNKNOWN),
             )
             for asset in assets
         ]
-        return AssetList(items=items, total=len(items))
+        return AssetList(items=items, total=total)
 
     def get_asset(self, public_id: UUID) -> AssetRead:
         asset = self._assets.get_by_public_id(public_id)
@@ -162,7 +247,8 @@ class AssetService:
         latest = self._telemetry.latest_by_asset([asset.id]).get(asset.id)
         ports = open_ports_by_asset(self._session, [asset.id]).get(asset.id, [])
         risk = risk_by_asset(self._session, [asset.id]).get(asset.id)
-        return self._to_read(asset, latest, datetime.now(UTC), ports, risk)
+        role = context_roles(self._session, [asset.id]).get(asset.id, AssetRole.UNKNOWN)
+        return self._to_read(asset, latest, datetime.now(UTC), ports, risk, role)
 
     def _to_read(
         self,
@@ -171,6 +257,7 @@ class AssetService:
         now: datetime,
         open_ports: list[int],
         risk: AssetRisk | None = None,
+        role: AssetRole = AssetRole.UNKNOWN,
     ) -> AssetRead:
         agent_status = effective_status(asset, now, self._timeout) if asset.is_managed else None
         return AssetRead(
@@ -210,6 +297,7 @@ class AssetService:
             last_network_seen_at=asset.last_network_seen_at,
             open_ports=open_ports,
             criticality=asset.criticality,
+            role=role,
             risk_score=risk.score if risk else None,
             risk_level=risk.level if risk else None,
             risk_confidence=risk.confidence if risk else None,

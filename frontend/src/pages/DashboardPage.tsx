@@ -1,20 +1,38 @@
 import { useCallback, useMemo, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { sentraApi } from "../api/sentra";
-import type { Asset, AssetStatus } from "../api/types";
+import { sentraApi, type AssetQuery } from "../api/sentra";
+import type {
+  Asset,
+  AssetCriticality,
+  AssetEnvironment,
+  AssetRole,
+  AssetStatus,
+  MonitoringMethod,
+  NetworkZone,
+} from "../api/types";
 import { AlertTable } from "../components/AlertTable";
 import { EventTable } from "../components/EventTable";
 import { IncidentsOverviewPanel } from "../components/incidents/IncidentsOverviewPanel";
 import { AssetName } from "../components/DeviceIdentity";
 import { MethodBadge } from "../components/NetworkBadges";
 import { MetricBar } from "../components/MetricBar";
-import { RiskCell } from "../components/risk/RiskBadges";
+import { CriticalityBadge, RiskCell } from "../components/risk/RiskBadges";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { deviceTypeLabel, typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
+import { useDebounced } from "../lib/useDebounced";
+import { CRITICALITY_LABELS, CRITICALITY_ORDER } from "../lib/risk";
+import {
+  ENVIRONMENT_LABELS,
+  ENVIRONMENT_ORDER,
+  ROLE_LABELS,
+  ROLE_ORDER,
+  ZONE_LABELS,
+  ZONE_ORDER,
+} from "../lib/assetContext";
 
 type Filter = AssetStatus | "all";
 
@@ -46,8 +64,176 @@ function matches(asset: Asset, query: string): boolean {
   ].some((field) => (field ?? "").toLowerCase().includes(q));
 }
 
+/** Filtros de contexto (Fase 4L) del listado; se aplican en el servidor. */
+interface ContextFilters {
+  criticality: AssetCriticality | "";
+  role: AssetRole | "";
+  environment: AssetEnvironment | "";
+  networkZone: NetworkZone | "";
+  internetExposed: "true" | "false" | "unknown" | "";
+  method: MonitoringMethod | "";
+  department: string;
+  tag: string;
+  sort: "name" | "criticality";
+}
+
+const NO_FILTERS: ContextFilters = {
+  criticality: "",
+  role: "",
+  environment: "",
+  networkZone: "",
+  internetExposed: "",
+  method: "",
+  department: "",
+  tag: "",
+  sort: "name",
+};
+
+function toQuery(f: ContextFilters): AssetQuery {
+  return {
+    criticality: f.criticality || undefined,
+    role: f.role || undefined,
+    environment: f.environment || undefined,
+    networkZone: f.networkZone || undefined,
+    internetExposed: f.internetExposed || undefined,
+    method: f.method || undefined,
+    department: f.department.trim() || undefined,
+    tag: f.tag.trim() || undefined,
+    sort: f.sort === "name" ? undefined : f.sort,
+  };
+}
+
+function FilterSelect<T extends string>({
+  label,
+  value,
+  options,
+  labels,
+  onChange,
+}: {
+  label: string;
+  value: T | "";
+  options: T[];
+  labels: Record<T, string>;
+  onChange: (value: T | "") => void;
+}) {
+  return (
+    <select
+      className="input input--select"
+      aria-label={label}
+      value={value}
+      onChange={(event) => onChange(event.target.value as T | "")}
+    >
+      <option value="">{label}: todos</option>
+      {options.map((option) => (
+        <option key={option} value={option}>
+          {labels[option]}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+export function ContextFilterBar({
+  filters,
+  onChange,
+}: {
+  filters: ContextFilters;
+  onChange: (filters: ContextFilters) => void;
+}) {
+  const set = <K extends keyof ContextFilters>(key: K, value: ContextFilters[K]) =>
+    onChange({ ...filters, [key]: value });
+  const active = Object.entries(filters).filter(([k, v]) => k !== "sort" && v !== "").length;
+  return (
+    <details className="context-filters" open={active > 0}>
+      <summary className="small">Filtros de contexto{active > 0 && ` (${active})`}</summary>
+      <div className="panel__toolbar panel__toolbar--filters">
+        <FilterSelect
+          label="Criticidad"
+          value={filters.criticality}
+          options={CRITICALITY_ORDER}
+          labels={CRITICALITY_LABELS}
+          onChange={(v) => set("criticality", v)}
+        />
+        <FilterSelect
+          label="Rol"
+          value={filters.role}
+          options={ROLE_ORDER}
+          labels={ROLE_LABELS}
+          onChange={(v) => set("role", v)}
+        />
+        <FilterSelect
+          label="Entorno"
+          value={filters.environment}
+          options={ENVIRONMENT_ORDER}
+          labels={ENVIRONMENT_LABELS}
+          onChange={(v) => set("environment", v)}
+        />
+        <FilterSelect
+          label="Zona"
+          value={filters.networkZone}
+          options={ZONE_ORDER}
+          labels={ZONE_LABELS}
+          onChange={(v) => set("networkZone", v)}
+        />
+        <FilterSelect
+          label="Internet"
+          value={filters.internetExposed}
+          options={["true", "false", "unknown"]}
+          labels={{ true: "Expuesto", false: "No expuesto", unknown: "Desconocida" }}
+          onChange={(v) => set("internetExposed", v)}
+        />
+        <FilterSelect
+          label="Gestión"
+          value={filters.method}
+          options={["discovered", "agentless", "agent"]}
+          labels={{ discovered: "Descubierto", agentless: "Monitorizado", agent: "Gestionado" }}
+          onChange={(v) => set("method", v)}
+        />
+        <input
+          className="input"
+          aria-label="Equipo/Departamento"
+          placeholder="Equipo/Departamento"
+          value={filters.department}
+          maxLength={64}
+          onChange={(e) => set("department", e.target.value)}
+        />
+        <input
+          className="input"
+          aria-label="Tag"
+          placeholder="Tag"
+          value={filters.tag}
+          maxLength={32}
+          onChange={(e) => set("tag", e.target.value)}
+        />
+        <FilterSelect
+          label="Orden"
+          value={filters.sort === "name" ? "" : filters.sort}
+          options={["criticality"]}
+          labels={{ criticality: "Orden: criticidad" }}
+          onChange={(v) => set("sort", v || "name")}
+        />
+        {active > 0 && (
+          <button
+            type="button"
+            className="button button--ghost button--small"
+            onClick={() => onChange({ ...NO_FILTERS, sort: filters.sort })}
+          >
+            Limpiar
+          </button>
+        )}
+      </div>
+    </details>
+  );
+}
+
 export function DashboardPage() {
-  const fetchAssets = useCallback((signal: AbortSignal) => sentraApi.listAssets(signal), []);
+  const [contextFilters, setContextFilters] = useState<ContextFilters>(NO_FILTERS);
+  // Los campos de texto esperan a que se deje de escribir antes de consultar.
+  const debouncedFilters = useDebounced(contextFilters, 300);
+  const fetchAssets = useCallback(
+    (signal: AbortSignal) => sentraApi.listAssets(signal, toQuery(debouncedFilters)),
+    [debouncedFilters],
+  );
   const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
     fetchAssets,
     config.refreshIntervalMs,
@@ -66,11 +252,18 @@ export function DashboardPage() {
   const [query, setQuery] = useState("");
   const navigate = useNavigate();
 
+  // Orden por criticidad: lo decide el backend y se conserva; si no, por nombre como siempre.
+  const byCriticality = debouncedFilters.sort === "criticality";
   const assets = useMemo(
-    () => [...(data?.items ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name)),
-    [data],
+    () =>
+      byCriticality
+        ? (data?.items ?? [])
+        : [...(data?.items ?? [])].sort((a, b) => a.display_name.localeCompare(b.display_name)),
+    [data, byCriticality],
   );
   const counts = useMemo(() => countByStatus(assets), [assets]);
+  // Con filtros de contexto activos, los contadores son los del subconjunto filtrado.
+  const contextFiltered = Object.values(toQuery(debouncedFilters)).some((v) => v !== undefined);
   const visible = assets.filter(
     (asset) => (filter === "all" || asset.status === filter) && matches(asset, query.trim()),
   );
@@ -143,8 +336,11 @@ export function DashboardPage() {
             aria-label="Buscar activos"
           />
         </div>
+        <ContextFilterBar filters={contextFilters} onChange={setContextFilters} />
 
-        {assets.length === 0 ? (
+        {assets.length === 0 && contextFiltered ? (
+          <EmptyState title="Ningún activo coincide con los filtros de contexto" />
+        ) : assets.length === 0 ? (
           <EmptyState title="No hay activos registrados">
             Los activos aparecerán aquí cuando un agente se registre en la API o cuando el
             descubrimiento de red encuentre equipos en las redes autorizadas.
@@ -206,6 +402,17 @@ export function DashboardPage() {
                           level={asset.risk_level}
                           confidence={asset.risk_confidence}
                         />
+                        {/* Fase 4L: criticidad (solo si no es la de por defecto) y rol confirmado. */}
+                        {(asset.criticality !== "medium" || asset.role !== "unknown") && (
+                          <div className="small">
+                            {asset.criticality !== "medium" && (
+                              <CriticalityBadge criticality={asset.criticality} />
+                            )}{" "}
+                            {asset.role !== "unknown" && (
+                              <span className="muted">{ROLE_LABELS[asset.role]}</span>
+                            )}
+                          </div>
+                        )}
                       </td>
                       <td>
                         <MetricBar value={t?.cpu_percent} label="CPU" />

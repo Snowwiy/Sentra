@@ -1456,6 +1456,98 @@ def test_auth() -> None:
     check("session after logout -> 401", r.status == 401, r.status)
 
 
+def test_asset_context() -> None:
+    """Fase 4L: contexto de negocio del activo, auditoría, riesgo, incidente, RBAC y 409.
+
+    Necesita el job del motor de detección con intervalo corto (como test_incidents). Crea un
+    viewer y un segundo admin temporales.
+    """
+    security = {"channel": "Security", "provider": "Microsoft-Windows-Security-Auditing"}
+    sessions: dict[str, dict[str, str]] = {}
+    for role in ("viewer", "admin"):
+        name = f"qa-ctx-{role}-" + uuid.uuid4().hex[:6]
+        password = f"qa ctx {role} password " + uuid.uuid4().hex[:8]
+        r = call("POST", "/users", {"username": name, "password": password, "role": role})
+        check(f"admin creates a context {role}", r.status == 201, (r.status, r.body))
+        sessions[role] = login(name, password)[1]
+    viewer, admin2 = sessions["viewer"], sessions["admin"]
+
+    agent_id, token, asset_id = enroll("qa-context-srv")
+    call("POST", "/events", {"agent_id": agent_id, "events": [
+        event(9501, event_code=1102, level="critical", message="QA log cleared",
+              data={"SubjectUserName": "qa-user"}, **security)]}, bearer(token))  # fmt: skip
+    found = wait_for(
+        lambda: call("GET", f"/detections?asset_id={asset_id}&rule_id=DEF-001").body,
+        lambda body: isinstance(body, dict) and body.get("total", 0) > 0,
+    )
+    items = found.get("items", []) if isinstance(found, dict) else []
+    detection_id = items[0]["detection_id"] if items else ""
+    check("context: detection available", bool(detection_id))
+
+    r = call("GET", f"/assets/{asset_id}/context")
+    check("context defaults are unknown", r.status == 200 and r.body.get("role") == "unknown"
+          and r.body.get("environment") == "unknown" and r.body.get("internet_exposed") is None,
+          r.body)  # fmt: skip
+    version = r.body.get("version", 0) if r.status == 200 else 0
+    r = call("PATCH", f"/assets/{asset_id}/context", {"version": version, "role": "server"},
+             session=viewer)  # fmt: skip
+    check("viewer cannot edit context -> 403", r.status == 403, (r.status, r.body))
+    r = call("GET", f"/assets/{asset_id}/context", session=viewer)
+    check("viewer reads context", r.status == 200, r.status)
+    r = call("PATCH", f"/assets/{asset_id}/context",
+             {"version": version, "owner": "<script>x</script>"})  # fmt: skip
+    check("HTML in owner -> 422", r.status == 422, (r.status, r.body))
+
+    body = {"version": version, "role": "server", "criticality": "high",
+            "environment": "production", "owner": "IT", "network_zone": "server"}  # fmt: skip
+    r = call("PATCH", f"/assets/{asset_id}/context", body)
+    ctx = r.body if r.status == 200 else {}
+    check("admin sets the context", r.status == 200 and ctx.get("role") == "server"
+          and ctx.get("provenance", {}).get("role", {}).get("source") == "manual",
+          (r.status, r.body))  # fmt: skip
+
+    audit = call("GET", "/audit?action=asset_context_updated&limit=50").body.get("items", [])
+    mine = [a for a in audit if a.get("target_id") == asset_id and a.get("result") == "success"]
+    fields = set(mine[0].get("details", {}).get("fields", [])) if mine else set()
+    check("one context audit event with the changed fields",
+          len(mine) == 1 and {"role", "criticality", "owner"} <= fields, mine)  # fmt: skip
+
+    risk = call("GET", f"/risk/assets/{asset_id}").body
+    labels = [i.get("label", "") for i in risk.get("explanation", {}).get("context", [])]
+    check("risk explanation shows the context",
+          any("producción" in label for label in labels), labels)  # fmt: skip
+
+    r = call("POST", f"/detections/{detection_id}/incident", {})
+    incident = r.body if r.status == 201 else {}
+    refs = incident.get("asset_refs", [])
+    current = refs[0].get("context") if refs else None
+    snapshot = refs[0].get("context_snapshot") if refs else None
+    check("incident shows the asset context", bool(current) and current.get("role") == "server"
+          and current.get("owner") == "IT", refs)  # fmt: skip
+    check("incident stores a context snapshot", bool(snapshot)
+          and snapshot.get("criticality") == "high", snapshot)  # fmt: skip
+
+    summary = call("GET", f"/assets/{asset_id}/threat-summary").body
+    check("threat summary counts detections and incidents",
+          summary.get("active_detection_count", 0) >= 1 and summary.get("open_incident_count") == 1,
+          summary)  # fmt: skip
+
+    # Dos admins con la misma versión: uno guarda, el otro recibe 409 y nada se pisa.
+    version = ctx.get("version", 0)
+    path = f"/assets/{asset_id}/context"
+    first = call("PATCH", path, {"version": version, "department": "Infra"})
+    second = call("PATCH", path, {"version": version, "department": "Red"}, session=admin2)
+    check("first admin saves", first.status == 200, (first.status, first.body))
+    conflict = is_error_envelope(second, "asset_context_conflict")
+    check("second admin gets 409", second.status == 409 and conflict, (second.status, second.body))
+    after = call("GET", f"/assets/{asset_id}/context").body
+    check("conflict did not overwrite", after.get("department") == "Infra", after)
+
+    r = call("GET", "/assets?role=server&environment=production&criticality=high")
+    ids = [a.get("asset_id") for a in r.body.get("items", [])] if r.status == 200 else []
+    check("asset list filters by context", asset_id in ids, (r.status, len(ids)))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--offline", action="store_true", help="also wait for the offline sweeper")
@@ -1488,6 +1580,7 @@ def main() -> int:
         test_risk,
         test_ai,
         test_incidents,
+        test_asset_context,
         test_auth,
     ]
     if args.offline:

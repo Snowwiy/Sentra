@@ -8,6 +8,7 @@ import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { IncidentActions, type RunAction } from "../components/incidents/IncidentActions";
 import { IncidentStatusBadge, LevelBadge } from "../components/incidents/IncidentBadges";
 import {
+  AssetContextSummary,
   AssetsTab,
   AuditTab,
   DetectionsTab,
@@ -164,6 +165,28 @@ function Overview({ incident }: { incident: IncidentDetail }) {
           )}
         </dl>
       </section>
+
+      {incident.asset_refs.some((a) => a.context) && (
+        <section className="panel panel--padded" aria-label="Contexto de los activos">
+          <h2>Contexto de los activos</h2>
+          <p className="muted small">Contexto actual (Asset Context); el histórico está en la pestaña Activos.</p>
+          <dl className="fields">
+            {incident.asset_refs
+              .filter((a) => a.context)
+              .slice(0, 5)
+              .map((asset) => (
+                <div key={asset.asset_id} className="field">
+                  <dt>
+                    <Link to={`/assets/${asset.asset_id}?tab=context`}>{asset.name}</Link>
+                  </dt>
+                  <dd>
+                    <AssetContextSummary context={asset.context} snapshot={null} resolved={null} />
+                  </dd>
+                </div>
+              ))}
+          </dl>
+        </section>
+      )}
 
       <section className="panel panel--padded" aria-label="Riesgo">
         <h2>Riesgo</h2>

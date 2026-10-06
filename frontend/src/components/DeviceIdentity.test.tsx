@@ -46,6 +46,7 @@ function asset(overrides: Partial<Asset> = {}): Asset {
     last_network_seen_at: now,
     open_ports: [],
     criticality: "medium",
+    role: "unknown",
     risk_score: null,
     risk_level: null,
     risk_confidence: null,

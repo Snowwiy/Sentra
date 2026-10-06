@@ -60,6 +60,14 @@ const INCIDENT_MESSAGES: Record<string, string> = {
   incident_already_linked: "Ya está vinculado a un incidente abierto.",
 };
 
+// Asset Context (Fase 4L). asset_context_conflict: otro admin cambió el contexto; la UI
+// recarga antes de reintentar (nunca se sobrescribe en silencio).
+const ASSET_CONTEXT_MESSAGES: Record<string, string> = {
+  asset_context_conflict:
+    "Otro administrador ha modificado el contexto de este activo. Se han recargado los datos: revisa y vuelve a guardar.",
+  asset_tag_limit: "Se ha alcanzado el máximo de etiquetas distintas. Reutiliza una etiqueta existente.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -88,6 +96,7 @@ function translate(code: string, message: string): string {
   if (code === "ai_not_configured") return message || "IA no configurada en el servidor.";
   if (AI_MESSAGES[code]) return AI_MESSAGES[code];
   if (INCIDENT_MESSAGES[code]) return INCIDENT_MESSAGES[code];
+  if (ASSET_CONTEXT_MESSAGES[code]) return ASSET_CONTEXT_MESSAGES[code];
   // El motivo (inglés) dice qué referencia falla; se conserva tras un prefijo en español.
   if (code === "incident_invalid_reference") return `Referencia no válida: ${message}`;
   if (AI_DETAIL_PREFIXES[code]) return `${AI_DETAIL_PREFIXES[code]}: ${message}`;

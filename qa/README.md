@@ -93,6 +93,15 @@ incidente abierto, se adjunta y no se crea otro; (3) dos sesiones escriben sobre
 `version`: la primera gana y la segunda recibe 409 `incident_conflict` con la versión actual,
 sin sobrescritura silenciosa. Necesita `DETECTION_EVAL_INTERVAL_SECONDS=2`.
 
+Fase 4L (`test_asset_context`): crea un viewer y un segundo admin temporales. Contexto por
+defecto en `unknown`; el viewer lee pero no edita (403); HTML en el owner → 422; el admin fija
+rol `server`, criticidad `high`, entorno `production`, owner `IT` y zona `server` con
+procedencia `manual`; un único evento de auditoría con los campos cambiados; la explicación
+del riesgo muestra la influencia del contexto; el incidente creado desde la detección muestra
+el contexto actual y guarda el snapshot; el resumen de amenaza cuenta detecciones e
+incidentes; dos admins con la misma `version`: el primero guarda y el segundo recibe 409
+`asset_context_conflict` sin sobrescritura; y los filtros de contexto del listado.
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell
@@ -134,6 +143,21 @@ Con datos sintéticos (10 000 incidentes, 50 000 relaciones, 100 000 elementos d
 título de detección), detalle, timeline por cursor, evidencia, notas y sugerencias de
 relacionados, con sentencias SQL por petición. Borra lo que crea. Resultados de referencia en
 [docs/incident-management.md](../docs/incident-management.md).
+
+### Rendimiento de Asset Context
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_asset_context.py   # --assets 10000
+```
+
+Con 10 000 activos sintéticos (contexto, etiquetas, historial y detecciones) mide la lista
+paginada, el orden por criticidad, cada filtro de contexto, el detalle, el contexto, el
+historial, las opciones y el resumen de amenaza, con sentencias SQL por petición. Borra lo que
+crea (por prefijo, también restos de una ejecución interrumpida). Ejecútalo con la API QA
+parada: sus jobs de riesgo compiten por las mismas filas al borrar. Resultados de referencia en
+[docs/asset-context.md](../docs/asset-context.md).
 
 ## 5. Real agent and dashboard against the QA API
 

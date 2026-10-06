@@ -41,7 +41,7 @@ Los límites están en un solo sitio: `RISK_LEVEL_THRESHOLDS="20,40,60,80"` (ini
 medio, alto y crítico; deben ser crecientes entre 1 y 100). La API devuelve los rangos
 (`thresholds`) y el frontend los usa tal cual; nunca los duplica.
 
-## Fórmula (versión 1)
+## Fórmula (versión 2)
 
 Toda la aritmética está en `backend/app/risk/calculator.py` (función pura, sin base de datos
 ni reloj) y los pesos en `backend/app/risk/config.py`.
@@ -119,6 +119,14 @@ una sola. Así diez detecciones medianas no equivalen a una crítica.
 Multiplican el riesgo existente; nunca lo crean (un activo crítico sin evidencia sigue en 0).
 Ningún tipo resta y un tipo desconocido es neutro: no estar identificado no es evidencia de
 nada.
+
+**Contexto de negocio (Fase 4L, `FORMULA_VERSION = 2`).** Después de criticidad y tipo, el
+contexto confirmado del activo multiplica la base, con el producto acotado a ×1,25:
+entorno `production` ×1,1, sensibilidad `confidential` ×1,05 / `restricted` ×1,1 y
+`internet_exposed = true` ×1,1. Solo con `base > 0`; `unknown` y `null` son neutros; un
+entorno no productivo no resta. Cada factor es una contribución `business_context` con sus
+puntos y el recorte del tope una contribución negativa. Detalle en
+[asset-context.md](asset-context.md).
 
 ### 6. Saturación
 

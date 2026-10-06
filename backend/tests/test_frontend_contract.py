@@ -141,6 +141,19 @@ INTERFACES = {
     "AssignableUserList": "AssignableUserList",
     "IncidentAuditEvent": "IncidentAuditEvent",
     "IncidentAuditList": "IncidentAuditList",
+    # Fase 4L: Asset Context.
+    "FieldProvenance": "FieldProvenance",
+    "RoleSuggestion": "RoleSuggestion",
+    "ContextCompleteness": "ContextCompleteness",
+    "AssetContext": "AssetContextRead",
+    "AssetContextBrief": "AssetContextBrief",
+    "AssetContextSnapshot": "AssetContextSnapshot",
+    "AssetContextChange": "AssetContextChangeRead",
+    "AssetContextHistory": "AssetContextHistory",
+    "ContextLimits": "ContextLimits",
+    "AssetContextOptions": "AssetContextOptions",
+    "ThreatRisk": "ThreatRisk",
+    "AssetThreatSummary": "AssetThreatSummary",
 }
 ENUMS = [
     "AssetStatus",
@@ -167,6 +180,10 @@ ENUMS = [
     "IncidentLevel",
     "IncidentConfidence",
     "ResolutionCategory",
+    "AssetRole",
+    "AssetEnvironment",
+    "DataSensitivity",
+    "NetworkZone",
 ]
 
 

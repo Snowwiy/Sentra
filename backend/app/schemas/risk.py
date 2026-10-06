@@ -9,6 +9,8 @@ from datetime import datetime
 from typing import Any, Literal
 from uuid import UUID
 
+from pydantic import Field
+
 from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.detection import DetectionConfidence, DetectionSeverity, DetectionStatus
 from app.models.risk import RiskConfidence, RiskLevel
@@ -59,6 +61,10 @@ class RiskExplanation(ResponseModel):
     increased: list[RiskExplanationItem]
     reduced: list[RiskExplanationItem]
     confidence_factors: list[ConfidenceFactorRead]
+    # Fase 4L: cuánto movió el score el contexto del activo (criticidad, entorno,
+    # sensibilidad, exposición confirmada, tope). Siempre visible aparte: nunca escondido en
+    # la fórmula. Vacío si no había evidencia (el contexto no crea riesgo) o era neutro.
+    context: list[RiskExplanationItem] = Field(default_factory=list)
 
 
 class RiskAssetSummary(ResponseModel):

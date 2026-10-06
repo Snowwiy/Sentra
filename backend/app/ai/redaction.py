@@ -16,7 +16,15 @@ from collections.abc import Iterable
 _IPV4 = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b")
 # Rutas Windows (C:\..., \\servidor\...) y Unix absolutas con al menos dos segmentos.
 _PATH = re.compile(r"(?:[A-Za-z]:\\|\\\\)[^\s\"'<>|]+|(?<![\w/])/(?:[\w.\-]+/)+[\w.\-]+")
-_PREFIX = {"usernames": "user", "hostnames": "host", "ips": "ip", "paths": "path"}
+_PREFIX = {
+    "usernames": "user",
+    "hostnames": "host",
+    "ips": "ip",
+    "paths": "path",
+    # Fase 4L: responsable y departamento del Asset Context (texto administrativo que puede
+    # nombrar a personas o equipos internos).
+    "owners": "owner",
+}
 
 
 class Redactor:
@@ -73,7 +81,7 @@ class Redactor:
         if not self._reverse:
             return value
         return re.sub(
-            r"\[(?:user|host|ip|path)-\d+\]",
+            r"\[(?:user|host|ip|path|owner)-\d+\]",
             lambda m: self._reverse.get(m.group(0), m.group(0)),
             value,
         )

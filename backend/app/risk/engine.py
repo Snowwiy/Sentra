@@ -32,6 +32,7 @@ from app.detection.rules import RULES_BY_ID
 from app.discovery.ports import SENSITIVE_PORTS
 from app.models.alert import AlertRule, AlertSeverity
 from app.models.asset import Asset
+from app.models.asset_context import AssetBusinessContext
 from app.models.detection import Detection, DetectionEvidence, DetectionStatus
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.risk import (
@@ -51,6 +52,7 @@ from app.risk.calculator import (
 )
 from app.risk.config import FORMULA_VERSION, RiskConfig
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.asset_context_service import contexts_by_asset
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +310,9 @@ class RiskEngine:
                 )
             )
 
+        # Fase 4L: contexto de negocio confirmado, en una consulta por lote. Un activo sin
+        # fila de contexto entra con todo desconocido (neutro en la fórmula).
+        business = contexts_by_asset(self._session, ids)
         return {
             asset.id: RiskInputs(
                 asset=AssetContext(
@@ -316,6 +321,7 @@ class RiskEngine:
                     managed=asset.is_managed,
                     os_name=asset.os_name,
                     last_seen_at=asset.last_seen_at,
+                    **_business_inputs(business.get(asset.id)),
                 ),
                 detections=detections[asset.id],
                 exposure=exposure[asset.id],
@@ -512,3 +518,13 @@ def _port(value: Any) -> int | None:
     except (TypeError, ValueError):
         return None
     return port if 0 < port < 65536 else None
+
+
+def _business_inputs(ctx: AssetBusinessContext | None) -> dict[str, Any]:
+    if ctx is None:
+        return {}
+    return {
+        "environment": ctx.environment,
+        "data_sensitivity": ctx.data_sensitivity,
+        "internet_exposed": ctx.internet_exposed,
+    }

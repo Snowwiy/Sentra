@@ -51,6 +51,14 @@ import type {
   InsightList,
   ProcessSnapshot,
   AssetCriticality,
+  AssetContext,
+  AssetContextHistory,
+  AssetContextOptions,
+  AssetContextUpdate,
+  AssetEnvironment,
+  AssetRole,
+  AssetThreatSummary,
+  NetworkZone,
   RiskAssetDetail,
   RiskAssetList,
   RiskConfidence,
@@ -134,6 +142,16 @@ export interface AssetQuery {
   /** CIDR, e.g. 192.168.1.0/24. */
   subnet?: string;
   q?: string;
+  // Fase 4L: contexto. "unknown" incluye a los activos sin contexto guardado.
+  criticality?: AssetCriticality;
+  role?: AssetRole;
+  environment?: AssetEnvironment;
+  networkZone?: NetworkZone;
+  /** "true", "false" o "unknown" (desconocido no es "no expuesto"). */
+  internetExposed?: "true" | "false" | "unknown";
+  department?: string;
+  tag?: string;
+  sort?: "name" | "criticality";
 }
 
 export interface EventQuery {
@@ -167,6 +185,14 @@ export const sentraApi = {
         device_type: query.deviceType,
         subnet: query.subnet,
         q: query.q,
+        criticality: query.criticality,
+        role: query.role,
+        environment: query.environment,
+        network_zone: query.networkZone,
+        internet_exposed: query.internetExposed,
+        department: query.department,
+        tag: query.tag,
+        sort: query.sort,
       })}`,
       { signal },
     ),
@@ -314,6 +340,29 @@ export const riskApi = {
     ),
   setCriticality: (assetId: string, criticality: AssetCriticality) =>
     apiPatch<RiskAssetDetail>(`/assets/${encodeURIComponent(assetId)}/criticality`, { criticality }),
+};
+
+/**
+ * Asset Context (Fase 4L). Leer: cualquier rol. Editar: solo admin (assets:manage); el
+ * backend lo exige igualmente. `update` envía la `version` leída: si otro admin cambió el
+ * contexto entretanto responde 409 asset_context_conflict y la UI recarga, nunca pisa.
+ */
+export const assetContextApi = {
+  get: (assetId: string, signal?: AbortSignal) =>
+    apiGet<AssetContext>(`/assets/${encodeURIComponent(assetId)}/context`, { signal }),
+  update: (assetId: string, body: AssetContextUpdate) =>
+    apiPatch<AssetContext>(`/assets/${encodeURIComponent(assetId)}/context`, body),
+  options: (signal?: AbortSignal) =>
+    apiGet<AssetContextOptions>("/assets/context/options", { signal }),
+  history: (assetId: string, signal?: AbortSignal) =>
+    apiGet<AssetContextHistory>(
+      `/assets/${encodeURIComponent(assetId)}/context/history${queryString({ limit: 20 })}`,
+      { signal },
+    ),
+  threatSummary: (assetId: string, signal?: AbortSignal) =>
+    apiGet<AssetThreatSummary>(`/assets/${encodeURIComponent(assetId)}/threat-summary`, {
+      signal,
+    }),
 };
 
 /**

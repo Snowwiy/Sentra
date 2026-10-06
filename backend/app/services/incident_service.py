@@ -54,6 +54,7 @@ from app.models.incident import (
 )
 from app.models.risk import AssetRisk, RiskSnapshot
 from app.models.user import User
+from app.schemas.asset_context import AssetContextSnapshot
 from app.schemas.incident import (
     IncidentAlertRef,
     IncidentAssetRef,
@@ -74,6 +75,7 @@ from app.schemas.incident import (
     IncidentUserRef,
 )
 from app.services import audit_service
+from app.services.asset_context_service import context_values
 from app.services.audit_service import Actor
 from app.services.risk_service import _contribution
 
@@ -408,6 +410,8 @@ class IncidentService:
                 source=source,
                 added_at=now,
                 added_by_user_id=self.op.user.id,
+                # Fase 4L: contexto crítico del activo en el momento de vincularlo.
+                context_snapshot=context_values(self._session, [asset])[asset.id].snapshot(now),
             )
         )
         # flush: un segundo enlace al mismo activo en esta transacción debe verlo.
@@ -787,6 +791,7 @@ class IncidentService:
             {"from": previous.value, "category": payload.category.value},
         )
         self._snapshot_risk(incident, now, "resolved")
+        self._snapshot_context(incident, now)
         self._audit(
             "incident_resolved",
             incident,
@@ -1007,10 +1012,25 @@ class IncidentService:
                     source="merge",
                     added_at=now,
                     added_by_user_id=user_id,
+                    # El contexto histórico es el del vínculo original, no el de la fusión.
+                    context_snapshot=s.context_snapshot,
                 )
             )
             counts["assets"] += 1
         return counts
+
+    # --- Contexto del activo (Fase 4L, solo lectura) -------------------------------------------
+
+    def _snapshot_context(self, incident: Incident, now: datetime) -> None:
+        """Guarda el contexto crítico ACTUAL de cada activo del caso al resolverlo."""
+        rows = self._session.execute(
+            select(IncidentAsset, Asset)
+            .join(Asset, Asset.id == IncidentAsset.asset_id)
+            .where(IncidentAsset.incident_id == incident.id)
+        ).all()
+        values = context_values(self._session, [asset for _, asset in rows])
+        for link, asset in rows:
+            link.resolved_context_snapshot = values[asset.id].snapshot(now)
 
     # --- Riesgo (solo lectura de 4I) -----------------------------------------------------------
 
@@ -1274,6 +1294,16 @@ def risk_assets(session: Session, incident_id: int) -> list[IncidentRiskAsset]:
     return result
 
 
+def _context_snapshot(raw: object) -> AssetContextSnapshot | None:
+    """Snapshot JSONB -> API; un valor corrupto no tira el detalle del incidente."""
+    if not isinstance(raw, dict):
+        return None
+    try:
+        return AssetContextSnapshot.model_validate(raw)
+    except ValueError:
+        return None
+
+
 def _seconds(start: datetime, end: datetime | None) -> int | None:
     return int((end - start).total_seconds()) if end is not None else None
 
@@ -1298,6 +1328,8 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
         .order_by(IncidentAsset.id)
         .limit(DETAIL_RELATIONS_LIMIT)
     ).all()
+    # Contexto actual de los activos del caso en una consulta (sin N+1).
+    contexts = context_values(session, [asset for _, asset in asset_rows if asset is not None])
     detections_stmt = detection_links(family)
     detections_total = (
         session.scalar(select(func.count()).select_from(detections_stmt.subquery())) or 0
@@ -1374,6 +1406,9 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
                 primary_ip=asset.primary_ip if asset else None,
                 source=link.source,
                 added_at=link.added_at,
+                context=contexts[asset.id].brief() if asset else None,
+                context_snapshot=_context_snapshot(link.context_snapshot),
+                resolved_context_snapshot=_context_snapshot(link.resolved_context_snapshot),
             )
             for link, asset in asset_rows
         ],

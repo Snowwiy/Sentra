@@ -129,6 +129,18 @@ class IncidentAlreadyLinkedError(ConflictError):
     code = "incident_already_linked"
 
 
+class AssetContextConflictError(ConflictError):
+    # Fase 4L: el contexto del activo cambió desde que el cliente lo leyó (`version`
+    # obsoleta). Mismo patrón que incident_conflict: nunca se sobrescribe en silencio.
+    code = "asset_context_conflict"
+
+
+class AssetTagLimitError(SentraError):
+    # Se superaría el número máximo de etiquetas distintas de la plataforma (anti tag flood).
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "asset_tag_limit"
+
+
 class DiscoveryTargetError(SentraError):
     # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
     # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.

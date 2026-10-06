@@ -253,6 +253,12 @@ class IncidentAsset(Base):
     added_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Fase 4L: contexto crítico del activo al vincularlo (al crear el caso o al añadirlo) y
+    # al resolver el caso. Mínimo (criticidad, rol, entorno, sensibilidad, zona,
+    # exposición): conserva el contexto histórico sin copiar Asset Context entero (ni
+    # etiquetas ni responsable). Null en vínculos anteriores a 4L.
+    context_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    resolved_context_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
 
 
 class IncidentDetection(Base):

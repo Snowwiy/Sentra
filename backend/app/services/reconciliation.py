@@ -30,6 +30,7 @@ from app.models.exposure import AssetPort, PortStateValue
 from app.models.risk import RiskSnapshot
 from app.repositories.alert_repository import AlertRepository
 from app.risk.queue import request_recalculation
+from app.services.asset_context_service import merge_context
 from app.services.identification import refresh_identity
 
 logger = logging.getLogger(__name__)
@@ -159,6 +160,9 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     session.execute(
         update(RiskSnapshot).where(RiskSnapshot.asset_id == source.id).values(asset_id=target.id)
     )
+    # Fase 4L: el contexto que un admin configuró en el activo descubierto (rol, entorno,
+    # etiquetas, historial...) sobrevive a la instalación del agente.
+    merge_context(session, source=source, target=target)
     request_recalculation(session, [target.id])
     logger.info(
         "discovered asset merged into agent asset",

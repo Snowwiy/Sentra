@@ -170,7 +170,7 @@ Sentra sigue funcionando y de que no se usará ningún otro proveedor.
 | `AI_ALLOW_EXTERNAL` | `false` | Permite proveedores externos (opción explícita, no necesaria; exige https) |
 | `AI_LOCAL_NETWORKS` | — | Redes privadas (CIDR) autorizadas para el servidor de IA en la LAN, p. ej. `192.168.10.0/24` |
 | `AI_LOCAL_HOSTS` | — | Nombres de host del servidor de IA; deben resolver a loopback o a `AI_LOCAL_NETWORKS` |
-| `AI_REDACT` | — | `usernames,hostnames,ips,paths` a seudonimizar |
+| `AI_REDACT` | — | `usernames,hostnames,ips,paths,owners` a seudonimizar (`owners`: owner y departamento del Asset Context; forzado con proveedor no local) |
 | `AI_JSON_MODE` | `true` | Pide `response_format: json_object` (desactívalo si el servidor no lo soporta) |
 | `AI_INSIGHT_TTL_MINUTES` | `60` | Caducidad de un insight (stale aunque los datos no cambien) |
 | `AI_RATE_LIMIT_PER_USER_PER_MINUTE` | `6` | Llamadas reales al modelo por usuario |
@@ -256,6 +256,13 @@ seudónimos son estables dentro de un análisis, así que el modelo sigue viendo
 evidencias hablan de la misma cuenta. Al volver, el servidor restaura los valores reales en el
 texto que ve el analista. Limitación: en texto libre solo se sustituyen los valores que también
 aparecen en campos estructurados (más IPv4 y rutas por patrón).
+
+Asset Context (Fase 4L): el contexto de cada activo llega como `business_context` con los
+valores confirmados y su origen, la lista de campos desconocidos y, si el rol no se conoce,
+una sugerencia marcada como inferida. La regla 8 del prompt (`POLICY_VERSION = 2`) prohíbe
+inventar owner, departamento, rol, criticidad o zona. Owner y departamento usan la categoría
+`owners` (`[owner-1]`); con un proveedor que no es local se seudonimizan siempre, aunque
+`AI_REDACT` no la incluya. Ver [asset-context.md](asset-context.md).
 
 ## Prompt injection
 
