@@ -21,7 +21,14 @@ from sqlalchemy.orm import Session
 
 from app.core import passwords
 from app.core.config import get_settings
-from app.core.exceptions import CatalogError, ConflictError, NotFoundError, PolicyError
+from app.core.exceptions import (
+    CatalogError,
+    ConflictError,
+    NotFoundError,
+    PolicyError,
+    ThreatIntelBusyError,
+    ThreatIntelError,
+)
 from app.core.permissions import Role
 from app.db.locks import VULN_CATALOG_LOCK_KEY, singleton_lock
 from app.db.session import get_engine, get_sessionmaker
@@ -30,6 +37,7 @@ from app.detection.engine import DetectionEngine, EngineRun
 from app.discovery.targets import TargetError
 from app.models.asset import Asset
 from app.models.discovery import DiscoveryTrigger
+from app.models.threat_intel import ThreatIntelSource
 from app.models.user import User
 from app.risk.config import RiskConfig
 from app.risk.engine import RiskEngine, RiskRun
@@ -55,6 +63,12 @@ from app.services.identification import oui_database, refresh_identity
 from app.services.preflight import migration_state, production_report
 from app.services.retention_service import RetentionPolicy, RetentionService
 from app.services.vulnerability_catalog_service import VulnerabilityCatalogService
+from app.threat_intel.config import ThreatIntelConfig
+from app.threat_intel.errors import IntelFormatError
+from app.threat_intel.freshness import source_state
+from app.threat_intel.matching import ThreatIntelMatcher
+from app.threat_intel.providers import get_provider
+from app.threat_intel.sync import SyncOutcome, ThreatIntelSyncer
 from app.vulnerabilities.engine import VulnerabilityConfig, VulnerabilityEngine, VulnerabilityRun
 from app.vulnerabilities.queue import mark_dirty
 
@@ -225,6 +239,137 @@ def _vuln_evaluate(session: Session, everything: bool) -> int:
         f" {total.errors} errors"
     )
     return 1 if total.errors else 0
+
+
+def _threat_source(session: Session, key: str) -> ThreatIntelSource | None:
+    source = session.scalar(select(ThreatIntelSource).where(ThreatIntelSource.source_key == key))
+    if source is None:
+        print(f"threat intelligence source {key!r} not found", file=sys.stderr)
+    return source
+
+
+def _print_outcome(outcome: SyncOutcome) -> int:
+    if outcome.status == "failed":
+        print(
+            f"{outcome.source_key}: failed ({outcome.error_code}): {outcome.error_message}",
+            file=sys.stderr,
+        )
+        return 2
+    counts = ", ".join(f"{value} {name}" for name, value in sorted(outcome.counts.items()))
+    print(
+        f"{outcome.source_key}: {outcome.status}"
+        + (f" ({counts})" if counts else "")
+        + f"; {outcome.assets_queued} assets queued"
+    )
+    return 0
+
+
+def _threat_intel_import(
+    session: Session, source_key: str, file: str, fmt: str | None, skip_invalid: bool
+) -> int:
+    """Fase 5C: importa un fichero local en una fuente (nunca descarga nada).
+
+    - Fuente KEV/EPSS: el fichero oficial descargado en otro equipo (servidor sin Internet).
+    - Fuente local de IOCs: sentra-ioc/1 o bundle STIX 2.x, en una transacción (todo o nada).
+    """
+    config = ThreatIntelConfig.from_settings(get_settings())
+    source = _threat_source(session, source_key)
+    if source is None:
+        return 1
+    syncer = ThreatIntelSyncer(session, config, lock_engine=get_engine)
+    path = Path(file)
+    try:
+        if get_provider(source.provider).intel_kind is not None:
+            return _print_outcome(syncer.import_feed_file(source.id, path, audit_service.CLI))
+        if not path.is_file():
+            print(f"file not found: {file}", file=sys.stderr)
+            return 1
+        if path.stat().st_size > config.max_bytes:
+            print("file too large (THREAT_INTEL_MAX_DOWNLOAD_MB)", file=sys.stderr)
+            return 2
+        raw = path.read_bytes()
+        result = syncer.import_indicators(
+            source.id,
+            fmt or "sentra-ioc",
+            raw,
+            audit_service.CLI,
+            expected_sha256=None,
+            skip_invalid=skip_invalid,
+            trigger="cli",
+        )
+        session.commit()
+    except IntelFormatError as exc:
+        session.rollback()
+        print(f"refused ({exc.code}): {exc}", file=sys.stderr)
+        return 2
+    except (ThreatIntelError, ThreatIntelBusyError) as exc:
+        session.rollback()
+        print(f"refused ({exc.code}): {exc.message}", file=sys.stderr)
+        return 2
+    print(
+        f"{result.source_key}: {result.new} new, {result.updated} updated,"
+        f" {result.unchanged} unchanged, {result.invalid} invalid;"
+        f" {result.pending_match} indicators queued for matching"
+    )
+    return 0
+
+
+def _threat_intel_sync(session: Session, source_key: str | None) -> int:
+    """Fase 5C: sincroniza ya por red (una fuente o todas las vencidas) y ejecuta el matching.
+
+    Respeta THREAT_INTEL_SYNC_ENABLED, la lista de URLs y las protecciones SSRF igual que el
+    job: la CLI no es una puerta trasera para descargar desde cualquier sitio.
+    """
+    config = ThreatIntelConfig.from_settings(get_settings())
+    if not config.sync_enabled:
+        print("THREAT_INTEL_SYNC_ENABLED=false: network sync is disabled", file=sys.stderr)
+        return 2
+    syncer = ThreatIntelSyncer(session, config, lock_engine=get_engine)
+    if source_key:
+        source = _threat_source(session, source_key)
+        if source is None:
+            return 1
+        ids = [source.id]
+    else:
+        ids = syncer.due_sources(datetime.now(UTC))
+    worst = 0
+    for source_id in ids:
+        try:
+            worst = max(worst, _print_outcome(syncer.sync(source_id, "cli", audit_service.CLI)))
+        except (ThreatIntelError, ThreatIntelBusyError) as exc:
+            print(f"refused ({exc.code}): {exc.message}", file=sys.stderr)
+            worst = 2
+    run = ThreatIntelMatcher(session, config).run()
+    print(f"matching: {run.as_dict()}")
+    return worst
+
+
+def _threat_intel_status(session: Session) -> int:
+    """Fase 5C: estado de las fuentes (sin red): frescura, último error y registros."""
+    settings = get_settings()
+    now = datetime.now(UTC)
+    sources = session.scalars(select(ThreatIntelSource).order_by(ThreatIntelSource.id)).all()
+    print(
+        f"threat intel enabled={settings.threat_intel_enabled}"
+        f" sync_enabled={settings.threat_intel_sync_enabled}"
+        f" detection_policy={settings.threat_intel_detection_policy}"
+    )
+    # Igual que el resumen de la API: la fuente local vacía no cuenta como configurada.
+    configured = [
+        s
+        for s in sources
+        if s.enabled and s.archived_at is None and (s.network_required or s.record_count > 0)
+    ]
+    if not configured:
+        print("No intelligence source configured")
+    for source in sources:
+        last = source.last_success_at.isoformat() if source.last_success_at else "never"
+        error = f" last_error={source.last_error}" if source.last_error else ""
+        print(
+            f"  {source.source_key:<20} {source_state(source, now):<13} provider={source.provider}"
+            f" trust={source.trust} records={source.record_count} last_success={last}{error}"
+        )
+    return 0
 
 
 def _alert_action(session: Session, command: str, alert_id: UUID) -> int:
@@ -664,6 +809,24 @@ def main(argv: list[str] | None = None) -> int:
     evaluate.add_argument(
         "--all", action="store_true", help="evaluate every agent asset, not only the queued ones"
     )
+    ti_import = commands.add_parser(
+        "threat-intel-import",
+        help="import a local threat intel file: IOCs (sentra-ioc/1, STIX) or KEV/EPSS (Fase 5C)",
+    )
+    ti_import.add_argument("--source", required=True, help="source key (e.g. local-iocs)")
+    ti_import.add_argument("file", help="local file (never a URL); EPSS may be .csv or .csv.gz")
+    ti_import.add_argument(
+        "--format", choices=("sentra-ioc", "stix"), help="IOC file format (default sentra-ioc)"
+    )
+    ti_import.add_argument(
+        "--skip-invalid", action="store_true", help="import the valid indicators, skip the rest"
+    )
+    ti_sync = commands.add_parser(
+        "threat-intel-sync",
+        help="sync due sources over the network now (needs THREAT_INTEL_SYNC_ENABLED, Fase 5C)",
+    )
+    ti_sync.add_argument("--source", help="only this source key")
+    commands.add_parser("threat-intel-status", help="threat intel source freshness (Fase 5C)")
     discover = commands.add_parser(
         "discover", help="run network discovery now over the allowed networks (or one target)"
     )
@@ -739,6 +902,14 @@ def main(argv: list[str] | None = None) -> int:
             return _vuln_catalog_import(session, args.file, args.skip_invalid)
         if args.command == "vuln-evaluate":
             return _vuln_evaluate(session, args.all)
+        if args.command == "threat-intel-import":
+            return _threat_intel_import(
+                session, args.source, args.file, args.format, args.skip_invalid
+            )
+        if args.command == "threat-intel-sync":
+            return _threat_intel_sync(session, args.source)
+        if args.command == "threat-intel-status":
+            return _threat_intel_status(session)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

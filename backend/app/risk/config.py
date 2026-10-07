@@ -25,7 +25,11 @@ from app.models.risk import RiskLevel
 # exposición a Internet confirmada). Con contexto desconocido el resultado es idéntico a v1.
 # v3 (Fase 5B): findings de vulnerabilidad activos como evidencia acotada (ver
 # VULNERABILITY_POINTS). Sin findings el resultado es idéntico a v2.
-FORMULA_VERSION = 3
+# v4 (Fase 5C): inteligencia de amenazas. (a) Explotabilidad de findings confirmados o
+# probables (CISA KEV, EPSS) como factor acotado sobre la vulnerabilidad (VULNERABILITY_
+# EXPLOIT_FACTOR); (b) matches de IOCs con datos locales como evidencia propia (THREAT_*).
+# Un IOC sin match local no aporta nada. Sin inteligencia el resultado es idéntico a v3.
+FORMULA_VERSION = 4
 
 
 # Puntos base por severidad: impacto si la detección es cierta, en la escala 0-100. No es
@@ -118,6 +122,34 @@ VULNERABILITY_STATUS_FACTOR: Mapping[str, float] = MappingProxyType(
     {"open": 1.0, "acknowledged": 0.9, "mitigating": 0.6, "accepted_risk": 0.5}
 )
 
+# Fase 5C: explotabilidad externa de un finding CONFIRMADO o PROBABLE (multiplicador sobre
+# sus puntos; cuenta el mayor, no se suman). Una potencial no gana nada: la duda es si el
+# activo es vulnerable, no si la vulnerabilidad se explota. Fuente caducada: la mitad del
+# incremento.
+VULNERABILITY_EXPLOIT_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"known_exploited": 1.35, "epss_high": 1.2, "epss_elevated": 1.1}
+)
+VULNERABILITY_EXPLOIT_STATES = frozenset({"confirmed", "probable"})
+
+# Fase 5C: match de un IOC con un dato LOCAL. Puntos por clasificación de la fuente
+# ("unknown" no aporta: aparecer en una lista no dice nada), por confianza del match, por
+# confianza en la fuente y por estado del match. Un IOC malicioso de confianza alta de una
+# fuente oficial, recién observado, aporta 30: medio, nunca "critical" por sí solo.
+THREAT_CLASSIFICATION_POINTS: Mapping[str, float] = MappingProxyType(
+    {"malicious": 30.0, "suspicious": 12.0}
+)
+THREAT_CONFIDENCE_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"low": 0.4, "medium": 0.7, "high": 1.0}
+)
+THREAT_TRUST_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"official": 1.0, "trusted": 0.9, "local": 0.85, "community": 0.7}
+)
+THREAT_STATUS_FACTOR: Mapping[str, float] = MappingProxyType(
+    {"open": 1.0, "acknowledged": 0.85, "dismissed": 0.0}
+)
+# Indicador revocado o caducado DESPUÉS del match: se conserva la memoria a la mitad.
+THREAT_INACTIVE_FACTOR = 0.5
+
 
 @dataclass(frozen=True)
 class RiskConfig:
@@ -167,6 +199,18 @@ class RiskConfig:
     )
     vulnerability_status_factor: Mapping[str, float] = field(default=VULNERABILITY_STATUS_FACTOR)
     max_vulnerabilities: int = 20
+    vulnerability_exploit_factor: Mapping[str, float] = field(default=VULNERABILITY_EXPLOIT_FACTOR)
+
+    # Fase 5C: matches de IOCs (ver THREAT_*). Frescura: semivida desde la última
+    # observación local y olvido completo pasado `threat_memory`.
+    threat_classification_points: Mapping[str, float] = field(default=THREAT_CLASSIFICATION_POINTS)
+    threat_confidence_factor: Mapping[str, float] = field(default=THREAT_CONFIDENCE_FACTOR)
+    threat_trust_factor: Mapping[str, float] = field(default=THREAT_TRUST_FACTOR)
+    threat_status_factor: Mapping[str, float] = field(default=THREAT_STATUS_FACTOR)
+    threat_inactive_factor: float = THREAT_INACTIVE_FACTOR
+    threat_half_life: timedelta = timedelta(hours=72)
+    threat_memory: timedelta = timedelta(days=30)
+    max_threat_matches: int = 50
 
     # Exposición observada por discovery (no vulnerabilidad): puntos por puerto sensible.
     exposure_admin_points: float = 10.0

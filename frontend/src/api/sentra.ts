@@ -1,5 +1,21 @@
 import { apiGet, apiPatch, apiPost } from "./client";
 import type {
+  FindingThreatIntel,
+  IndicatorClassification,
+  IndicatorDetail,
+  IndicatorList,
+  IntelConfidence,
+  IntelTrust,
+  ObservationType,
+  ThreatImportPreview,
+  ThreatImportResult,
+  ThreatIntelOverview,
+  ThreatMatchDetail,
+  ThreatMatchList,
+  ThreatMatchStatus,
+  ThreatSource,
+  ThreatSourceList,
+  ThreatSyncList,
   AssetVulnerabilities,
   CatalogImportResult,
   CatalogList,
@@ -767,6 +783,11 @@ export interface FindingQuery {
   source?: string;
   /** "true"/"false" como texto: queryString omite el booleano false. */
   stale?: "true" | "false";
+  /** Fase 5C: solo explotación conocida reportada (KEV). */
+  kev?: boolean;
+  /** Fase 5C: EPSS mínimo (0-1). */
+  epssMin?: number;
+  intelStale?: boolean;
   q?: string;
   sort?: FindingSort;
   order?: "asc" | "desc";
@@ -810,6 +831,9 @@ export const vulnerabilitiesApi = {
         vulnerability_id: query.vulnerabilityId,
         source: query.source,
         stale: query.stale,
+        kev: query.kev,
+        epss_min: query.epssMin,
+        intel_stale: query.intelStale,
         q: query.q,
         sort: query.sort,
         order: query.order,
@@ -819,6 +843,8 @@ export const vulnerabilitiesApi = {
       { signal },
     ),
   get: (findingId: string, signal?: AbortSignal) => apiGet<FindingDetail>(finding(findingId), { signal }),
+  threatIntel: (findingId: string, signal?: AbortSignal) =>
+    apiGet<FindingThreatIntel>(`${finding(findingId)}/threat-intel`, { signal }),
   history: (findingId: string, signal?: AbortSignal) =>
     apiGet<FindingHistory>(`${finding(findingId)}/history${queryString({ limit: 100 })}`, { signal }),
   audit: (findingId: string, signal?: AbortSignal) =>
@@ -890,4 +916,119 @@ export const vulnerabilitiesApi = {
       title: input.title?.trim() || null,
       priority: input.priority ?? null,
     }),
+};
+
+// --- Fase 5C: Threat Intelligence -----------------------------------------------------------------
+
+export interface IndicatorQuery {
+  type?: string;
+  classification?: IndicatorClassification;
+  confidence?: IntelConfidence;
+  state?: string;
+  sourceId?: number;
+  matched?: boolean;
+  q?: string;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+export interface ThreatMatchQuery {
+  status?: ThreatMatchStatus;
+  active?: boolean;
+  classification?: IndicatorClassification;
+  observationType?: ObservationType;
+  assetId?: string;
+  sourceId?: number;
+  sort?: string;
+  order?: "asc" | "desc";
+  limit?: number;
+  offset?: number;
+}
+
+function source(sourceId: number): string {
+  return `/threat-intel/sources/${encodeURIComponent(String(sourceId))}`;
+}
+
+function threatMatch(matchId: string): string {
+  return `/threat-intel/matches/${encodeURIComponent(matchId)}`;
+}
+
+export const threatIntelApi = {
+  overview: (signal?: AbortSignal) => apiGet<ThreatIntelOverview>("/threat-intel/overview", { signal }),
+  sources: (archived = false, signal?: AbortSignal) =>
+    apiGet<ThreatSourceList>(`/threat-intel/sources${queryString({ archived })}`, { signal }),
+  syncs: (sourceId: number, signal?: AbortSignal) =>
+    apiGet<ThreatSyncList>(`${source(sourceId)}/syncs${queryString({ limit: 20 })}`, { signal }),
+  createSource: (input: { source_key: string; name: string; description?: string | null; trust: IntelTrust }) =>
+    apiPost<ThreatSource>("/threat-intel/sources", { ...input, provider: "local_import", category: "ioc" }),
+  /** enable | disable | archive: con la revisión que vio el usuario (409 si cambió). */
+  sourceAction: (sourceId: number, action: "enable" | "disable" | "archive", revision: number) =>
+    apiPost<ThreatSource>(`${source(sourceId)}/${action}`, { revision }),
+  /** Solo marca la petición: la descarga la hace el job del servidor. */
+  requestSync: (sourceId: number) => apiPost<ThreatSource>(`${source(sourceId)}/sync`, {}),
+  indicators: (query: IndicatorQuery, signal?: AbortSignal) =>
+    apiGet<IndicatorList>(
+      `/threat-intel/indicators${queryString({
+        type: query.type,
+        classification: query.classification,
+        confidence: query.confidence,
+        state: query.state,
+        source_id: query.sourceId,
+        matched: query.matched,
+        q: query.q,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  indicator: (indicatorId: string, signal?: AbortSignal) =>
+    apiGet<IndicatorDetail>(`/threat-intel/indicators/${encodeURIComponent(indicatorId)}`, { signal }),
+  matches: (query: ThreatMatchQuery, signal?: AbortSignal) =>
+    apiGet<ThreatMatchList>(
+      `/threat-intel/matches${queryString({
+        status: query.status,
+        active: query.active,
+        classification: query.classification,
+        observation_type: query.observationType,
+        asset_id: query.assetId,
+        source_id: query.sourceId,
+        sort: query.sort,
+        order: query.order,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  match: (matchId: string, signal?: AbortSignal) => apiGet<ThreatMatchDetail>(threatMatch(matchId), { signal }),
+  /** acknowledge (motivo opcional) | dismiss y reopen (motivo obligatorio). */
+  matchAction: (matchId: string, action: "acknowledge" | "dismiss" | "reopen", version: number, reason?: string) =>
+    apiPost<ThreatMatchDetail>(`${threatMatch(matchId)}/${action}`, { version, reason: reason?.trim() || null }),
+  createIncident: (matchId: string, version: number, input: { title?: string; priority?: IncidentLevel } = {}) =>
+    apiPost<IncidentDetail>(`${threatMatch(matchId)}/incident`, {
+      version,
+      title: input.title?.trim() || null,
+      priority: input.priority ?? null,
+    }),
+  importPreview: (sourceId: number, format: "sentra-ioc" | "stix", content: string) =>
+    apiPost<ThreatImportPreview>("/threat-intel/import/preview", { source_id: sourceId, format, content }),
+  /** Importa exactamente lo previsualizado: si el contenido cambió, el servidor responde 409. */
+  importConfirm: (
+    sourceId: number,
+    format: "sentra-ioc" | "stix",
+    content: string,
+    expectedSha256: string,
+    skipInvalid: boolean,
+  ) =>
+    apiPost<ThreatImportResult>("/threat-intel/import", {
+      source_id: sourceId,
+      format,
+      content,
+      expected_sha256: expectedSha256,
+      skip_invalid: skipInvalid,
+    }),
+  reevaluate: () => apiPost<{ indicators_queued: number }>("/threat-intel/reevaluate", {}),
 };

@@ -35,6 +35,14 @@ const VulnerabilityDetailPage = lazy(() =>
 const VulnerabilityCatalogPage = lazy(() =>
   import("./pages/VulnerabilityCatalogPage").then((m) => ({ default: m.VulnerabilityCatalogPage })),
 );
+// Fase 5C: Threat Intelligence en su propio chunk.
+const ThreatIntelPage = lazy(() => import("./pages/ThreatIntelPage").then((m) => ({ default: m.ThreatIntelPage })));
+const ThreatIndicatorDetailPage = lazy(() =>
+  import("./pages/ThreatIndicatorDetailPage").then((m) => ({ default: m.ThreatIndicatorDetailPage })),
+);
+const ThreatMatchDetailPage = lazy(() =>
+  import("./pages/ThreatMatchDetailPage").then((m) => ({ default: m.ThreatMatchDetailPage })),
+);
 const ExposurePage = lazy(() => import("./pages/ExposurePage").then((m) => ({ default: m.ExposurePage })));
 const RulesPage = lazy(() => import("./pages/RulesPage").then((m) => ({ default: m.RulesPage })));
 const RuleDetailPage = lazy(() => import("./pages/RuleDetailPage").then((m) => ({ default: m.RuleDetailPage })));
@@ -138,6 +146,36 @@ export function AppRoutes() {
               <RequirePermission permission="vulnerabilities:read">
                 <Suspense fallback={incidentsFallback}>
                   <VulnerabilityDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="threat-intel"
+            element={
+              <RequirePermission permission="threat_intel:read">
+                <Suspense fallback={incidentsFallback}>
+                  <ThreatIntelPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="threat-intel/indicators/:indicatorId"
+            element={
+              <RequirePermission permission="threat_intel:read">
+                <Suspense fallback={incidentsFallback}>
+                  <ThreatIndicatorDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="threat-intel/matches/:matchId"
+            element={
+              <RequirePermission permission="threat_intel:read">
+                <Suspense fallback={incidentsFallback}>
+                  <ThreatMatchDetailPage />
                 </Suspense>
               </RequirePermission>
             }

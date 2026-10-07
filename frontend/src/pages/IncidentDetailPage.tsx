@@ -19,6 +19,7 @@ import {
 } from "../components/incidents/IncidentTabs";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
+import { formatEpss } from "../lib/threatIntel";
 import {
   CONFIDENCE_LABELS,
   conflictInfo,
@@ -208,6 +209,36 @@ function Overview({ incident }: { incident: IncidentDetail }) {
                   {" "}
                   · {v.severity}
                   {v.status ? ` · ${v.status}` : " · ya no existe"}
+                  {intelText(v.intel_snapshot, v.resolved_intel_snapshot)}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
+      {(incident.threat_matches?.length ?? 0) > 0 && (
+        <section className="panel panel--padded" aria-label="Inteligencia de amenazas">
+          <h2>Coincidencias de inteligencia ({incident.threat_matches_total ?? 0})</h2>
+          <p className="muted small">
+            Snapshot al vincularlas y estado actual. Una coincidencia no confirma un compromiso.
+          </p>
+          <ul>
+            {(incident.threat_matches ?? []).map((m) => (
+              <li key={m.match_id}>
+                {m.available ? (
+                  <Link className="mono" to={`/threat-intel/matches/${m.match_id}`}>
+                    {m.indicator_value}
+                  </Link>
+                ) : (
+                  <span className="mono">{m.indicator_value}</span>
+                )}{" "}
+                {m.observed_value !== m.indicator_value && <span className="mono">({m.observed_value})</span>}
+                {m.hostname && ` · ${m.hostname}`}
+                <span className="muted small">
+                  {" "}
+                  · {m.classification} según {m.source_name}
+                  {m.status ? ` · ${m.status}` : " · ya no existe"}
                 </span>
               </li>
             ))}
@@ -423,4 +454,23 @@ export function IncidentDetailPage() {
       </div>
     </div>
   );
+}
+
+/** Explotación conocida (KEV) y EPSS al vincular el finding y, si cambió, al resolver el caso. */
+function intelText(
+  snapshot: Record<string, unknown> | null | undefined,
+  resolved: Record<string, unknown> | null | undefined,
+): string {
+  const describe = (data: Record<string, unknown> | null | undefined): string | null => {
+    if (!data) return null;
+    const parts: string[] = [];
+    if (data.known_exploited === true) parts.push("KEV");
+    const epss = data.epss as Record<string, unknown> | undefined;
+    if (epss && typeof epss.score === "number") parts.push(`EPSS ${formatEpss(epss.score)}`);
+    return parts.length > 0 ? parts.join(", ") : "sin KEV/EPSS";
+  };
+  const atLink = describe(snapshot);
+  const atResolve = describe(resolved);
+  if (!atLink) return "";
+  return atResolve && atResolve !== atLink ? ` · ${atLink} al vincular, ${atResolve} al resolver` : ` · ${atLink}`;
 }

@@ -136,6 +136,7 @@ export const HISTORY_LABELS: Record<string, string> = {
   risk_accepted: "Riesgo aceptado",
   false_positive: "Falso positivo",
   incident_created: "Incidente creado",
+  kev_changed: "Cambio de explotación conocida (KEV)",
 };
 
 /** Software instalado → texto de la columna "Vulnerabilidades conocidas". */

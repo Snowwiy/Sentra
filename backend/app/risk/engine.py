@@ -42,6 +42,7 @@ from app.models.risk import (
     RiskLevel,
     RiskSnapshot,
 )
+from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.vulnerability import VulnerabilityFinding
 from app.risk.calculator import (
     AssetContext,
@@ -49,12 +50,16 @@ from app.risk.calculator import (
     ExposureInput,
     RiskInputs,
     RiskResult,
+    ThreatMatchInput,
     VulnerabilityInput,
     calculate,
 )
 from app.risk.config import FORMULA_VERSION, RiskConfig
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_context_service import contexts_by_asset
+from app.threat_intel.freshness import indicator_state
+from app.threat_intel.indicators import lower_confidence
+from app.threat_intel.lookup import load_exploitation
 
 logger = logging.getLogger(__name__)
 
@@ -315,7 +320,8 @@ class RiskEngine:
                 )
             )
 
-        vulnerabilities = self._vulnerabilities(ids)
+        vulnerabilities = self._vulnerabilities(ids, now)
+        threats = self._threat_matches(ids, now)
 
         # Fase 4L: contexto de negocio confirmado, en una consulta por lote. Un activo sin
         # fila de contexto entra con todo desconocido (neutro en la fórmula).
@@ -333,11 +339,14 @@ class RiskEngine:
                 detections=detections[asset.id],
                 exposure=exposure[asset.id],
                 vulnerabilities=vulnerabilities.get(asset.id, []),
+                threat_matches=threats.get(asset.id, []),
             )
             for asset in asset_list
         }
 
-    def _vulnerabilities(self, ids: Sequence[int]) -> dict[int, list[VulnerabilityInput]]:
+    def _vulnerabilities(
+        self, ids: Sequence[int], now: datetime
+    ) -> dict[int, list[VulnerabilityInput]]:
         """Fase 5B: findings activos con evidencia (confirmed, probable, potential), como
         mucho `max_vulnerabilities` por activo (los de más prioridad). Una consulta por lote."""
         ranked = (
@@ -353,6 +362,7 @@ class RiskEngine:
                 VulnerabilityFinding.exposure_state,
                 VulnerabilityFinding.exposure,
                 VulnerabilityFinding.first_seen_at,
+                VulnerabilityFinding.intel_cve,
                 func.row_number()
                 .over(
                     partition_by=VulnerabilityFinding.asset_id,
@@ -373,9 +383,13 @@ class RiskEngine:
             .subquery()
         )
         result: dict[int, list[VulnerabilityInput]] = {}
-        for row in self._session.execute(
+        rows = self._session.execute(
             select(ranked).where(ranked.c.rank <= self._config.max_vulnerabilities)
-        ):
+        ).all()
+        # Fase 5C: KEV/EPSS de los CVEs del lote en una consulta (fuentes activas).
+        intel = load_exploitation(self._session, (row.intel_cve for row in rows), now)
+        for row in rows:
+            exploit = intel.get(row.intel_cve) if row.intel_cve else None
             observed = (row.exposure or {}).get("observed_open") or []
             result.setdefault(row.asset_id, []).append(
                 VulnerabilityInput(
@@ -389,6 +403,65 @@ class RiskEngine:
                     exposure_state=row.exposure_state,
                     first_seen_at=row.first_seen_at,
                     ports=tuple(p for p in (_port(v) for v in observed) if p is not None),
+                    known_exploited=exploit.known_exploited if exploit else False,
+                    epss_score=exploit.epss_score if exploit else None,
+                    intel_stale=exploit.stale if exploit else False,
+                )
+            )
+        return result
+
+    def _threat_matches(
+        self, ids: Sequence[int], now: datetime
+    ) -> dict[int, list[ThreatMatchInput]]:
+        """Fase 5C: matches de IOCs no descartados, recientes y de fuentes activas.
+
+        La clasificación y la confianza que cuentan son las ACTUALES del indicador (si la
+        fuente lo reclasifica como benigno, deja de aportar); revocado o caducado después
+        del match cuenta a la mitad (THREAT_INACTIVE_FACTOR).
+        """
+        since = now - self._config.threat_memory
+        rows = self._session.execute(
+            select(ThreatIntelMatch, ThreatIndicator, ThreatIntelSource)
+            .join(ThreatIndicator, ThreatIndicator.id == ThreatIntelMatch.indicator_id)
+            .join(ThreatIntelSource, ThreatIntelSource.id == ThreatIndicator.source_id)
+            .where(
+                ThreatIntelMatch.asset_id.in_(ids),
+                ThreatIntelMatch.status != "dismissed",
+                ThreatIntelMatch.last_observed_at >= since,
+                ThreatIntelSource.enabled,
+                ThreatIntelSource.archived_at.is_(None),
+                ThreatIndicator.classification.in_(("malicious", "suspicious")),
+            )
+            .order_by(ThreatIntelMatch.last_observed_at.desc(), ThreatIntelMatch.id)
+        ).all()
+        result: dict[int, list[ThreatMatchInput]] = {}
+        for match, indicator, source in rows:
+            bucket = result.setdefault(match.asset_id, [])
+            if len(bucket) >= self._config.max_threat_matches:
+                continue
+            confidence = indicator.confidence
+            if match.match_confidence != match.indicator_confidence:
+                # La rebaja por CIDR o nombre se mantiene sobre la confianza actual.
+                confidence = lower_confidence(confidence)
+            active = indicator_state(
+                indicator.revoked, indicator.valid_from, indicator.valid_until, now
+            ) in ("active", "not_yet_valid")
+            bucket.append(
+                ThreatMatchInput(
+                    id=match.id,
+                    public_id=match.public_id,
+                    indicator_public_id=indicator.public_id,
+                    indicator_type=indicator.indicator_type,
+                    indicator_value=indicator.value_normalized,
+                    classification=indicator.classification,
+                    confidence=confidence,
+                    source_name=source.name,
+                    source_trust=source.trust,
+                    observation_type=match.observation_type,
+                    status=match.status,
+                    last_observed_at=match.last_observed_at,
+                    indicator_active=active,
+                    detection_id=match.detection_id,
                 )
             )
         return result

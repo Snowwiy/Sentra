@@ -101,6 +101,21 @@ Antes de sumar, las contribuciones se agrupan (union-find, raíz determinista):
 Un grupo vale lo que su miembro más fuerte. Los demás aparecen en las contribuciones con 0
 puntos y `details.absorbed_by` (la UI muestra "Incluida en CORR-001 (sin doble conteo)").
 
+### 3b. Vulnerabilidades e inteligencia (Fases 5B y 5C, versiones 3 y 4)
+
+La versión 3 (5B) añade cada finding activo como señal agrupada con la exposición de su
+puerto ([vulnerability-management.md](vulnerability-management.md)). La versión 4 (5C)
+añade la inteligencia externa ([threat-intelligence.md](threat-intelligence.md)):
+
+- un finding `confirmed` o `probable` con explotación conocida reportada (KEV) multiplica sus
+  puntos ×1,35; con EPSS alta ×1,2 o elevada ×1,1 (cuenta el mayor). Fuente stale: la mitad
+  del incremento. Las potenciales no cambian;
+- un match de IOC con datos locales es una contribución `threat_intel` (malicioso 30,
+  sospechoso 12, por confianza del match y de la fuente, estado y antigüedad con vida media
+  de 72 h), enlazada al match y agrupada con su detección TI-001 si existe.
+
+Sin inteligencia, el score es idéntico al de la versión 3.
+
 ### 4. Rendimientos decrecientes
 
 Los grupos se ordenan por valor y el n-ésimo aporta `0,5^(n-1)`: 100 % el primero, 50 % el

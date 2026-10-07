@@ -29,6 +29,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "discovery": _BASE + 5,
     # Fase 5B: evaluación de vulnerabilidades (_BASE + 6 es el lock de pruebas de reglas).
     "vulnerability-engine": _BASE + 7,
+    # Fase 5C: sincronizaciones debidas de Threat Intelligence y matching incremental.
+    "threat-intel": _BASE + 9,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.
@@ -36,6 +38,13 @@ RULE_TEST_LOCK_KEY = _BASE + 6
 # Fase 5B: importación del catálogo de vulnerabilidades (lock de transacción): una sola
 # importación a la vez, también entre la API y la CLI.
 VULN_CATALOG_LOCK_KEY = _BASE + 8
+# Fase 5C: una sincronización o importación a la vez POR FUENTE (lock de transacción). La
+# clave es base + id de la fuente: fuentes distintas pueden sincronizar en paralelo.
+THREAT_SOURCE_LOCK_BASE = _BASE + 0x10_000
+
+
+def threat_source_lock_key(source_id: int) -> int:
+    return THREAT_SOURCE_LOCK_BASE + source_id
 
 
 @contextmanager

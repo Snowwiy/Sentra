@@ -38,6 +38,8 @@ export const RISK_CATEGORY_LABELS: Record<string, string> = {
   system: "Sistema",
   exposure: "Exposición",
   context: "Contexto del activo",
+  vulnerability: "Vulnerabilidades",
+  threat_intel: "Inteligencia de amenazas",
   unknown: "Otras",
 };
 

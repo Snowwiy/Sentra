@@ -49,6 +49,7 @@ from app.schemas.vulnerability import (
     FindingIncidentIn,
     FindingList,
     FindingResolve,
+    FindingThreatIntel,
     VulnerabilityOverview,
 )
 from app.services import audit_service
@@ -142,6 +143,9 @@ def _filter(
     stale: bool | None,
     q: str | None,
     asset_id: int | None = None,
+    known_exploited: bool | None = None,
+    epss_min: float | None = None,
+    intel_stale: bool | None = None,
 ) -> FindingFilter:
     return FindingFilter(
         status=status,
@@ -157,6 +161,9 @@ def _filter(
         source=source,
         stale=stale,
         search=q.strip() if q and q.strip() else None,
+        known_exploited=known_exploited,
+        epss_min=epss_min,
+        intel_stale=intel_stale,
     )
 
 
@@ -186,6 +193,10 @@ def list_findings(
     stale: bool | None = None,
     # CVE/advisory, título, producto, editor, hostname o IP.
     q: Annotated[str | None, text_query(200)] = None,
+    # Fase 5C: en CISA KEV (fuente activa), EPSS mínimo (0-1) e inteligencia caducada.
+    kev: bool | None = None,
+    epss_min: Annotated[float | None, Query(ge=0, le=1)] = None,
+    intel_stale: bool | None = None,
     sort: FindingSort = "priority",
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
@@ -199,7 +210,7 @@ def list_findings(
         internal = ids[0]
     f = _filter(
         status, active, severity, match_state, confidence, exposure, vulnerability_id, source,
-        stale, q, internal,
+        stale, q, internal, kev, epss_min, intel_stale,
     )  # fmt: skip
     return service.list_findings(f, sort, order == "desc", limit, offset)
 
@@ -215,6 +226,18 @@ def get_finding(finding_id: UUID, ctx: Reader, service: Service) -> FindingDetai
         can_manage=ctx.has(Permission.VULNERABILITIES_MANAGE),
         can_admin=ctx.has(Permission.VULNERABILITIES_ADMIN),
     )
+
+
+@router.get(
+    "/vulnerabilities/findings/{finding_id}/threat-intel",
+    response_model=FindingThreatIntel,
+    responses=error_responses(403, 404),
+)
+def finding_threat_intel(finding_id: UUID, ctx: Reader, service: Service) -> FindingThreatIntel:
+    """Fase 5C: KEV/EPSS del CVE del finding con procedencia, historial y discrepancias."""
+    if not ctx.has(Permission.THREAT_INTEL_READ):
+        raise PermissionDeniedError("Requires threat_intel:read")
+    return service.threat_intel(finding_id)
 
 
 @router.get(

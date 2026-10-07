@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-06 (Fase 5B).
+Last updated: 2026-10-06 (Fase 5C).
 
 ## Current state
 
@@ -24,6 +24,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Asset Context | Fase 4L: contexto de negocio por activo sin duplicar Asset (`asset_context`, `asset_tags`, `asset_context_changes`): criticidad 4I con justificación y autor, rol (sugerencia 4E aparte, nunca sobrescribe), entorno, owner, equipo, sensibilidad, zona lógica, exposición a Internet tri-estado, estado de gestión reutilizado y tags normalizadas con límites; procedencia por campo (manual/agent/discovery/inferred, listo para snmp/lldp/manufacturer/threat_intel); un evento de auditoría con diff por operación; concurrencia optimista (409 `asset_context_conflict`); riesgo con factores de contexto acotados (×1,25, solo con evidencia, `FORMULA_VERSION` 2) y visibles en la explicación; contexto y snapshots en incidentes; impacto separado de la severidad en detecciones; contexto grounded y seudonimizado en la IA; resumen de amenaza interno. Edición solo admin. UI: pestaña Contexto, filtros compactos en Activos. Migración 0023. [asset-context.md](asset-context.md) |
 | Reglas personalizadas y Sigma | Fase 5A: Detecciones → Reglas. Reglas `builtin` (las 23 de 4H, solo lectura), `custom` y `sigma` con UID estable (`SENTRA-CUSTOM-nnnnnn`, `SENTRA-SIGMA-nnnnnn`), versiones inmutables (restaurar crea versión nueva), estado admin (draft/active/disabled/retired) separado del de compilación (valid/partial/invalid/unsupported). Formato declarativo `sentra-rule/1` (operadores acotados, regex segura, umbral con agrupación, campos `asset.*` del contexto 4L) compilado y ejecutado por el mismo motor 4H (sin motor paralelo): índice por tipo/canal/id de evento, evaluación en memoria, savepoint solo al coincidir, recarga en caliente por huella sin Redis. Importador Sigma de subconjunto (YAML seguro, siempre en borrador, `unsupported` con motivo). Validar, prueba sintética e histórica (solo lectura, `statement_timeout`, advisory lock, límite por usuario) sin efectos. `rules:read` (todos), `rules:test` (analyst), `rules:manage` (admin), auditoría de cada cambio y prueba. [custom-detection-rules.md](custom-detection-rules.md), [sigma-support.md](sigma-support.md) |
 | Vulnerabilidades y exposición | Fase 5B: catálogo local offline-first `sentra-vuln-catalog/1` (importación por UI con previsualización y huella SHA-256, o CLI por lotes con lock; revisiones por fuente; sin feeds externos) y `VulnerabilityEngine` por activo con cola `dirty_at` (inventario, SO, puertos, contexto, catálogo; nunca por heartbeat). Matcher determinista y explicable: claves exactas de nombre/paquete/SO, editor, esquemas de versión `generic`/`semver`/`windows_build`/`dpkg`/`rpm`; estados técnicos confirmed/probable/potential/unknown/not_affected con confianza y `rationale`; las potenciales siempre aparte. Ciclo de vida automático (resuelto por inventario, por desinstalación tras N capturas completas, por catálogo; reapertura; evidencia antigua). Flujo humano con concurrencia optimista (409 `vulnerability_conflict`), resolver con `override_evidence`, riesgo aceptado admin-only con caducidad, falso positivo reevaluado ante cambio material. Exposición honesta (sensor LAN, escucha del agente, Internet solo si el contexto 4L lo confirma). Prioridad Sentra 0-100 con factores. Riesgo 4I fórmula v3 (vulnerabilidad agrupada con la exposición de su puerto, sin doble conteo). Alerta `vulnerability` solo en cambios relevantes; incidentes solo manuales; IA `vulnerability_analysis` de solo lectura; métricas sin CVE. Agente: `software_source` e `incomplete_sections`. `vulnerabilities:read` (todos), `:manage` (analyst), `:admin` (admin). UI: Vulnerabilidades, detalle con pestañas, Exposición, Catálogo (admin), pestaña del activo y columna en Software. Migración 0026. [vulnerability-management.md](vulnerability-management.md), [vulnerability-catalog.md](vulnerability-catalog.md) |
+| Threat Intelligence | Fase 5C, offline-first: fuentes con adapter (`cisa_kev`, `first_epss`, `local_import`; TAXII solo documentado), sembradas desactivadas salvo `local-iocs`; descargas por red apagadas (`THREAT_INTEL_SYNC_ENABLED=false`), solo desde la URL del adapter o `THREAT_INTEL_SOURCE_URLS` (la API nunca acepta URLs) con defensas SSRF (IPs públicas o redes autorizadas, anti DNS rebinding, redirecciones revalidadas, tamaño y tiempos). Sincronización/importación con advisory lock por fuente, ETag/If-Modified-Since, staging con COPY y aplicación atómica por conjuntos, guardia de feed encogido y caché conservada ante fallos (`stale` sin borrar nada). KEV y EPSS (streaming, historial solo de cambios materiales) por CVE con procedencia y discrepancias lado a lado; `vulnerability_findings.intel_cve`; prioridad 5B fórmula v2 (KEV +10, EPSS alta +6/elevada +3, tope 14, mitad si stale). IOCs `sentra-ioc/1` y subset seguro de STIX 2.x con previsualización y sha256; matching exacto (IP, CIDR, dominio/hostname) con inicios de sesión 4624/4625, conexiones establecidas y activos, incremental por cursores y retroactivo por indicador; hashes/URLs/emails "unsupported". Triage con `version` y motivo, TI-001 solo por política (`high_confidence_malicious`), riesgo 4I fórmula v4 (multiplicador de explotabilidad de findings confirmados/probables y contribución de matches enlazada), incidentes manuales, IA con KEV/EPSS y matches como datos, auditoría y métricas sin IOCs. `threat_intel:read` (todos), `:triage` (analyst), `:manage` (admin). UI: Inteligencia (resumen, fuentes, indicadores, coincidencias, importar), detalle de indicador y de coincidencia, pestaña Inteligencia del finding, filtros KEV/EPSS, pestaña del activo y sección del incidente. CLI `threat-intel-import|sync|status`. Migración 0027. [threat-intelligence.md](threat-intelligence.md), [threat-intel-sources.md](threat-intel-sources.md), [stix-support.md](stix-support.md) |
 | Producción y servidor central | Fase 4M: despliegue nativo (Linux/systemd de referencia, Windows Server con WinSW) detrás de Caddy (TLS, frontend estático, CSP, HSTS solo con certificado válido); `ENVIRONMENT=production` valida y se niega a arrancar inseguro (`core/production.py`, sin secretos en los mensajes) y exige HTTPS; `TRUSTED_PROXIES` con X-Forwarded-For/Proto solo desde proxies de confianza (`core/proxy.py`); redacción central de logs (`core/redaction.py`), logs JSON con `request_id` y rotación propia en Windows; `/health` (liveness) y `/health/ready` (base, migraciones, apagado; la IA no cuenta); `/metrics` Prometheus protegido; rate limiting compartido en PostgreSQL (`rate_limit_hits`, migración 0024) para login, registro, IA, mutaciones y búsquedas por usuario; jobs singleton con advisory locks y benchmark único entre workers; pool y `statement_timeout` configurables; `GET /dashboard/summary` y `/assets` paginado en SQL (estado efectivo, subred, orden por IP/puertos...); CLI `production-check`, `migration-status`, `generate-secret`, `backup`, `verify-backup`, `restore`, `integrity-check`. Plantillas en `deploy/`. [production-deployment.md](production-deployment.md), [network-security.md](network-security.md), [backup-restore.md](backup-restore.md), [observability.md](observability.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
@@ -74,6 +75,7 @@ Web (React, polling 15 s, Vite proxy in dev) ──────────┘  
 - `asset_risk` (riesgo actual por activo, contribuciones JSONB y cola `dirty_at`), `risk_snapshots` (historial en cambios materiales), `risk_contributions` (contribuciones por snapshot); `assets.criticality` (low/medium/high/critical, por defecto medium). Fase 4I.
 - `detection_rules` (UID, origen, estado admin y de compilación, versión actual, `revision` para concurrencia optimista), `detection_rule_versions` (contenido inmutable por versión, YAML Sigma original), `detection_rule_stats` (contadores por regla), `detection_rule_matches` (coincidencias de reglas con umbral, purgadas con las señales); `detections.rule_source` y `rule_category` (Fase 5A, migración 0025).
 - `vulnerability_sources` (procedencia y revisión de cada catálogo importado), `vulnerabilities` (registros; único source + id), `vulnerability_affected` (productos/paquetes/SO con claves normalizadas, índice GIN), `vulnerability_findings` (uno por activo + vulnerabilidad + componente; estado técnico, estado de trabajo, `version`, exposición, prioridad, evidencia), `vulnerability_finding_history`, `asset_vulnerability_state` (cola `dirty_at` y huella por activo), `incident_vulnerabilities`; `ai_insights.vulnerability_finding_id`. Fase 5B, migración 0026.
+- `threat_intel_sources` (adapter, confianza, estado, ETag, revisión), `threat_intel_syncs` (historial de sincronizaciones e importaciones), `vulnerability_intel` (KEV/EPSS por fuente y CVE, activo/inactivo, valor EPSS anterior al último cambio material), `threat_indicators` (único fuente + tipo + valor normalizado, red CIDR con índice GiST, `pending_match`), `threat_intel_matches` (uno por indicador + activo + observación + valor; triage con `version`), `threat_intel_changes` (historial de cambios materiales), `threat_intel_cursors` (cursores del matching incremental), `incident_threat_matches`; `vulnerability_findings.intel_cve`, `incident_vulnerabilities.intel_snapshot`/`resolved_intel_snapshot`. Fase 5C, migración 0027.
 - `detection_signals` (estado de correlación, se purga tras `DETECTION_SIGNAL_RETENTION_HOURS`), `detections` (índice único parcial = una activa por activo+regla+clave), `detection_evidence` (máx. 100 por detección), `detection_baselines` (línea base de ejecutables por activo). Fase 4H.
 
 ## Key rules
@@ -118,6 +120,7 @@ con rules:manage) ·
 `/history` y `/audit`, `/exposure`, `/catalog`; acciones `acknowledge|mitigating|resolve|incident`
 con vulnerabilities:manage y `accept-risk|false-positive|reopen`, `/catalog/preview|import`,
 `/evaluate` con vulnerabilities:admin; `GET /assets/{id}/vulnerabilities`) ·
+`/threat-intel` (Fase 5C: `/overview`, `/sources` con `/syncs`, `/indicators`, `/matches`, `GET /vulnerabilities/findings/{id}/threat-intel` con threat_intel:read; `acknowledge|dismiss|reopen|incident` de un match con threat_intel:triage; fuentes, `enable|disable|archive|sync`, `/import/preview|import`, `/reevaluate` con threat_intel:manage) ·
 `GET /risk/overview` · `GET /risk/assets` · `GET /risk/assets/{id}` (`/history`, `/contributions`);
 `PATCH /assets/{id}/criticality` (assets:manage, solo admin) ·
 `GET /ai/status` · `GET /ai/insights` · `GET /ai/insights/{id}`; `POST /ai/ask`,
@@ -175,9 +178,15 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 - Vulnerabilidades (Fase 5B): solo lo que inventarían los agentes (matriz en
   docs/vulnerability-catalog.md). En Linux los paquetes no pasan de `probable` porque el agente
   no informa la versión de la distribución (backports); en Windows el SO solo se confirma si
-  el agente informa la revisión UBR. Sin feeds externos (Fase 5C) ni catálogo de ejemplo real:
+  el agente informa la revisión UBR. Sin catálogo de ejemplo real (KEV/EPSS de 5C solo enriquecen):
   hay que importar uno. No probado aún con inventario real del PC ni con un catálogo grande
   real.
+- Threat Intelligence (Fase 5C): no validado aún contra los feeds reales de CISA y FIRST
+  (formato vigente, ETag, proxy); solo con ficheros sintéticos y un espejo HTTP local. El
+  matching de dominios solo compara con nombres de activos (Sentra no recoge DNS); hashes,
+  URLs y emails no se casan. El cursor de eventos avanza por id: un evento confirmado fuera
+  de orden puede saltarse en la vuelta incremental. `intel_cve` se rellena al migrar solo
+  cuando el id del finding es un CVE (los alias, en la siguiente evaluación).
 - Agent runs in the foreground as the current user; no Windows service/installer. The Security
   event channel needs admin rights: as a standard user it is logged once as unreadable and
   skipped (privileges are never changed).
@@ -282,6 +291,12 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   puerto abierto nunca es evidencia; el estado técnico y el de trabajo van separados; las
   potenciales nunca cuentan como confirmadas ni alertan; los incidentes se crean a mano; la
   vulnerabilidad entra en el riesgo 4I como señal agrupada con la exposición de su puerto.
+- Threat Intelligence (Fase 5C): la inteligencia es contexto externo, nunca prueba de
+  compromiso (vocabulario fijado y vigilado por un test); offline-first con red apagada por
+  defecto y URLs solo en la configuración del servidor; procedencia por dato y conflictos
+  visibles en vez de elegir una fuente; solo coincidencia exacta; una importación local no
+  desactiva lo ausente; TI-001 solo por política; incidentes siempre manuales; EPSS sin
+  historial diario (solo cambios materiales).
 - Agent uses stdlib + psutil + built-in `wevtutil.exe` (no pywin32).
 - Inventory as JSONB snapshot; normalize a section when SQL queries over it are needed.
 - Retention opt-in and per data type (`services/retention_service.py`): batches of 5000 rows,
@@ -292,11 +307,15 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Recommended next phase
 
+Fase 5C (Threat Intelligence) entregada: importar los ficheros reales de KEV y EPSS por la
+CLI (o activar la sincronización con Internet o un espejo), revisar los findings con KEV/EPSS
+y la prioridad, importar unos IOCs de prueba y comprobar los matches con inicios de sesión y
+conexiones reales del PC, y medir con `qa/perf_threat_intel.py` en el hardware del servidor.
+
 Fase 5B (vulnerabilidades y exposición) entregada: importar un catálogo pequeño con
 productos reales del PC (ver docs/vulnerability-catalog.md), revisar los findings, sus
 estados técnicos y la prioridad con inventario real Windows y Linux, y medir con
-`qa/perf_vulnerabilities.py` en el hardware del servidor. Siguiente: Fase 5C (feeds
-opcionales NVD/OSV/EPSS/KEV como integración, nunca obligatoria).
+`qa/perf_vulnerabilities.py` en el hardware del servidor.
 
 Fase 5A (reglas personalizadas y Sigma) entregada: escribir y probar reglas con eventos
 reales del PC (prueba histórica antes de activar), importar unas pocas reglas Sigma de

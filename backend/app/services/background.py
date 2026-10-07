@@ -16,6 +16,7 @@ from datetime import UTC, datetime, timedelta
 from sqlalchemy import Engine
 
 from app.core.config import get_settings
+from app.core.exceptions import ThreatIntelBusyError
 from app.core.metrics import REGISTRY
 from app.db.locks import JOB_LOCK_KEYS, singleton_lock
 from app.db.session import get_engine, get_sessionmaker
@@ -27,6 +28,10 @@ from app.risk.engine import RiskEngine
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
+from app.threat_intel.config import ThreatIntelConfig
+from app.threat_intel.matching import SYSTEM as THREAT_INTEL_ACTOR
+from app.threat_intel.matching import ThreatIntelMatcher
+from app.threat_intel.sync import ThreatIntelSyncer
 from app.vulnerabilities.engine import VulnerabilityConfig, VulnerabilityEngine
 
 logger = logging.getLogger(__name__)
@@ -189,6 +194,31 @@ def run_vulnerability_engine() -> None:
             if expired:
                 logger.info("accepted vulnerability risks expired", extra={"count": expired})
             engine.process_refresh(now)
+
+
+def run_threat_intel() -> None:
+    """Fase 5C: sincroniza las fuentes vencidas o pedidas y casa los IOCs con los datos locales.
+
+    La descarga solo ocurre con THREAT_INTEL_SYNC_ENABLED=true (due_sources devuelve [] si no):
+    instalación offline por defecto. Cada fuente toma además su propio advisory lock, así una
+    importación manual por CLI de la misma fuente no se pisa con el job. Un fallo de una fuente
+    queda en su fila (último error) y no impide el matching: se sigue usando lo ya guardado.
+    """
+    config = ThreatIntelConfig.from_settings(get_settings())
+    with get_sessionmaker()() as session:
+        syncer = ThreatIntelSyncer(session, config, lock_engine=get_engine)
+        for source_id in syncer.due_sources(datetime.now(UTC)):
+            try:
+                outcome = syncer.sync(source_id, "scheduled", THREAT_INTEL_ACTOR)
+            except ThreatIntelBusyError:
+                continue
+            if outcome.status == "failed":
+                logger.warning(
+                    "threat intel sync failed",
+                    extra={"source": outcome.source_key, "error": outcome.error_code},
+                )
+        # El propio matcher deja constancia en el log de lo que crea.
+        ThreatIntelMatcher(session, config).run()
 
 
 def purge_old_data() -> None:

@@ -55,6 +55,7 @@ from app.services import audit_service
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_context_service import ContextValues, context_values
 from app.services.audit_service import Actor
+from app.threat_intel.lookup import intel_cve, load_exploitation
 from app.vulnerabilities import priority as priority_mod
 from app.vulnerabilities import workflow
 from app.vulnerabilities.catalog import SEVERITY_RANK
@@ -439,6 +440,9 @@ class VulnerabilityEngine:
         candidates, truncated = self._candidates(software)
         results = self._match(software, candidates)
         vulns = self._vulnerabilities({vuln_id for vuln_id, _ in results})
+        # Fase 5C: inteligencia de explotabilidad de los CVEs del activo (una consulta).
+        cves = {vid: intel_cve(v.external_id, v.aliases) for vid, v in vulns.items()}
+        intel = load_exploitation(self._session, cves.values(), now)
         findings = {
             (f.vulnerability_id, f.component_key): f
             for f in self._session.scalars(
@@ -457,6 +461,8 @@ class VulnerabilityEngine:
                 continue
             existing = findings.pop((vuln_id, component_key), None)
             assessment = assess(result.rule.service_ports, item.exposure)
+            cve = cves.get(vuln_id)
+            exploit = intel.get(cve) if cve else None
             prio = priority_mod.calculate(
                 priority_mod.PriorityInputs(
                     severity=vuln.severity,
@@ -465,6 +471,9 @@ class VulnerabilityEngine:
                     criticality=item.context.criticality,
                     environment=item.context.environment,
                     data_sensitivity=item.context.data_sensitivity,
+                    known_exploited=exploit.known_exploited if exploit else False,
+                    epss_score=exploit.epss_score if exploit else None,
+                    intel_stale=exploit.stale if exploit else False,
                 )
             )
             evidence = result.evidence(software.collected_at)
@@ -674,6 +683,7 @@ class VulnerabilityEngine:
         finding.fixed_version = result.rule.fixed_version
         finding.affected_range = result.rule.range_label() or None
         finding.vuln_external_id = vuln.external_id
+        finding.intel_cve = intel_cve(vuln.external_id, vuln.aliases)
         finding.title = vuln.title[:300]
         finding.severity = vuln.severity
         finding.severity_rank = SEVERITY_RANK.get(vuln.severity, 0)
@@ -706,6 +716,7 @@ class VulnerabilityEngine:
             "severity": finding.severity,
             "exposure": finding.exposure_state,
             "priority": finding.priority_score,
+            "kev": _known_exploited(finding.priority_factors),
         }
         if not result.active and finding.status == workflow.RESOLVED:
             # Sigue sin afectar: solo la última evaluación.
@@ -754,6 +765,19 @@ class VulnerabilityEngine:
                 now,
                 from_value=str(before["exposure"]),
                 to_value=finding.exposure_state,
+            )
+        kev_now = _known_exploited(finding.priority_factors)
+        if before["kev"] != kev_now:
+            # Fase 5C: entrada o salida de CISA KEV. Historial, no "cambio" del finding: el
+            # estado técnico (match, versión) no cambia por la inteligencia externa.
+            add_history(
+                self._session,
+                finding,
+                "kev_changed",
+                now,
+                from_value="kev" if before["kev"] else "not_kev",
+                to_value="kev" if kev_now else "not_kev",
+                details={"cve": finding.intel_cve},
             )
         if reasons or before["priority"] != finding.priority_score:
             finding.version += 1
@@ -1020,6 +1044,10 @@ def _audit_expired(session: Session, findings: Sequence[VulnerabilityFinding]) -
             details={"vulnerability": finding.vuln_external_id, "to": workflow.OPEN},
             commit=False,
         )
+
+
+def _known_exploited(factors: Sequence[Mapping[str, Any]] | None) -> bool:
+    return any(f.get("factor") == "known_exploited" for f in factors or ())
 
 
 def _listening_ports(document: Mapping[str, Any] | None) -> frozenset[int]:

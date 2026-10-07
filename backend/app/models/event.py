@@ -15,6 +15,7 @@ from sqlalchemy import (
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -43,6 +44,13 @@ class SystemEvent(Base):
         UniqueConstraint("asset_id", "channel", "record_id", name="uq_system_events_record"),
         Index("ix_system_events_asset_occurred", "asset_id", "occurred_at"),
         Index("ix_system_events_occurred", "occurred_at"),
+        # Fase 5C: matching retroactivo de IOCs de IP contra la IP de origen de los logons
+        # (4624/4625) sin recorrer toda la tabla. Parcial: solo eventos que la traen.
+        Index(
+            "ix_system_events_ip_address",
+            text("(data ->> 'IpAddress')"),
+            postgresql_where=text("data ? 'IpAddress'"),
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)

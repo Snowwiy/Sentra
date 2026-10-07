@@ -1,5 +1,6 @@
 import ipaddress
 import os
+import re
 from functools import lru_cache
 from typing import Literal
 
@@ -43,6 +44,42 @@ def parse_ai_local_networks(value: str) -> tuple[AINetwork, ...]:
             raise ValueError(f"AI_LOCAL_NETWORKS only accepts private LAN networks, got {item!r}")
         networks.append(network)
     return tuple(networks)
+
+
+def parse_lan_networks(value: str, setting: str) -> tuple[AINetwork, ...]:
+    """Redes de LAN (RFC 1918 o ULA) autorizadas en `setting`. Rechaza Internet, link-local
+    (metadatos de nube), CGNAT y rangos amplios: autorizar uno de ellos abriría un SSRF."""
+    networks: list[AINetwork] = []
+    for item in parse_name_list(value):
+        try:
+            network = ipaddress.ip_network(item, strict=False)
+        except ValueError:
+            raise ValueError(f"{setting} has an invalid network: {item!r}") from None
+        if not any(
+            network.version == lan.version and network.subnet_of(lan)  # type: ignore[arg-type]
+            for lan in _LAN_RANGES
+        ):
+            raise ValueError(f"{setting} only accepts private LAN networks, got {item!r}")
+        networks.append(network)
+    return tuple(networks)
+
+
+def parse_source_urls(value: str) -> dict[str, str]:
+    """'cisa-kev=https://espejo/kev.json,first-epss=https://...' -> {fuente: URL}.
+
+    Solo el servidor fija a dónde se conecta cada fuente (Fase 5C): la API nunca acepta una
+    URL del navegador. La política SSRF completa se aplica igualmente al descargar.
+    """
+    urls: dict[str, str] = {}
+    for item in parse_name_list(value):
+        key, separator, url = item.partition("=")
+        key, url = key.strip(), url.strip()
+        if not separator or not re.match(r"^[a-z0-9][a-z0-9._-]{1,63}$", key):
+            raise ValueError(f"THREAT_INTEL_SOURCE_URLS expects source=url, got {key!r}")
+        if not url.lower().startswith(("https://", "http://")):
+            raise ValueError(f"THREAT_INTEL_SOURCE_URLS needs an http(s) URL for {key!r}")
+        urls[key] = url
+    return urls
 
 
 def parse_networks(value: str, setting: str) -> tuple[AINetwork, ...]:
@@ -354,6 +391,35 @@ class Settings(BaseSettings):
     vuln_alert_enabled: bool = True
     vuln_alert_cooldown_hours: int = Field(default=24, ge=0, le=720)
 
+    # --- Fase 5C: Threat Intelligence (ver docs/threat-intelligence.md) ---
+    # Módulo (importación local, matching con datos locales, enriquecimiento). Desactivado:
+    # sin job; lo ya guardado se sigue viendo. Sentra funciona igual sin inteligencia.
+    threat_intel_enabled: bool = True
+    # Descargas por red de las fuentes (KEV, EPSS). APAGADO por defecto: offline-first. Con
+    # false, solo funcionan las importaciones locales (API/CLI) y la inteligencia ya guardada.
+    threat_intel_sync_enabled: bool = False
+    # Intervalo por defecto de una fuente nueva (cada fuente tiene el suyo en la BD).
+    threat_intel_default_interval_hours: int = Field(default=24, ge=1, le=720)
+    # Plazo total de una descarga (conexión, lectura y cuerpo completo).
+    threat_intel_http_timeout_seconds: int = Field(default=120, ge=5, le=1800)
+    # Tamaño máximo de una descarga o fichero importado por CLI (la API además respeta
+    # MAX_REQUEST_BYTES) y registros/objetos por importación.
+    threat_intel_max_download_mb: int = Field(default=128, ge=1, le=2048)
+    threat_intel_max_records: int = Field(default=1_000_000, ge=1, le=10_000_000)
+    # Filas por lote en staging y en el matching retroactivo.
+    threat_intel_batch_size: int = Field(default=5000, ge=100, le=50_000)
+    # Espejos internos de los feeds en la LAN (por defecto ninguna red privada es destino).
+    threat_intel_allowed_networks: str = ""
+    # URL de cada fuente si no es la oficial del adapter: "cisa-kev=https://...".
+    threat_intel_source_urls: str = ""
+    # Cuándo un match crea una detección TI-001: off, high_confidence_malicious (malicious +
+    # confianza alta del indicador y del match) o malicious (también confianza media).
+    threat_intel_detection_policy: Literal["off", "high_confidence_malicious", "malicious"] = (
+        "high_confidence_malicious"
+    )
+    # Cada cuánto el job atiende sincronizaciones pendientes y el matching incremental.
+    threat_intel_eval_interval_seconds: int = Field(default=60, ge=10, le=3600)
+
     # --- Fase 4J: AI Security Insights (ver docs/ai-security-insights.md) ---
     # Apagado por defecto: Sentra funciona completo sin IA. Encenderlo solo habilita el
     # análisis bajo demanda; la ingesta, las detecciones y el riesgo nunca dependen de él.
@@ -496,6 +562,18 @@ class Settings(BaseSettings):
         unknown = set(parse_name_list(value.lower())) - allowed
         if unknown:
             raise ValueError(f"AI_REDACT has unknown values: {sorted(unknown)}")
+        return value
+
+    @field_validator("threat_intel_allowed_networks")
+    @classmethod
+    def _check_threat_intel_networks(cls, value: str) -> str:
+        parse_lan_networks(value, "THREAT_INTEL_ALLOWED_NETWORKS")
+        return value
+
+    @field_validator("threat_intel_source_urls")
+    @classmethod
+    def _check_threat_intel_urls(cls, value: str) -> str:
+        parse_source_urls(value)
         return value
 
     @field_validator("ai_local_networks")

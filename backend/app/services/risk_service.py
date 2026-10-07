@@ -81,6 +81,7 @@ CATEGORY_LABELS = {
     "defense": "Controles de seguridad desactivados",
     "system": "Eventos críticos del sistema",
     "exposure": "Exposición sensible",
+    "threat_intel": "Coincidencias con inteligencia de amenazas",
     "unknown": "Otras detecciones",
 }
 
@@ -279,7 +280,7 @@ class RiskService:
             .join(item, literal(True))
             .where(
                 AssetRisk.score > 0,
-                item.c.value["factor"].astext.in_(["detection", "exposure"]),
+                item.c.value["factor"].astext.in_(["detection", "exposure", "threat_intel"]),
                 points > 0,
             )
             .group_by(category)
@@ -577,6 +578,7 @@ def _contribution(raw: dict[str, Any]) -> RiskContributionRead:
         nominal_points=_float(raw.get("nominal_points")),
         detection_id=_uuid(raw.get("detection_id")),
         finding_id=_uuid(raw.get("finding_id")),
+        threat_match_id=_uuid(raw.get("threat_match_id")),
         rule_id=str(raw["rule_id"])[:32] if raw.get("rule_id") else None,
         port=_int(raw.get("port")),
         details=details if isinstance(details, dict) else {},

@@ -36,6 +36,7 @@ export const REF_TYPE_LABELS: Record<string, string> = {
   incident: "Incidente",
   note: "Nota del analista",
   vulnerability: "Vulnerabilidad",
+  threat_match: "Coincidencia de inteligencia",
 };
 
 export const STALE_LABELS: Record<NonNullable<Insight["stale_reason"]>, string> = {
@@ -56,6 +57,8 @@ export function refLink(ref: EvidenceRef): string | null {
       return `/incidents/${encodeURIComponent(ref.id)}`;
     case "vulnerability":
       return `/vulnerabilities/${encodeURIComponent(ref.id)}`;
+    case "threat_match":
+      return `/threat-intel/matches/${encodeURIComponent(ref.id)}`;
     case "risk_contribution":
     case "risk_snapshot":
       return asset ? `/assets/${asset}?tab=risk` : null;

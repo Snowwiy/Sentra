@@ -50,10 +50,12 @@ from app.models.incident import (
     IncidentLevel,
     IncidentNote,
     IncidentStatus,
+    IncidentThreatMatch,
     IncidentVulnerability,
     ResolutionCategory,
 )
 from app.models.risk import AssetRisk, RiskSnapshot
+from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.user import User
 from app.models.vulnerability import VulnerabilityFinding
 from app.schemas.asset_context import AssetContextSnapshot
@@ -73,6 +75,7 @@ from app.schemas.incident import (
     IncidentRiskContext,
     IncidentRiskSnapshot,
     IncidentSummary,
+    IncidentThreatMatchRef,
     IncidentUpdate,
     IncidentUserRef,
     IncidentVulnerabilityRef,
@@ -81,6 +84,7 @@ from app.services import audit_service
 from app.services.asset_context_service import context_values
 from app.services.audit_service import Actor
 from app.services.risk_service import _contribution
+from app.threat_intel.lookup import load_exploitation
 
 # Fase 5B: estados de trabajo de un finding desde los que se puede abrir un caso, y cómo se
 # traduce su severidad/confianza a la escala de incidentes ("informational" -> low).
@@ -96,6 +100,11 @@ _VULNERABILITY_CONFIDENCE = {
     "confirmed": IncidentConfidence.HIGH,
     "probable": IncidentConfidence.MEDIUM,
 }
+
+# Fase 5C: un match de IOC abre un caso con gravedad según lo que declara la fuente y nunca
+# con confianza alta: la inteligencia es de un tercero y el match no confirma un compromiso.
+_THREAT_LEVEL = {"malicious": IncidentLevel.HIGH, "suspicious": IncidentLevel.MEDIUM}
+THREAT_MATCH_ACTIVE = frozenset({"open", "acknowledged"})
 
 # Detalle: relaciones mostradas en la respuesta (el resto en /evidence y en el timeline).
 DETAIL_RELATIONS_LIMIT = 50
@@ -480,6 +489,7 @@ class IncidentService:
                 source=source,
                 attached_at=now,
                 attached_by_user_id=self.op.user.id,
+                intel_snapshot=self._intel_snapshot(finding.intel_cve, now),
             )
         )
         self._session.flush()
@@ -495,6 +505,160 @@ class IncidentService:
             {"vulnerability": finding.vuln_external_id, "source": source},
         )
         self._link_asset(incident, asset, source[:16], now)
+
+    def _threat_row(
+        self, match_id: UUID, lock: bool
+    ) -> tuple[ThreatIntelMatch, ThreatIndicator, ThreatIntelSource, Asset]:
+        stmt = (
+            select(ThreatIntelMatch, ThreatIndicator, ThreatIntelSource, Asset)
+            .join(ThreatIndicator, ThreatIndicator.id == ThreatIntelMatch.indicator_id)
+            .join(ThreatIntelSource, ThreatIntelSource.id == ThreatIndicator.source_id)
+            .join(Asset, Asset.id == ThreatIntelMatch.asset_id)
+            .where(ThreatIntelMatch.public_id == match_id)
+        )
+        if lock:
+            stmt = stmt.with_for_update(of=ThreatIntelMatch)
+        row = self._session.execute(stmt).first()
+        if row is None:
+            raise NotFoundError("Threat intelligence match not found")
+        return row[0], row[1], row[2], row[3]
+
+    def promote_threat_match(self, match_id: UUID, payload: IncidentPromote) -> Incident:
+        """Fase 5C: abre un caso desde un match de IOC (siempre una decisión humana)."""
+        match, indicator, source, asset = self._threat_row(match_id, lock=True)
+        if match.status not in THREAT_MATCH_ACTIVE:
+            raise IncidentStateError("Dismissed threat matches cannot open an incident")
+        existing = self._session.scalar(
+            select(Incident)
+            .join(IncidentThreatMatch, IncidentThreatMatch.incident_id == Incident.id)
+            .where(
+                IncidentThreatMatch.match_id == match.id,
+                Incident.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(Incident.number)
+            .limit(1)
+        )
+        if existing is not None:
+            key = incident_key(existing.number)
+            raise IncidentAlreadyLinkedError(
+                f"Already part of active incident {key}; open it instead",
+                details=[{"incident_id": str(existing.public_id), "key": key}],
+            )
+        now = _now()
+        severity = _THREAT_LEVEL.get(match.classification, IncidentLevel.LOW)
+        if severity == IncidentLevel.HIGH and match.match_confidence != "high":
+            severity = IncidentLevel.MEDIUM
+        priority = payload.priority or self._suggested_priority(severity, [asset])
+        value = indicator.value_normalized
+        description = (
+            f"El valor {match.observed_value} observado en {asset.display_name} coincide con"
+            f" el indicador {value} ({indicator.indicator_type}) que la fuente {source.name}"
+            f" clasifica como {match.classification}. Es inteligencia externa: confirmar con"
+            " la evidencia local antes de concluir un compromiso."
+        )
+        incident = self._new_incident(
+            payload.title or f"IOC {value} observado en {asset.display_name}"[:200],
+            payload.description if payload.description is not None else description[:4000],
+            severity,
+            priority,
+            IncidentConfidence.MEDIUM
+            if match.match_confidence == "high"
+            else IncidentConfidence.LOW,
+            now,
+        )
+        self._link_threat_match(incident, match, indicator, source, asset, "threat_match", now)
+        if match.detection_id is not None:
+            detection = self._session.get(Detection, match.detection_id)
+            if detection is not None:
+                self._link_detection(incident, detection, asset, "threat_match", now)
+        self._snapshot_risk(incident, now, "created")
+        self._audit(
+            "incident_created",
+            incident,
+            {"source": "threat_match", "match": str(match.public_id), "indicator": value[:200]},
+        )
+        return incident
+
+    def attach_threat_match(self, public_id: UUID, match_id: UUID) -> bool:
+        incident = self._lock(public_id)
+        self._not_frozen(incident)
+        match, indicator, source, asset = self._threat_row(match_id, lock=False)
+        now = _now()
+        added = self._link_threat_match(incident, match, indicator, source, asset, "manual", now)
+        if added:
+            self._touch(incident, now, bump=False)
+            self._audit("incident_threat_match_attached", incident, {"match": str(match_id)})
+        self._session.commit()
+        return added
+
+    def _link_threat_match(
+        self,
+        incident: Incident,
+        match: ThreatIntelMatch,
+        indicator: ThreatIndicator,
+        source: ThreatIntelSource,
+        asset: Asset,
+        origin: str,
+        now: datetime,
+    ) -> bool:
+        exists = self._session.scalar(
+            select(IncidentThreatMatch.id).where(
+                IncidentThreatMatch.incident_id == incident.id,
+                IncidentThreatMatch.match_id == match.id,
+            )
+        )
+        if exists is not None:
+            return False
+        self._session.add(
+            IncidentThreatMatch(
+                incident_id=incident.id,
+                match_id=match.id,
+                match_public_id=match.public_id,
+                indicator_type=indicator.indicator_type,
+                indicator_value=indicator.value_normalized[:1024],
+                classification=match.classification,
+                confidence=match.match_confidence,
+                source_name=source.name[:200],
+                source_trust=source.trust,
+                observation_type=match.observation_type,
+                observed_value=match.observed_value[:1024],
+                asset_name=asset.display_name[:255],
+                intel_snapshot=threat_snapshot(match, indicator, source),
+                source=origin[:16],
+                attached_at=now,
+                attached_by_user_id=self.op.user.id,
+            )
+        )
+        self._session.flush()
+        self._widen_window(incident, match.first_observed_at, match.last_observed_at)
+        self._activity(
+            incident,
+            "threat_match_attached",
+            f"Match de inteligencia adjuntado: {indicator.value_normalized[:120]}"
+            f" ({match.classification}, {source.name[:60]})",
+            now,
+            "threat_match",
+            match.public_id,
+            {"indicator_type": indicator.indicator_type, "source": origin},
+        )
+        self._link_asset(incident, asset, origin[:16], now)
+        return True
+
+    def _intel_snapshot(self, cve: str | None, now: datetime) -> dict[str, Any] | None:
+        """KEV/EPSS del CVE en este momento (None si no hay CVE o no hay inteligencia)."""
+        if not cve:
+            return None
+        intel = load_exploitation(self._session, [cve], now).get(cve)
+        return {**intel.as_context(), "taken_at": now.isoformat()} if intel else None
+
+    def _snapshot_intel(self, incident: Incident, now: datetime) -> None:
+        """Al resolver: la inteligencia de cada CVE del caso en ese momento."""
+        for link, finding in self._session.execute(
+            select(IncidentVulnerability, VulnerabilityFinding)
+            .join(VulnerabilityFinding, VulnerabilityFinding.id == IncidentVulnerability.finding_id)
+            .where(IncidentVulnerability.incident_id == incident.id)
+        ):
+            link.resolved_intel_snapshot = self._intel_snapshot(finding.intel_cve, now)
 
     def _suggested_priority(
         self, severity: IncidentLevel, assets: Sequence[Asset]
@@ -908,6 +1072,7 @@ class IncidentService:
         )
         self._snapshot_risk(incident, now, "resolved")
         self._snapshot_context(incident, now)
+        self._snapshot_intel(incident, now)
         self._audit(
             "incident_resolved",
             incident,
@@ -1056,7 +1221,13 @@ class IncidentService:
         return target
 
     def _copy_relations(self, source: Incident, target: Incident, now: datetime) -> dict[str, int]:
-        counts = {"detections": 0, "alerts": 0, "assets": 0, "vulnerabilities": 0}
+        counts = {
+            "detections": 0,
+            "alerts": 0,
+            "assets": 0,
+            "vulnerabilities": 0,
+            "threat_matches": 0,
+        }
         user_id = self.op.user.id
         have_detections = set(
             self._session.scalars(
@@ -1160,9 +1331,45 @@ class IncidentService:
                     source="merge",
                     attached_at=now,
                     attached_by_user_id=user_id,
+                    intel_snapshot=v.intel_snapshot,
+                    resolved_intel_snapshot=v.resolved_intel_snapshot,
                 )
             )
             counts["vulnerabilities"] += 1
+        # Fase 5C: matches de inteligencia del caso absorbido (sin duplicar).
+        have_matches = set(
+            self._session.scalars(
+                select(IncidentThreatMatch.match_public_id).where(
+                    IncidentThreatMatch.incident_id == target.id
+                )
+            )
+        )
+        for t in self._session.scalars(
+            select(IncidentThreatMatch).where(IncidentThreatMatch.incident_id == source.id)
+        ):
+            if t.match_public_id in have_matches:
+                continue
+            self._session.add(
+                IncidentThreatMatch(
+                    incident_id=target.id,
+                    match_id=t.match_id,
+                    match_public_id=t.match_public_id,
+                    indicator_type=t.indicator_type,
+                    indicator_value=t.indicator_value,
+                    classification=t.classification,
+                    confidence=t.confidence,
+                    source_name=t.source_name,
+                    source_trust=t.source_trust,
+                    observation_type=t.observation_type,
+                    observed_value=t.observed_value,
+                    asset_name=t.asset_name,
+                    intel_snapshot=t.intel_snapshot,
+                    source="merge",
+                    attached_at=now,
+                    attached_by_user_id=user_id,
+                )
+            )
+            counts["threat_matches"] += 1
         return counts
 
     # --- Contexto del activo (Fase 4L, solo lectura) -------------------------------------------
@@ -1439,8 +1646,75 @@ def vulnerability_refs(
             hostname=asset.display_name if asset else link.asset_name,
             source=link.source,
             attached_at=link.attached_at,
+            intel_snapshot=link.intel_snapshot,
+            resolved_intel_snapshot=link.resolved_intel_snapshot,
         )
         for link, finding, asset in session.execute(stmt)
+    ]
+
+
+def threat_snapshot(
+    match: ThreatIntelMatch, indicator: ThreatIndicator, source: ThreatIntelSource
+) -> dict[str, Any]:
+    """Lo que se sabía del indicador al vincularlo (acotado; nunca el feed)."""
+
+    def iso(value: datetime | None) -> str | None:
+        return value.isoformat() if value else None
+
+    return {
+        "source": source.name[:200],
+        "source_trust": source.trust,
+        "indicator_confidence": indicator.confidence,
+        "valid_from": iso(indicator.valid_from),
+        "valid_until": iso(indicator.valid_until),
+        "revoked": indicator.revoked,
+        "tags": list(indicator.tags or [])[:10],
+        "related": list(indicator.related or [])[:5],
+        "first_observed_at": iso(match.first_observed_at),
+        "last_observed_at": iso(match.last_observed_at),
+        "observation_count": match.observation_count,
+    }
+
+
+def threat_match_links(
+    incident_ids: Sequence[int],
+) -> Select[IncidentThreatMatch, ThreatIntelMatch, Asset]:
+    first = (
+        select(func.min(IncidentThreatMatch.id))
+        .where(IncidentThreatMatch.incident_id.in_(incident_ids))
+        .group_by(IncidentThreatMatch.match_public_id)
+    )
+    return (
+        select(IncidentThreatMatch, ThreatIntelMatch, Asset)
+        .outerjoin(ThreatIntelMatch, ThreatIntelMatch.id == IncidentThreatMatch.match_id)
+        .outerjoin(Asset, Asset.id == ThreatIntelMatch.asset_id)
+        .where(IncidentThreatMatch.id.in_(first))
+    )
+
+
+def threat_match_refs(
+    session: Session, stmt: Select[IncidentThreatMatch, ThreatIntelMatch, Asset]
+) -> list[IncidentThreatMatchRef]:
+    return [
+        IncidentThreatMatchRef(
+            match_id=link.match_public_id,
+            indicator_type=link.indicator_type,
+            indicator_value=link.indicator_value,
+            classification=link.classification,
+            confidence=link.confidence,
+            source_name=link.source_name,
+            source_trust=link.source_trust,
+            observation_type=link.observation_type,
+            observed_value=link.observed_value,
+            status=match.status if match else None,
+            available=match is not None,
+            asset_id=asset.public_id if asset else None,
+            hostname=asset.display_name if asset else link.asset_name,
+            source=link.source,
+            attached_at=link.attached_at,
+            intel_snapshot=link.intel_snapshot,
+        )
+        for link, match, asset in session.execute(stmt)
     ]
 
 
@@ -1546,6 +1820,14 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
             DETAIL_RELATIONS_LIMIT
         ),
     )
+    threats_stmt = threat_match_links(family)
+    threats_total = session.scalar(select(func.count()).select_from(threats_stmt.subquery())) or 0
+    threat_matches = threat_match_refs(
+        session,
+        threats_stmt.order_by(IncidentThreatMatch.attached_at, IncidentThreatMatch.id).limit(
+            DETAIL_RELATIONS_LIMIT
+        ),
+    )
     notes_total = (
         session.scalar(
             select(func.count())
@@ -1616,6 +1898,8 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
         alerts_total=alerts_total,
         vulnerabilities=vulnerabilities,
         vulnerabilities_total=vulns_total,
+        threat_matches=threat_matches,
+        threat_matches_total=threats_total,
         notes_total=notes_total,
         metrics=IncidentMetrics(
             # Edad hasta la resolución/cierre si ya terminó: dato observado, no un SLA.

@@ -186,6 +186,32 @@ class CatalogBusyError(ConflictError):
     code = "catalog_import_in_progress"
 
 
+class ThreatIntelError(SentraError):
+    # Fase 5C: importación o configuración de inteligencia rechazada. El código concreto
+    # (intel_too_large, intel_invalid_json, unknown_provider...) va en `code`.
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+    code = "threat_intel_invalid"
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class ThreatIntelChangedError(ConflictError):
+    # El fichero confirmado no es el previsualizado (sha256 distinto).
+    code = "threat_intel_changed"
+
+
+class ThreatIntelBusyError(ConflictError):
+    # Otra sincronización o importación de la misma fuente está en curso.
+    code = "threat_intel_busy"
+
+
+class ThreatIntelConflictError(ConflictError):
+    # Concurrencia optimista (versión de un match o revisión de una fuente).
+    code = "threat_intel_conflict"
+
+
 class DiscoveryTargetError(SentraError):
     # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
     # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.

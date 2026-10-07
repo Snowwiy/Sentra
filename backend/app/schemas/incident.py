@@ -206,6 +206,32 @@ class IncidentVulnerabilityRef(ResponseModel):
     hostname: str | None
     source: str
     attached_at: datetime
+    # Fase 5C: inteligencia KEV/EPSS del CVE al adjuntarlo y al resolver el caso (lo que se
+    # sabía entonces; la actual está en el finding).
+    intel_snapshot: dict[str, Any] | None = None
+    resolved_intel_snapshot: dict[str, Any] | None = None
+
+
+class IncidentThreatMatchRef(ResponseModel):
+    """Match de inteligencia de amenazas del caso (Fase 5C): snapshot + estado actual."""
+
+    match_id: UUID
+    indicator_type: str
+    indicator_value: str
+    classification: str
+    confidence: str
+    source_name: str
+    source_trust: str
+    observation_type: str
+    observed_value: str
+    # Estado actual del match; null si ya no existe (activo borrado: available=false).
+    status: str | None
+    available: bool
+    asset_id: UUID | None
+    hostname: str | None
+    source: str
+    attached_at: datetime
+    intel_snapshot: dict[str, Any] | None = None
 
 
 class IncidentRiskAsset(ResponseModel):
@@ -271,6 +297,8 @@ class IncidentDetail(IncidentSummary):
     # Fase 5B: findings de vulnerabilidad vinculados (creados desde un finding o por merge).
     vulnerabilities: list[IncidentVulnerabilityRef] = Field(default_factory=list)
     vulnerabilities_total: int = 0
+    threat_matches: list[IncidentThreatMatchRef] = Field(default_factory=list)
+    threat_matches_total: int = 0
     notes_total: int
     metrics: IncidentMetrics
     # Estados a los que la state machine permite pasar con PATCH (comodidad de UI; el

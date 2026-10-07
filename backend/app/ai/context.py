@@ -18,6 +18,7 @@ Qué hace con los datos:
   seudonimización configurada (AI_REDACT) antes de que nada salga del servidor.
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
@@ -51,8 +52,10 @@ from app.models.incident import (
     IncidentAsset,
     IncidentDetection,
     IncidentNote,
+    IncidentThreatMatch,
 )
 from app.models.risk import RiskSnapshot
+from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.vulnerability import Vulnerability, VulnerabilityFinding
 from app.risk.config import RiskConfig
 from app.services.asset_context_service import (
@@ -65,6 +68,7 @@ from app.services.asset_service import effective_status
 from app.services.detection_rule_service import rule_text
 from app.services.incident_service import family_ids
 from app.services.risk_service import RiskService
+from app.threat_intel.lookup import load_exploitation
 
 RefType = Literal[
     "asset",
@@ -79,6 +83,7 @@ RefType = Literal[
     "incident",
     "note",
     "vulnerability",
+    "threat_match",
 ]
 
 # Prefijo del identificador corto de cada tipo (lo que ve el modelo).
@@ -97,6 +102,8 @@ _PREFIX: dict[str, str] = {
     "note": "N",
     # Fase 5B: finding de vulnerabilidad (la V ya es evidencia).
     "vulnerability": "F",
+    # Fase 5C: match de inteligencia de amenazas con un dato local.
+    "threat_match": "T",
 }
 
 # Claves de diccionarios no confiables que se seudonimizan como campo estructurado.
@@ -562,6 +569,7 @@ class ContextBuilder:
         if include_inventory_changes:
             data["recent_changes_24h"] = self._changes(asset, self._now - timedelta(hours=24), 8)
             data["active_alerts"] = self._alerts(asset, 5)
+        data["threat_intel_matches"] = self._threat_matches([asset.id], 6)
         return self._finish(
             "asset",
             data,
@@ -800,6 +808,13 @@ class ContextBuilder:
         if assets:
             risk = self._risk_block(assets[0], contributions_limit=5)
             data["primary_asset_risk"] = risk
+        data["threat_intel_matches"] = self._threat_matches(
+            [],
+            6,
+            match_ids=select(IncidentThreatMatch.match_id).where(
+                IncidentThreatMatch.incident_id.in_(family)
+            ),
+        )
         notes = self._session.scalars(
             select(IncidentNote)
             .where(IncidentNote.incident_id.in_(family))
@@ -894,6 +909,8 @@ class ContextBuilder:
             "last_seen_at": finding.last_seen_at,
             "inventory_observed_at": finding.inventory_observed_at,
             "remediation": self._text(vuln.remediation, 400),
+            # Fase 5C: inteligencia EXTERNA del CVE (no es evidencia del activo).
+            "external_intelligence": self._exploitation(finding.intel_cve),
             "note": (
                 "match_state lo decidió el matcher determinista de Sentra: confirmed y "
                 "probable tienen evidencia de versión; potential y unknown NO confirman que "
@@ -909,6 +926,92 @@ class ContextBuilder:
             risk_snapshot_pk=self._latest_snapshot_pk(asset),
             vulnerability_pk=finding.id,
         )
+
+    def _exploitation(self, cve: str | None) -> dict[str, Any]:
+        """KEV/EPSS del CVE con su procedencia, separado de la evidencia local."""
+        intel = load_exploitation(self._session, [cve], self._now).get(cve) if cve else None
+        if intel is None:
+            return {
+                "available": False,
+                "note": "Sin inteligencia de explotación configurada o sin datos para este CVE.",
+            }
+        data = intel.as_context()
+        kev = data.get("kev") or {}
+        if kev:
+            kev["required_action"] = self._text((intel.kev or {}).get("required_action"), 300)
+        return {
+            "available": True,
+            **self._safe(data),
+            "note": (
+                "Inteligencia externa. KEV significa que se ha reportado explotación de esta"
+                " vulnerabilidad en algún lugar, NO que este activo haya sido atacado. EPSS es"
+                " una probabilidad estadística de explotación en 30 días según FIRST, NO la"
+                " probabilidad de que este activo esté comprometido. known_ransomware_use"
+                " 'unknown' no significa que sea seguro."
+            ),
+        }
+
+    def _threat_matches(
+        self, asset_ids: Sequence[int], limit: int, match_ids: Any = None
+    ) -> list[dict[str, Any]]:
+        """Matches de IOCs: lo observado localmente separado de lo que dice la fuente."""
+        stmt = (
+            select(ThreatIntelMatch, ThreatIndicator, ThreatIntelSource, Asset)
+            .join(ThreatIndicator, ThreatIndicator.id == ThreatIntelMatch.indicator_id)
+            .join(ThreatIntelSource, ThreatIntelSource.id == ThreatIndicator.source_id)
+            .join(Asset, Asset.id == ThreatIntelMatch.asset_id)
+            .where(ThreatIntelMatch.status != "dismissed")
+            .order_by(ThreatIntelMatch.last_observed_at.desc(), ThreatIntelMatch.id)
+            .limit(limit)
+        )
+        stmt = (
+            stmt.where(ThreatIntelMatch.id.in_(match_ids))
+            if match_ids is not None
+            else stmt.where(ThreatIntelMatch.asset_id.in_(asset_ids))
+        )
+        result: list[dict[str, Any]] = []
+        for match, indicator, source, owner in self._session.execute(stmt):
+            ref = self._ref(
+                "threat_match",
+                str(match.public_id),
+                f"IOC {indicator.value_normalized} en {owner.display_name}",
+                str(owner.public_id),
+            )
+            if ref is None:
+                break
+            result.append(
+                {
+                    "ref": ref,
+                    "status": match.status,
+                    "observed_locally": {
+                        "observation_type": match.observation_type,
+                        "value": self._text(match.observed_value, 120),
+                        "first_observed_at": match.first_observed_at,
+                        "last_observed_at": match.last_observed_at,
+                        "count": match.observation_count,
+                        "details": self._safe(match.evidence),
+                    },
+                    "external_intelligence": {
+                        "indicator_type": indicator.indicator_type,
+                        "indicator_value": self._text(indicator.value_normalized, 120),
+                        "classification": indicator.classification,
+                        "confidence": indicator.confidence,
+                        "match_confidence": match.match_confidence,
+                        "source": self._text(source.name, 100),
+                        "source_trust": source.trust,
+                        "revoked": indicator.revoked,
+                        "valid_until": indicator.valid_until,
+                        "tags": [self._text(t, 40) for t in (indicator.tags or [])[:5]],
+                    },
+                }
+            )
+        if result:
+            # Recordatorio en los propios datos: la IA debe distinguir ambos bloques.
+            result[0]["note"] = (
+                "observed_locally es evidencia de Sentra; external_intelligence es lo que"
+                " declara una fuente externa y no confirma un compromiso."
+            )
+        return result
 
     def fleet(
         self,

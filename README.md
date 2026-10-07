@@ -117,6 +117,7 @@ Root `.env` (template: `.env.example`, never committed):
 | `SIGMA_DEFAULT_CONFIDENCE`, `RULE_TEST_MAX_HOURS`, `RULE_TEST_MAX_ROWS`, `RULE_TEST_TIMEOUT_SECONDS`, `RULE_TEST_PER_MINUTE` | Reglas personalizadas y Sigma (Fase 5A): confianza inicial de las reglas Sigma importadas (`low`) y límites de la prueba histórica (72 h, 20 000 filas, 10 s, 6 por usuario y minuto). [docs/custom-detection-rules.md](docs/custom-detection-rules.md) |
 | `RISK_*` | Risk Engine (Fase 4I): activado por defecto; umbrales de nivel (`RISK_LEVEL_THRESHOLDS=20,40,60,80`), decay, historial, alerta `risk_critical` y retención. Todas en [docs/risk-engine.md](docs/risk-engine.md) |
 | `VULN_*` | Vulnerabilidades (Fase 5B): evaluación por cola (`VULN_EVAL_INTERVAL_SECONDS=30`, reevaluación completa cada 24 h), evidencia antigua (72 h), capturas sin el componente antes de resolver (2), límites del catálogo (64 MiB, 200 000 registros), lotes de importación y alertas `vulnerability` con cooldown. Todas en [docs/vulnerability-management.md](docs/vulnerability-management.md) |
+| `THREAT_INTEL_*` | Threat Intelligence (Fase 5C): módulo activo (`THREAT_INTEL_ENABLED=true`), descargas por red **apagadas** (`THREAT_INTEL_SYNC_ENABLED=false`), espejos internos solo por `THREAT_INTEL_SOURCE_URLS` y `THREAT_INTEL_ALLOWED_NETWORKS`, límites de descarga (128 MiB, 1 000 000 registros), política de la detección TI-001 (`high_confidence_malicious`) e intervalo del job (60 s). Todas en [docs/threat-intelligence.md](docs/threat-intelligence.md) |
 | `AI_*` | AI Security Insights (Fase 4J): **desactivado por defecto** (`AI_ENABLED=false`); local-first (Fase 4J.1): modelo local OpenAI-compatible como Ollama, llama.cpp o vLLM (`AI_BASE_URL`, `AI_MODEL`, `AI_API_KEY` opcional), LAN solo con `AI_LOCAL_NETWORKS`, externos bloqueados salvo `AI_ALLOW_EXTERNAL=true` y sin fallback cloud, redacción, límites y timeouts. Todas en [docs/ai-security-insights.md](docs/ai-security-insights.md) Gestor de modelos locales (Fase 4J.2): `AI_RUNTIME`, `AI_MODEL_DIRECTORIES`, contexto, margen de memoria y benchmark en [docs/local-model-manager.md](docs/local-model-manager.md) |
 | `TRUSTED_PROXIES` | Proxies (IPs/redes) cuyos `X-Forwarded-For/Proto` se aceptan (Fase 4M; por defecto `127.0.0.1,::1`) |
 | `RATE_LIMIT_BACKEND`, `API_MUTATIONS_PER_USER_PER_MINUTE`, `API_SEARCHES_PER_USER_PER_MINUTE` | Rate limiting compartido en PostgreSQL en producción (`auto`) y límites por usuario del dashboard (120/min) |
@@ -181,6 +182,8 @@ cd backend
 | POST | `/api/v1/sigma/preview`, `/sigma/import` | Vista previa (`rules:test`) e importación Sigma (`rules:manage`; siempre desactivada) ([docs/sigma-support.md](docs/sigma-support.md)) |
 | GET | `/api/v1/vulnerabilities/overview`, `/vulnerabilities/findings?status=&active=&severity=&match_state=&confidence=&exposure=&asset_id=&vulnerability_id=&source=&stale=&q=&sort=&order=&limit=&offset=`, `/findings/{id}` (`/history`, `/audit`), `/vulnerabilities/exposure`, `/vulnerabilities/catalog`, `/assets/{id}/vulnerabilities` | Vulnerabilidades y exposición (Fase 5B, `vulnerabilities:read`): [docs/vulnerability-management.md](docs/vulnerability-management.md) |
 | POST | `/api/v1/vulnerabilities/findings/{id}/acknowledge\|mitigating\|resolve\|incident` (`vulnerabilities:manage`), `/accept-risk\|false-positive\|reopen`, `/vulnerabilities/catalog/preview\|import`, `/vulnerabilities/evaluate` (`vulnerabilities:admin`) | Flujo de trabajo (`version` obligatoria, 409 `vulnerability_conflict`), catálogo local con previsualización y reevaluación |
+| GET | `/api/v1/threat-intel/overview`, `/threat-intel/sources` (`/{id}/syncs`), `/threat-intel/indicators?type=&classification=&confidence=&source_id=&state=&matched=&tag=&q=`, `/indicators/{id}`, `/threat-intel/matches?status=&active=&classification=&observation_type=&asset_id=&source_id=`, `/matches/{id}`, `/vulnerabilities/findings/{id}/threat-intel` | Threat Intelligence (Fase 5C, `threat_intel:read`): KEV/EPSS con procedencia, indicadores y coincidencias con datos locales ([docs/threat-intelligence.md](docs/threat-intelligence.md)) |
+| POST | `/api/v1/threat-intel/matches/{id}/acknowledge\|dismiss\|reopen\|incident` (`threat_intel:triage`), `/threat-intel/sources` (`/{id}/enable\|disable\|archive\|sync`), `/threat-intel/import/preview\|import`, `/threat-intel/reevaluate` (`threat_intel:manage`) | Triage con `version` (409 `threat_intel_conflict`, motivo obligatorio al descartar), fuentes sin URLs desde el navegador, importación con previsualización y sha256 |
 | GET | `/api/v1/risk/overview` | Riesgo (Fase 4I): activos por nivel y confianza, factores principales, transiciones recientes |
 | GET | `/api/v1/risk/assets?level=&confidence=&device_type=&status=&criticality=&min_score=&q=&sort=&order=&limit=&offset=` | Activos por riesgo, el más alto primero |
 | GET | `/api/v1/risk/assets/{asset_id}`, `/history?range=24h\|7d\|30d`, `/contributions?snapshot_id=` | Detalle explicable, tendencia y contribuciones |
@@ -263,6 +266,17 @@ riesgo sin doble conteo, alertas solo en cambios relevantes, incidentes manuales
 lectura. Un puerto abierto nunca es una vulnerabilidad
 ([docs/vulnerability-management.md](docs/vulnerability-management.md),
 [docs/vulnerability-catalog.md](docs/vulnerability-catalog.md)).
+**Threat Intelligence** (Fase 5C, offline-first): CISA KEV y FIRST EPSS enriquecen los
+findings como contexto de explotabilidad ("explotación conocida reportada", "probabilidad de
+explotación EPSS"), con la procedencia de cada dato y las discrepancias entre fuentes lado a
+lado; un admin importa IOCs (`sentra-ioc/1` o un subset seguro de STIX 2.x) con
+previsualización y sha256, y Sentra los busca por coincidencia exacta en inicios de sesión,
+conexiones y activos. Un match es contexto, nunca "equipo comprometido": triage con motivo,
+detección TI-001 solo por política, contribución al riesgo explicada e incidentes manuales.
+Sin fuentes Sentra funciona igual; descargas por red apagadas por defecto y protegidas frente
+a SSRF ([docs/threat-intelligence.md](docs/threat-intelligence.md),
+[docs/threat-intel-sources.md](docs/threat-intel-sources.md),
+[docs/stix-support.md](docs/stix-support.md)).
 **Riesgo** (Fase 4I): cada activo tiene un score 0-100 determinista con nivel y confianza
 separados, calculado a partir de sus detecciones, su exposición, su criticidad y su tipo, con
 contribuciones explicables, historial de cambios y tendencia; página Riesgo y sección Riesgo

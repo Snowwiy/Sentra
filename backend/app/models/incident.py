@@ -386,6 +386,64 @@ class IncidentVulnerability(Base):
     attached_by_user_id: Mapped[int | None] = mapped_column(
         ForeignKey("users.id", ondelete="SET NULL")
     )
+    # Fase 5C: inteligencia de explotabilidad (KEV/EPSS) del CVE al adjuntarlo y al resolver
+    # el caso. Copia mínima: la inteligencia cambia cada día y el caso debe poder explicar
+    # qué se sabía entonces. Nunca el feed completo.
+    intel_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    resolved_intel_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+
+
+class IncidentThreatMatch(Base):
+    """Match de inteligencia de amenazas vinculado a un caso (Fase 5C).
+
+    Igual que detecciones y vulnerabilidades: referencia + snapshot mínimo del indicador, la
+    fuente y la observación local. SET NULL si el match desaparece (borrado del activo).
+    """
+
+    __tablename__ = "incident_threat_matches"
+    __table_args__ = (
+        Index(
+            "uq_incident_threat_matches_match",
+            "incident_id",
+            "match_id",
+            unique=True,
+            postgresql_where=text("match_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_incident_threat_matches_match",
+            "match_id",
+            postgresql_where=text("match_id IS NOT NULL"),
+        ),
+        Index(
+            "ix_incident_threat_matches_attached_by",
+            "attached_by_user_id",
+            postgresql_where=text("attached_by_user_id IS NOT NULL"),
+        ),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    incident_id: Mapped[int] = mapped_column(ForeignKey("incidents.id", ondelete="CASCADE"))
+    match_id: Mapped[int | None] = mapped_column(
+        ForeignKey("threat_intel_matches.id", ondelete="SET NULL")
+    )
+    match_public_id: Mapped[uuid.UUID] = mapped_column(Uuid)
+    indicator_type: Mapped[str] = mapped_column(String(16))
+    indicator_value: Mapped[str] = mapped_column(String(1024))
+    classification: Mapped[str] = mapped_column(String(16))
+    confidence: Mapped[str] = mapped_column(String(8))
+    source_name: Mapped[str] = mapped_column(String(200))
+    source_trust: Mapped[str] = mapped_column(String(16))
+    observation_type: Mapped[str] = mapped_column(String(24))
+    observed_value: Mapped[str] = mapped_column(String(1024))
+    asset_name: Mapped[str] = mapped_column(String(255))
+    # Inteligencia relevante al vincular (fuente, fechas, validez, etiquetas), acotada.
+    intel_snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # threat_match (caso creado o vínculo desde el match) o merge.
+    source: Mapped[str] = mapped_column(String(16))
+    attached_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    attached_by_user_id: Mapped[int | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL")
+    )
 
 
 class IncidentNote(Base):

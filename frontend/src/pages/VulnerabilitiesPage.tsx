@@ -20,6 +20,7 @@ import {
   PriorityBadge,
   VulnSeverityBadge,
 } from "../components/vulnerabilities/VulnBadges";
+import { EpssBadge, KevBadge } from "../components/threatintel/IntelBadges";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import type { SortState } from "../lib/listing";
 import { useDebounced } from "../lib/useDebounced";
@@ -49,9 +50,22 @@ interface Filters {
   confidence: string;
   exposure: string;
   stale: string;
+  /** Fase 5C: "true" = solo explotación conocida reportada (KEV). */
+  kev: string;
+  /** Fase 5C: EPSS mínimo ("0.1", "0.5"). */
+  epss: string;
 }
 
-const DEFAULT_FILTERS: Filters = { status: "active", severity: "", match: "", confidence: "", exposure: "", stale: "" };
+const DEFAULT_FILTERS: Filters = {
+  status: "active",
+  severity: "",
+  match: "",
+  confidence: "",
+  exposure: "",
+  stale: "",
+  kev: "",
+  epss: "",
+};
 
 type CardKey = "confirmed" | "probable" | "potential" | "unknown" | "accepted" | "stale";
 
@@ -87,8 +101,12 @@ function sameFilters(a: Filters, b: Filters): boolean {
 export function VulnerabilitiesPage() {
   const auth = useAuth();
   const navigate = useNavigate();
-  const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [params] = useSearchParams();
+  // ?kev=1 permite enlazar desde el resumen de inteligencia.
+  const [filters, setFilters] = useState<Filters>(() => ({
+    ...DEFAULT_FILTERS,
+    kev: params.get("kev") === "1" ? "true" : "",
+  }));
   // ?q= permite enlazar desde el catálogo (findings de un CVE).
   const [query, setQuery] = useState(() => params.get("q") ?? "");
   const [sort, setSort] = useState<SortState<FindingSort>>({ key: "priority", dir: "desc" });
@@ -109,6 +127,8 @@ export function VulnerabilitiesPage() {
           confidence: (filters.confidence || undefined) as MatchConfidence | undefined,
           exposure: (filters.exposure || undefined) as ExposureState | undefined,
           stale: (filters.stale || undefined) as "true" | "false" | undefined,
+          kev: filters.kev === "true" || undefined,
+          epssMin: filters.epss ? Number(filters.epss) : undefined,
           q,
           sort: sort.key,
           order: sort.dir,
@@ -241,6 +261,27 @@ export function VulnerabilitiesPage() {
             ]}
             onChange={setFilter("stale")}
           />
+          {auth.can("threat_intel:read") && (
+            <>
+              <FilterSelect
+                label="Explotación conocida (KEV)"
+                value={filters.kev}
+                options={[{ value: "true", label: "Solo KEV" }]}
+                onChange={setFilter("kev")}
+                allLabel="Todas"
+              />
+              <FilterSelect
+                label="EPSS"
+                value={filters.epss}
+                options={[
+                  { value: "0.5", label: "Alta (≥ 50 %)" },
+                  { value: "0.1", label: "Elevada o alta (≥ 10 %)" },
+                ]}
+                onChange={setFilter("epss")}
+                allLabel="Cualquiera"
+              />
+            </>
+          )}
           <SearchInput
             value={query}
             onChange={(value) => {
@@ -303,6 +344,12 @@ export function VulnerabilitiesPage() {
                           {f.vulnerability_id}
                         </Link>
                         <div className="muted small">{f.title}</div>
+                        {(f.known_exploited || f.epss_score != null) && (
+                          <div className="detection-badges">
+                            {f.known_exploited && <KevBadge stale={f.intel_stale} />}
+                            <EpssBadge score={f.epss_score} />
+                          </div>
+                        )}
                       </td>
                       <td>
                         <VulnSeverityBadge severity={f.severity} />

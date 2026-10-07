@@ -185,7 +185,8 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
     assert set(body["permissions"]) == {
         "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
         "incidents:read", "incidents:manage", "rules:read", "rules:test",
-        "vulnerabilities:read", "vulnerabilities:manage",
+        "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
+        "threat_intel:triage",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -454,10 +455,11 @@ def test_last_admin_guard_in_the_service(db: Session) -> None:
 def test_role_permissions_are_least_privilege() -> None:
     # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer;
     # incidents:read (Fase 4K) solo lectura de casos; rules:read (Fase 5A) solo el catálogo;
-    # vulnerabilities:read (Fase 5B) solo findings, exposición y catálogo.
+    # vulnerabilities:read (Fase 5B) solo findings, exposición y catálogo; threat_intel:read
+    # (Fase 5C) solo fuentes, indicadores y coincidencias.
     reads = {
         Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
-        Permission.RULES_READ, Permission.VULNERABILITIES_READ,
+        Permission.RULES_READ, Permission.VULNERABILITIES_READ, Permission.THREAT_INTEL_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -467,7 +469,10 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.DISCOVERY_RUN, Permission.AI_USE, Permission.INCIDENTS_READ,
         Permission.INCIDENTS_MANAGE, Permission.RULES_READ, Permission.RULES_TEST,
         Permission.VULNERABILITIES_READ, Permission.VULNERABILITIES_MANAGE,
+        Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
     }  # fmt: skip
+    # Fuentes, importación de IOCs y reevaluación (threat_intel:manage): solo admin (Fase 5C).
+    assert Permission.THREAT_INTEL_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Crear, editar, activar e importar reglas (rules:manage) es solo de admin (Fase 5A).
     assert Permission.RULES_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Riesgo aceptado, falso positivo, catálogo y reevaluación: solo admin (Fase 5B).
@@ -596,9 +601,11 @@ def _api_routes(client: TestClient) -> list[tuple[str, str]]:
 def _concrete(path: str) -> str:
     for name in (
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
-        "model_id", "benchmark_id", "incident_id", "finding_id",
+        "model_id", "benchmark_id", "incident_id", "finding_id", "indicator_id", "match_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
+    # Fase 5C: fuentes de inteligencia por id numérico.
+    path = path.replace("{source_id}", "999999")
     # Fase 5A: reglas por identificador estable y versión numérica.
     path = path.replace("{rule_id}", "SENTRA-CUSTOM-999999").replace("{version}", "1")
     assert "{" not in path, path

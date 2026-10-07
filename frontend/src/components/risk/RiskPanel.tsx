@@ -21,8 +21,15 @@ import { ErrorState, LoadingState } from "../StateViews";
 import { CriticalityBadge, RiskBadge, RiskConfidenceBadge } from "./RiskBadges";
 import { RiskTrend } from "./RiskTrend";
 
-/** Enlace de una contribución a su origen: detección, exposición del activo o nada. */
+/** Enlace de una contribución a su origen: detección, finding, coincidencia de inteligencia,
+ * exposición del activo o nada. */
 function ContributionTarget({ item, assetId }: { item: RiskContribution; assetId: string }) {
+  if (item.threat_match_id) {
+    return <Link to={`/threat-intel/matches/${item.threat_match_id}`}>{item.label}</Link>;
+  }
+  if (item.finding_id) {
+    return <Link to={`/vulnerabilities/${item.finding_id}`}>{item.label}</Link>;
+  }
   if (item.detection_id) {
     return <Link to={`/detections/${item.detection_id}`}>{item.label}</Link>;
   }

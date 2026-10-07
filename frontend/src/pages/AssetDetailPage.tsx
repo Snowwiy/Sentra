@@ -19,6 +19,7 @@ import { SoftwareTab } from "../components/asset/SoftwareTab";
 import { UsersTab } from "../components/asset/UsersTab";
 import { countBySoftware, VulnerabilitiesTab } from "../components/asset/VulnerabilitiesTab";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { MatchesTable } from "../components/threatintel/MatchesTable";
 import { MethodBadge } from "../components/NetworkBadges";
 import { StatusBadge } from "../components/StatusBadge";
 import { config } from "../config";
@@ -38,6 +39,7 @@ const TABS = [
   { key: "events", label: "Events" },
   { key: "exposure", label: "Exposure" },
   { key: "vulnerabilities", label: "Vulnerabilidades" },
+  { key: "intel", label: "Inteligencia" },
   { key: "alerts", label: "Alerts" },
 ] as const;
 
@@ -46,7 +48,9 @@ type Tab = (typeof TABS)[number]["key"];
 // Without an agent only what the network shows exists: no inventory, telemetry or events.
 // Fase 5B: la pestaña de vulnerabilidades también aparece sin agente (explica por qué no hay
 // evaluación) pero solo con vulnerabilities:read.
-const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "alerts"];
+// Fase 5C: "Inteligencia" (coincidencias de IOCs) también sin agente: la IP o el nombre del
+// activo pueden coincidir con un indicador.
+const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "intel", "alerts"];
 
 // Tabs fed by the inventory snapshot (sent every 15 min): polled only while one is visible.
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
@@ -81,7 +85,7 @@ export function AssetDetailPage() {
     !asset && error instanceof ApiError && (error.status === 404 || error.status === 422);
   const managed = asset ? asset.monitoring_method === "agent" : true;
   const tabs = (managed ? TABS : TABS.filter((t) => NETWORK_TABS.includes(t.key))).filter(
-    (t) => t.key !== "vulnerabilities" || canVulns,
+    (t) => (t.key !== "vulnerabilities" || canVulns) && (t.key !== "intel" || auth.can("threat_intel:read")),
   );
   const tab: Tab = tabs.some((t) => t.key === requested) ? requested : "overview";
 
@@ -252,6 +256,15 @@ export function AssetDetailPage() {
         {tab === "risk" && <RiskPanel assetId={asset.asset_id} />}
         {tab === "context" && <ContextTab assetId={asset.asset_id} />}
         {tab === "vulnerabilities" && <VulnerabilitiesTab assetId={asset.asset_id} />}
+        {tab === "intel" && (
+          <div className="stack">
+            <p className="muted small">
+              Datos de este activo que coinciden con indicadores de inteligencia. Una coincidencia no confirma un
+              compromiso: requiere análisis.
+            </p>
+            <MatchesTable assetId={asset.asset_id} />
+          </div>
+        )}
         {tab === "alerts" && <AlertsView assetId={asset.asset_id} />}
       </div>
     </div>

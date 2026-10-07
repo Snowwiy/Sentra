@@ -32,6 +32,8 @@ DirtyReason = Literal[
     "manual",
     "refresh",
     "merge",
+    # Fase 5C: cambió la inteligencia (KEV/EPSS) de algún CVE del activo: solo prioridad.
+    "threat_intel",
 ]
 
 

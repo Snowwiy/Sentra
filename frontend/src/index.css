@@ -2096,3 +2096,31 @@ td > .badge:first-child {
   padding-left: 18px;
   word-break: break-all;
 }
+
+/* --- Fase 5C: Threat Intelligence ------------------------------------------------------- */
+
+.vstatus--dismissed {
+  color: var(--text-muted);
+  font-weight: 400;
+}
+
+.badge--muted {
+  opacity: 0.7;
+}
+
+/* Nivel de confianza de la fuente: oficial y de confianza destacan; comunidad y local no. */
+.tibadge {
+  display: inline-block;
+  padding: 0 6px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.tibadge--trust-official,
+.tibadge--trust-trusted {
+  color: var(--accent);
+  border-color: var(--accent);
+}

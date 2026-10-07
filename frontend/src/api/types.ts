@@ -840,7 +840,10 @@ export type Permission =
   | "rules:manage"
   | "vulnerabilities:read"
   | "vulnerabilities:manage"
-  | "vulnerabilities:admin";
+  | "vulnerabilities:admin"
+  | "threat_intel:read"
+  | "threat_intel:triage"
+  | "threat_intel:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -1313,6 +1316,8 @@ export interface RiskContribution {
   port: number | null;
   /** Fase 5B: finding de vulnerabilidad que aporta esta contribución. */
   finding_id?: string | null;
+  /** Fase 5C: match de inteligencia de amenazas que aporta esta contribución. */
+  threat_match_id?: string | null;
   details: Record<string, unknown>;
 }
 
@@ -1964,6 +1969,29 @@ export interface IncidentDetail extends IncidentSummary {
   /** Fase 5B: findings de vulnerabilidad del caso. */
   vulnerabilities: IncidentVulnerabilityRef[];
   vulnerabilities_total: number;
+  /** Fase 5C: matches de inteligencia de amenazas del caso. */
+  threat_matches?: IncidentThreatMatchRef[];
+  threat_matches_total?: number;
+}
+
+/** Match de inteligencia de un incidente: snapshot al vincularlo + estado actual. */
+export interface IncidentThreatMatchRef {
+  match_id: string;
+  indicator_type: string;
+  indicator_value: string;
+  classification: string;
+  confidence: string;
+  source_name: string;
+  source_trust: string;
+  observation_type: string;
+  observed_value: string;
+  status: string | null;
+  available: boolean;
+  asset_id: string | null;
+  hostname: string | null;
+  source: string;
+  attached_at: string;
+  intel_snapshot?: Record<string, unknown> | null;
 }
 
 /** Finding de vulnerabilidad de un incidente: snapshot mínimo + estado actual. */
@@ -1981,6 +2009,9 @@ export interface IncidentVulnerabilityRef {
   hostname: string | null;
   source: string;
   attached_at: string;
+  /** Fase 5C: inteligencia (KEV/EPSS) al vincularlo y al resolver el caso. */
+  intel_snapshot?: Record<string, unknown> | null;
+  resolved_intel_snapshot?: Record<string, unknown> | null;
 }
 
 export interface IncidentNote {
@@ -2152,6 +2183,15 @@ export interface FindingSummary {
   /** La evidencia (inventario) es antigua: el activo puede estar offline. */
   stale: boolean;
   version: number;
+  /** Fase 5C: CVE con el que se busca la inteligencia (null: el registro no tiene CVE). */
+  intel_cve?: string | null;
+  /** Explotación conocida reportada (CISA KEV) en algún sitio; nunca "explotado aquí". */
+  known_exploited?: boolean;
+  /** Probabilidad de explotación EPSS (0-1): modelo estadístico, no % de vulnerabilidad. */
+  epss_score?: number | null;
+  epss_percentile?: number | null;
+  /** La inteligencia que aporta viene de una fuente caducada. */
+  intel_stale?: boolean;
 }
 
 export interface FindingList {
@@ -2409,4 +2449,275 @@ export interface ExposureItem {
 export interface ExposureOverview {
   items: ExposureItem[];
   total: number;
+}
+
+// --- Fase 5C: Threat Intelligence ---------------------------------------------------------------
+
+export type IntelTrust = "official" | "trusted" | "community" | "local";
+export type IntelSourceState = "fresh" | "stale" | "never_synced" | "disabled" | "archived";
+export type IndicatorClassification = "malicious" | "suspicious" | "benign" | "unknown";
+export type IntelConfidence = "low" | "medium" | "high";
+export type ThreatMatchStatus = "open" | "acknowledged" | "dismissed";
+export type ObservationType = "auth_source_ip" | "connection_remote_ip" | "asset_address" | "asset_name";
+
+export interface ThreatSource {
+  id: number;
+  source_key: string;
+  name: string;
+  description: string | null;
+  provider: string;
+  provider_title: string;
+  category: string;
+  trust: IntelTrust;
+  enabled: boolean;
+  archived: boolean;
+  network_required: boolean;
+  capabilities: string[];
+  sync_interval_hours: number | null;
+  stale_after_hours: number | null;
+  /** Último intento: never | ok | error | unavailable | syncing. */
+  status: string;
+  state: IntelSourceState;
+  last_attempt_at: string | null;
+  last_success_at: string | null;
+  last_error: string | null;
+  last_error_message: string | null;
+  record_count: number;
+  next_sync_at: string | null;
+  sync_requested_at: string | null;
+  /** Solo el host de descarga: la URL completa nunca sale del servidor. */
+  download_host: string | null;
+  reference_url: string | null;
+  revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ThreatSourceList {
+  items: ThreatSource[];
+  sync_enabled: boolean;
+  detection_policy: string;
+}
+
+export interface ThreatSync {
+  id: number;
+  kind: string;
+  trigger: string;
+  status: string;
+  actor: string;
+  started_at: string;
+  finished_at: string | null;
+  duration_ms: number | null;
+  records_seen: number;
+  records_new: number;
+  records_updated: number;
+  records_unchanged: number;
+  records_removed: number;
+  records_invalid: number;
+  content_sha256: string | null;
+  error_code: string | null;
+  error_message: string | null;
+}
+
+export interface ThreatSyncList {
+  items: ThreatSync[];
+  total: number;
+}
+
+export interface ThreatChange {
+  occurred_at: string;
+  source_name: string;
+  record_kind: string;
+  change: string;
+  cve_id: string | null;
+  indicator_id: string | null;
+  indicator_value: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface ThreatIntelOverview {
+  status: "none_configured" | "ok" | "degraded";
+  sources_total: number;
+  sources_enabled: number;
+  sources_stale: number;
+  sources_failing: number;
+  sync_enabled: boolean;
+  detection_policy: string;
+  last_success_at: string | null;
+  kev_findings: number;
+  kev_assets: number;
+  high_epss_findings: number;
+  indicators_total: number;
+  indicators_active: number;
+  active_matches: number;
+  malicious_matches: number;
+  matched_assets: number;
+  recent_changes: ThreatChange[];
+}
+
+export interface IndicatorSourceRef {
+  id: number;
+  name: string;
+  trust: IntelTrust;
+  state: IntelSourceState;
+}
+
+export interface IndicatorSummary {
+  indicator_id: string;
+  indicator_type: string;
+  value: string;
+  classification: IndicatorClassification;
+  confidence: IntelConfidence;
+  confidence_score: number | null;
+  state: "active" | "revoked" | "expired" | "not_yet_valid";
+  valid_from: string | null;
+  valid_until: string | null;
+  /** supported | partial | unsupported: si la telemetría de Sentra puede casarlo. */
+  matching: "supported" | "partial" | "unsupported";
+  match_count: number;
+  last_matched_at: string | null;
+  tags: string[];
+  source: IndicatorSourceRef;
+  retrieved_at: string;
+}
+
+export interface IndicatorList {
+  items: IndicatorSummary[];
+  total: number;
+}
+
+export interface IndicatorDetail extends IndicatorSummary {
+  value_original: string;
+  description: string | null;
+  references: string[];
+  related: Record<string, unknown>[];
+  external_id: string | null;
+  pattern: string | null;
+  first_seen_external: string | null;
+  last_seen_external: string | null;
+  matching_reason: string | null;
+  other_sources: Record<string, unknown>[];
+  conflicting: boolean;
+  matches: ThreatMatchSummary[];
+  changes: ThreatChange[];
+}
+
+export interface ThreatMatchSummary {
+  match_id: string;
+  asset: { asset_id: string; name: string; primary_ip: string };
+  indicator_id: string;
+  indicator_type: string;
+  indicator_value: string;
+  source_name: string;
+  source_trust: IntelTrust;
+  classification: IndicatorClassification;
+  match_confidence: IntelConfidence;
+  observation_type: ObservationType;
+  observed_value: string;
+  first_observed_at: string;
+  last_observed_at: string;
+  observation_count: number;
+  status: ThreatMatchStatus;
+  detection_id: string | null;
+  version: number;
+}
+
+export interface ThreatMatchList {
+  items: ThreatMatchSummary[];
+  total: number;
+}
+
+export interface ThreatMatchDetail extends ThreatMatchSummary {
+  observed_field: string;
+  event_id: string | null;
+  evidence: Record<string, unknown>;
+  indicator_confidence: IntelConfidence;
+  indicator_state: string;
+  status_reason: string | null;
+  status_changed_at: string;
+  status_changed_by: string;
+  matched_at: string;
+  incidents: { incident_id: string; key: string; title: string; status: string }[];
+  actions: string[];
+}
+
+export interface ThreatInvalidRecord {
+  index: number;
+  reference: string | null;
+  code: string;
+  message: string;
+}
+
+export interface ThreatImportPreview {
+  source_key: string;
+  format: string;
+  sha256: string;
+  size_bytes: number;
+  source_version: string | null;
+  total: number;
+  valid: number;
+  new: number;
+  updated: number;
+  unchanged: number;
+  invalid: number;
+  invalid_records: ThreatInvalidRecord[];
+  unsupported: Record<string, number>;
+  by_type: Record<string, number>;
+  not_matchable: number;
+}
+
+export interface ThreatImportResult {
+  source_key: string;
+  sha256: string;
+  new: number;
+  updated: number;
+  unchanged: number;
+  invalid: number;
+  pending_match: number;
+}
+
+export interface IntelSourceRef {
+  source_id: number;
+  name: string;
+  trust: IntelTrust;
+  state: IntelSourceState;
+  last_success_at: string | null;
+}
+
+export interface KevIntel {
+  source: IntelSourceRef;
+  date_added: string | null;
+  due_date: string | null;
+  required_action: string | null;
+  /** "known", "unknown" o el texto de CISA. "unknown" no significa "no". */
+  known_ransomware_use: string;
+  vendor_project: string | null;
+  product: string | null;
+  vulnerability_name: string | null;
+  notes: string | null;
+  retrieved_at: string;
+  active: boolean;
+  removed_at: string | null;
+}
+
+export interface EpssIntel {
+  source: IntelSourceRef;
+  score: number;
+  percentile: number | null;
+  band: string;
+  model_version: string | null;
+  score_date: string | null;
+  retrieved_at: string;
+  previous: Record<string, unknown> | null;
+}
+
+export interface FindingThreatIntel {
+  finding_id: string;
+  cve: string | null;
+  status: "no_cve" | "none_configured" | "no_data" | "available";
+  kev: KevIntel[];
+  epss: EpssIntel[];
+  conflicting: boolean;
+  changes: { occurred_at: string; source_name: string; change: string; details: Record<string, unknown> | null }[];
+  priority_factors: Record<string, unknown>[];
 }

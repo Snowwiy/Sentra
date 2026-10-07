@@ -120,6 +120,26 @@ job (`RISK_EVAL_INTERVAL_SECONDS=2` lo acelera).
 backend\.venv\Scripts\python.exe qa\e2e_vulnerabilities.py
 ```
 
+Fase 5C (`qa/e2e_threat_intel.py`, mismo entorno): cinco escenarios con IPs aleatorias de
+198.18.0.0/15 (RFC 2544) por ejecución. (1) Fuentes: las tres sembradas, solo el host de
+descarga, una URL desde el navegador 422, sincronizar sin `THREAT_INTEL_SYNC_ENABLED` 422
+`threat_intel_sync_disabled`, readiness independiente. (2) Importación de IOCs: previsualizar
+no escribe, otra huella 409 `threat_intel_changed`, inválidos sin `skip_invalid` 422, STIX
+muy anidado 422, patrón STIX complejo como "unsupported", analyst y viewer 403. (3) Matching:
+un 4625 y una conexión establecida contra IOCs maliciosos → coincidencias con evidencia y
+TI-001 enlazada (según `THREAT_INTEL_DETECTION_POLICY`). (4) Triage: viewer 403, versión
+vieja 409, descartar sin motivo 422, incidente manual nunca con confianza alta, contribución
+en el riesgo. (5) KEV/EPSS offline: con `SENTRA_QA_BACKEND_DIR` crea fuentes propias
+`qa-kev-…`/`qa-epss-…`, las importa con la CLI (no toca `cisa-kev` ni `first-epss`) y
+comprueba la procedencia en el finding; sin la variable, SKIP. Arranca la API QA con
+`THREAT_INTEL_EVAL_INTERVAL_SECONDS=10` (el matching es un job; el script espera hasta
+`SENTRA_QA_TI_TIMEOUT`, 180 s). No descarga nada de Internet.
+
+```powershell
+$env:SENTRA_QA_BACKEND_DIR = "$PWD\backend"   # opcional: escenario 5
+backend\.venv\Scripts\python.exe qa\e2e_threat_intel.py
+```
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell
@@ -191,6 +211,22 @@ sin cambios (activos/s) y las lecturas de la UI (resumen, listado con filtros, o
 búsqueda, findings de un activo y exposición) con sentencias SQL por petición. Borra lo que
 crea. Ejecútalo con la API QA parada. Resultados de referencia en
 [docs/vulnerability-management.md](../docs/vulnerability-management.md).
+
+### Rendimiento de Threat Intelligence
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_threat_intel.py   # --indicators 100000 --epss 300000
+```
+
+Con datos sintéticos (KEV de 2 000 entradas, EPSS de 300 000 filas en gzip, 100 000 IOCs,
+2 000 activos con conexiones y 50 000 eventos 4625) mide la importación de feeds por la ruta
+de la CLI (también la reimportación idéntica y la del "día siguiente"), la previsualización y
+la importación de IOCs, el matching retroactivo e incremental y las lecturas de la UI con
+sentencias SQL por petición. Borra lo que crea (prefijo `perf-ti-`). Ejecútalo con la API QA
+parada. Resultados de referencia en
+[docs/threat-intelligence.md](../docs/threat-intelligence.md).
 
 ### Fase 4M: producción y dashboard paginado
 

@@ -6,7 +6,11 @@ qué corregir primero combinando, de forma explicable y acotada:
    del CVSS que trae la fuente; Sentra nunca calcula un CVSS propio);
 2. evidencia del match: confirmed pesa entero; probable, potencial y desconocido menos;
 3. exposición del servicio afectado (observado desde el sensor, Internet confirmada);
-4. contexto del activo: criticidad, entorno de producción y datos sensibles (4I/4L).
+4. contexto del activo: criticidad, entorno de producción y datos sensibles (4I/4L);
+5. (Fase 5C, FORMULA_VERSION 2) inteligencia de explotabilidad del CVE: explotación conocida
+   reportada (CISA KEV) y probabilidad de explotación EPSS. Es contexto EXTERNO: solo modula
+   un finding con evidencia (igual que la exposición), está acotado (EXPLOIT_CAP) y nunca
+   cambia match_state ni la lógica de versiones. Con la fuente caducada cuenta la mitad.
 
 El desglose (factors) suma exactamente la puntuación antes de recortar a 0-100.
 """
@@ -17,8 +21,9 @@ from typing import Any
 
 from app.models.asset import AssetCriticality
 from app.models.asset_context import AssetEnvironment, DataSensitivity
+from app.threat_intel.epss import band as epss_band
 
-FORMULA_VERSION = 1
+FORMULA_VERSION = 2
 
 SEVERITY_POINTS: Mapping[str, float] = {
     "informational": 2.0,
@@ -59,6 +64,13 @@ CRITICALITY_POINTS: Mapping[AssetCriticality, float] = {
     AssetCriticality.HIGH: 8.0,
     AssetCriticality.CRITICAL: 14.0,
 }
+# Fase 5C. KEV pesa más que EPSS: es explotación observada y reportada por una fuente
+# oficial; EPSS es una predicción. Juntos nunca superan EXPLOIT_CAP (antes del factor de
+# evidencia): una vulnerabilidad media en KEV no adelanta a una crítica confirmada expuesta.
+KEV_POINTS = 10.0
+EPSS_POINTS: Mapping[str, float] = {"high": 6.0, "elevated": 3.0}
+EXPLOIT_CAP = 14.0
+STALE_INTEL_FACTOR = 0.5
 PRODUCTION_POINTS = 4.0
 SENSITIVE_DATA_POINTS = 4.0
 # Límites inferiores de low, medium, high y critical (mismos cortes que el riesgo 4I).
@@ -73,6 +85,10 @@ class PriorityInputs:
     criticality: AssetCriticality = AssetCriticality.MEDIUM
     environment: AssetEnvironment = AssetEnvironment.UNKNOWN
     data_sensitivity: DataSensitivity = DataSensitivity.UNKNOWN
+    # Fase 5C (app/threat_intel/lookup.py).
+    known_exploited: bool = False
+    epss_score: float | None = None
+    intel_stale: bool = False
 
 
 @dataclass(frozen=True)
@@ -87,6 +103,41 @@ def level_for(score: int) -> str:
         if score >= threshold:
             return level
     return "informational"
+
+
+def _exploitation(
+    inputs: PriorityInputs, match_factor: float, factors: list[dict[str, Any]]
+) -> float:
+    """Puntos por inteligencia de explotabilidad (añade sus factores a la explicación)."""
+    weight = max(match_factor, 0.45) * (STALE_INTEL_FACTOR if inputs.intel_stale else 1.0)
+    stale = " (inteligencia desactualizada)" if inputs.intel_stale else ""
+    budget = EXPLOIT_CAP * weight
+    total = 0.0
+    if inputs.known_exploited:
+        points = min(KEV_POINTS * weight, budget)
+        factors.append(
+            {
+                "factor": "known_exploited",
+                "label": f"Explotación conocida reportada (CISA KEV){stale}",
+                "points": round(points, 2),
+            }
+        )
+        total += points
+    level = epss_band(inputs.epss_score)
+    if level in EPSS_POINTS and inputs.epss_score is not None:
+        points = min(EPSS_POINTS[level] * weight, budget - total)
+        if points > 0:
+            label = "alta" if level == "high" else "elevada"
+            percent = f"{inputs.epss_score * 100:.1f}".replace(".", ",")
+            factors.append(
+                {
+                    "factor": "epss",
+                    "label": f"Probabilidad de explotación EPSS {label} ({percent} %){stale}",
+                    "points": round(points, 2),
+                }
+            )
+            total += points
+    return total
 
 
 def calculate(inputs: PriorityInputs) -> Priority:
@@ -123,6 +174,8 @@ def calculate(inputs: PriorityInputs) -> Priority:
                 }
             )
             total += exposure
+        exploitation = _exploitation(inputs, match_factor, factors)
+        total += exploitation
         criticality = CRITICALITY_POINTS[inputs.criticality]
         if criticality:
             factors.append(

@@ -44,6 +44,7 @@ from app.models.incident import (
     IncidentDetection,
     IncidentFeedback,
     IncidentNote,
+    IncidentThreatMatch,
     IncidentVulnerability,
 )
 from app.models.inventory import AssetInventory
@@ -57,6 +58,15 @@ from app.models.risk import (
     RiskSnapshot,
 )
 from app.models.telemetry import TelemetrySample
+from app.models.threat_intel import (
+    ThreatIndicator,
+    ThreatIntelChange,
+    ThreatIntelCursor,
+    ThreatIntelMatch,
+    ThreatIntelSource,
+    ThreatIntelSync,
+    VulnerabilityIntel,
+)
 from app.models.user import User, UserSession
 from app.models.vulnerability import (
     AssetVulnerabilityState,
@@ -120,6 +130,7 @@ __all__ = [
     "IncidentDetection",
     "IncidentFeedback",
     "IncidentNote",
+    "IncidentThreatMatch",
     "IncidentVulnerability",
     "MonitoringMethod",
     "NetworkZone",
@@ -133,11 +144,18 @@ __all__ = [
     "RuleStatus",
     "SystemEvent",
     "TelemetrySample",
+    "ThreatIndicator",
+    "ThreatIntelChange",
+    "ThreatIntelCursor",
+    "ThreatIntelMatch",
+    "ThreatIntelSource",
+    "ThreatIntelSync",
     "User",
     "UserSession",
     "Vulnerability",
     "VulnerabilityAffected",
     "VulnerabilityFinding",
     "VulnerabilityFindingHistory",
+    "VulnerabilityIntel",
     "VulnerabilitySource",
 ]

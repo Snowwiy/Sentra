@@ -48,6 +48,10 @@ class MetricsRegistry:
         # resolved...). Nunca por CVE ni por activo: la cardinalidad sería ilimitada.
         self._vulns: dict[str, int] = defaultdict(int)
         self._vuln_seconds = 0.0
+        # Fase 5C: sincronizaciones por ADAPTER (cisa_kev, first_epss...) y resultado, y
+        # matches por resultado. Nunca por IOC, CVE o fuente concreta (cardinalidad).
+        self._intel_syncs: dict[tuple[str, str], list[float]] = {}
+        self._intel_matches: dict[str, int] = defaultdict(int)
 
     def observe_request(self, method: str, route: str, status: int, seconds: float) -> None:
         status_class = f"{status // 100}xx"
@@ -81,6 +85,18 @@ class MetricsRegistry:
             for outcome, count in totals.items():
                 self._vulns[outcome] += count
             self._vuln_seconds += seconds
+
+    def observe_threat_sync(self, provider: str, result: str, seconds: float, records: int) -> None:
+        with self._lock:
+            totals = self._intel_syncs.setdefault((provider, result), [0, 0, 0.0])
+            totals[0] += 1
+            totals[1] += records
+            totals[2] += seconds
+
+    def observe_threat_matches(self, totals: dict[str, int]) -> None:
+        with self._lock:
+            for outcome, count in totals.items():
+                self._intel_matches[outcome] += count
 
     def rate_limited(self, scope: str) -> None:
         with self._lock:
@@ -172,6 +188,30 @@ class MetricsRegistry:
                 "# TYPE sentra_vulnerability_evaluation_seconds_total counter",
                 f"sentra_vulnerability_evaluation_seconds_total {self._vuln_seconds:.6f}",
             ]
+            for index, (name, help_text) in enumerate(
+                (
+                    ("sentra_threat_intel_syncs_total", "Sincronizaciones de inteligencia."),
+                    ("sentra_threat_intel_sync_records_total", "Registros procesados."),
+                    ("sentra_threat_intel_sync_seconds_total", "Tiempo total sincronizando."),
+                )
+            ):
+                lines += [
+                    f"# HELP {name} {help_text} Por adapter y resultado.",
+                    f"# TYPE {name} counter",
+                ]
+                for (provider, result), totals in sorted(self._intel_syncs.items()):
+                    value = totals[index]
+                    shown = f"{value:.6f}" if index == 2 else f"{int(value)}"
+                    labels = _labels((("provider", provider), ("result", result)))
+                    lines.append(f"{name}{labels} {shown}")
+            lines += [
+                "# HELP sentra_threat_intel_matches_total Matches de inteligencia con datos"
+                " locales por resultado (created, updated).",
+                "# TYPE sentra_threat_intel_matches_total counter",
+            ]
+            for outcome, count in sorted(self._intel_matches.items()):
+                labels = _labels((("outcome", outcome),))
+                lines.append(f"sentra_threat_intel_matches_total{labels} {count}")
         return lines
 
 

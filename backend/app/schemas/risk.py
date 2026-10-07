@@ -37,6 +37,8 @@ class RiskContributionRead(ResponseModel):
     port: int | None
     # Fase 5B: finding de vulnerabilidad (/vulnerabilities/findings/{id}).
     finding_id: UUID | None = None
+    # Fase 5C: match de inteligencia de amenazas (/threat-intel/matches/{id}).
+    threat_match_id: UUID | None = None
     # Factores aplicados (recency_factor, status_factor, position_factor), severidad,
     # confianza, estado y, si se agrupó, absorbed / absorbed_by.
     details: dict[str, Any]

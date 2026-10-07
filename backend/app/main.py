@@ -29,6 +29,7 @@ from app.services.background import (
     purge_old_data,
     run_detection_engine,
     run_risk_engine,
+    run_threat_intel,
     run_vulnerability_engine,
     sweep_offline_assets,
 )
@@ -88,6 +89,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "vulnerability-engine",
                     settings.vuln_eval_interval_seconds,
                     run_vulnerability_engine,
+                )
+            )
+        # Fase 5C: sincronización (solo con THREAT_INTEL_SYNC_ENABLED) y matching de IOCs.
+        if settings.threat_intel_enabled:
+            jobs.append(
+                PeriodicJob(
+                    "threat-intel", settings.threat_intel_eval_interval_seconds, run_threat_intel
                 )
             )
         # Only when a retention period is configured: by default nothing is ever deleted.

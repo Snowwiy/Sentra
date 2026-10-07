@@ -49,6 +49,9 @@ class SignalKind(enum.StrEnum):
     # Fase 5A: evento del sistema en bruto para reglas personalizadas por canal. Solo se
     # registra para canales con alguna regla activa (recorder.py): sin reglas, cero filas.
     EVENT = "event"
+    # Fase 5C: un IOC casó con actividad local (evento o conexión) y la política de
+    # THREAT_INTEL_DETECTION_POLICY lo permite. Lo emite app/threat_intel/matching.py.
+    THREAT_INTEL_MATCH = "threat_intel_match"
 
 
 class SourceType(enum.StrEnum):
@@ -56,6 +59,7 @@ class SourceType(enum.StrEnum):
     INVENTORY = "inventory"
     PROCESS_SNAPSHOT = "process_snapshot"
     DISCOVERY = "discovery"
+    THREAT_INTEL = "threat_intel"
 
 
 @dataclass(frozen=True)

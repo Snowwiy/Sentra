@@ -26,6 +26,15 @@ Se agrupa con la exposición de su puerto (mismo hecho, sin doble conteo) y entr
 rendimientos decrecientes y la saturación como cualquier otro grupo. Sin findings, el
 resultado es idéntico a v2.
 
+Fase 5C (fórmula v4): inteligencia de amenazas, siempre como contexto acotado:
+- un finding confirmado o probable de un CVE con explotación conocida reportada (CISA KEV) o
+  con probabilidad de explotación EPSS alta/elevada multiplica sus puntos (x1,35 como
+  mucho; cuenta el mayor). Una fuente caducada aporta la mitad del incremento;
+- un match de un IOC con un dato LOCAL (evento, conexión, IP o nombre del activo) es
+  evidencia propia: clasificación x confianza x fuente x estado x frescura. Todos los matches
+  del mismo indicador forman UN grupo, y la detección TI-001 que generaron va en ese grupo
+  (el mismo hecho no cuenta dos veces). Un IOC sin match local no aporta nada.
+
 El ledger de contribuciones suma exactamente el score antes de redondear: cada factor que
 sube o baja la puntuación aparece con sus puntos.
 """
@@ -46,8 +55,10 @@ from app.risk.config import (
     FORMULA_VERSION,
     INFRASTRUCTURE_FACTOR,
     INFRASTRUCTURE_TYPES,
+    VULNERABILITY_EXPLOIT_STATES,
     RiskConfig,
 )
+from app.threat_intel.epss import band as epss_band
 
 # Servicios de administración remota (texto claro aparte) y de datos o compartición. Todos
 # están en SENSITIVE_PORTS de discovery; un puerto no sensible abierto no suma riesgo: estar
@@ -68,6 +79,7 @@ _EXPOSURE_CONFIDENCE = 0.85
 DETECTION = "detection"
 EXPOSURE = "exposure"
 VULNERABILITY = "vulnerability"
+THREAT_INTEL = "threat_intel"
 CRITICALITY = "criticality"
 ASSET_TYPE = "asset_type"
 # Fase 4L: un factor de contexto de negocio (entorno, sensibilidad, exposición confirmada)
@@ -140,6 +152,35 @@ class VulnerabilityInput:
     first_seen_at: datetime
     # Puertos del servicio afectado observados abiertos: se agrupa con su exposición.
     ports: tuple[int, ...] = ()
+    # Fase 5C: inteligencia de explotabilidad del CVE (app/threat_intel/lookup.py).
+    known_exploited: bool = False
+    epss_score: float | None = None
+    intel_stale: bool = False
+
+
+@dataclass(frozen=True)
+class ThreatMatchInput:
+    """Match de un IOC con un dato local del activo (Fase 5C)."""
+
+    id: int
+    public_id: UUID
+    indicator_public_id: UUID
+    indicator_type: str
+    indicator_value: str
+    # Lo que declara la fuente AHORA (malicious, suspicious, unknown).
+    classification: str
+    # Confianza del match (la del indicador, rebajada para CIDR o nombres).
+    confidence: str
+    source_name: str
+    source_trust: str
+    observation_type: str
+    # open | acknowledged (dismissed no llega aquí).
+    status: str
+    last_observed_at: datetime
+    # False si el indicador se revocó o caducó después del match.
+    indicator_active: bool = True
+    # Detección TI-001 que generó (id interno), para agruparla con el match.
+    detection_id: int | None = None
 
 
 @dataclass(frozen=True)
@@ -163,6 +204,7 @@ class RiskInputs:
     detections: Sequence[DetectionInput] = ()
     exposure: Sequence[ExposureInput] = ()
     vulnerabilities: Sequence[VulnerabilityInput] = ()
+    threat_matches: Sequence[ThreatMatchInput] = ()
 
 
 @dataclass(frozen=True)
@@ -181,6 +223,8 @@ class RiskContribution:
     details: dict[str, Any] = field(default_factory=dict)
     # Fase 5B: finding de vulnerabilidad al que se refiere (id público).
     finding_public_id: UUID | None = None
+    # Fase 5C: match de inteligencia de amenazas al que se refiere (id público).
+    threat_match_public_id: UUID | None = None
 
     def to_json(self) -> dict[str, Any]:
         """Forma guardada en asset_risk.contributions (sin ids internos)."""
@@ -197,6 +241,8 @@ class RiskContribution:
         }
         if self.finding_public_id is not None:
             data["finding_id"] = str(self.finding_public_id)
+        if self.threat_match_public_id is not None:
+            data["threat_match_id"] = str(self.threat_match_public_id)
         return data
 
 
@@ -211,7 +257,7 @@ class RiskResult:
 
     @property
     def top_factor(self) -> str | None:
-        evidence = (DETECTION, EXPOSURE, VULNERABILITY)
+        evidence = (DETECTION, EXPOSURE, VULNERABILITY, THREAT_INTEL)
         positive = [c for c in self.contributions if c.factor in evidence]
         positive = [c for c in positive if c.points > 0]
         return positive[0].label if positive else None
@@ -248,6 +294,7 @@ class _Item:
     detection: DetectionInput | None = None
     exposure: ExposureInput | None = None
     vulnerability: VulnerabilityInput | None = None
+    threat: ThreatMatchInput | None = None
 
 
 def half_life_factor(age_seconds: float, half_life_seconds: float) -> float:
@@ -341,12 +388,34 @@ def _exposure_item(e: ExposureInput, config: RiskConfig, now: datetime) -> _Item
     )
 
 
+def exploit_reason(v: VulnerabilityInput) -> str | None:
+    """Motivo de explotabilidad que cuenta para un finding (el más fuerte: KEV > EPSS)."""
+    if v.match_state not in VULNERABILITY_EXPLOIT_STATES:
+        return None
+    if v.known_exploited:
+        return "known_exploited"
+    level = epss_band(v.epss_score)
+    if level in ("high", "elevated"):
+        return f"epss_{level}"
+    return None
+
+
+def exploit_factor(v: VulnerabilityInput, config: RiskConfig) -> float:
+    """Multiplicador por inteligencia de explotabilidad (1,0 si no hay o no aplica)."""
+    reason = exploit_reason(v)
+    if reason is None:
+        return 1.0
+    factor = config.vulnerability_exploit_factor[reason]
+    return 1.0 + (factor - 1.0) / 2 if v.intel_stale else factor
+
+
 def _vulnerability_item(v: VulnerabilityInput, config: RiskConfig) -> _Item | None:
     points = config.vulnerability_points.get(v.severity, 0.0)
     match = config.vulnerability_match_factor.get(v.match_state, 0.0)
     status = config.vulnerability_status_factor.get(v.status, 0.0)
     exposure = config.vulnerability_exposure_factor.get(v.exposure_state, 1.0)
-    nominal = points * match * exposure
+    exploit = exploit_factor(v, config)
+    nominal = points * match * exposure * exploit
     if nominal <= 0 or status <= 0:
         return None
     return _Item(
@@ -364,6 +433,35 @@ def _vulnerability_item(v: VulnerabilityInput, config: RiskConfig) -> _Item | No
 
 # Calidad de la evidencia de un finding para la confianza del riesgo (como las detecciones).
 _MATCH_CONFIDENCE = {"confirmed": 0.9, "probable": 0.65, "potential": 0.35}
+# Un match de IOC es una coincidencia exacta con un dato local, pero la clasificación es
+# de un tercero: confianza algo menor que una detección equivalente.
+_THREAT_CONFIDENCE = {"high": 0.8, "medium": 0.6, "low": 0.35}
+
+
+def _threat_item(t: ThreatMatchInput, config: RiskConfig, now: datetime) -> _Item | None:
+    points = config.threat_classification_points.get(t.classification, 0.0)
+    status = config.threat_status_factor.get(t.status, 0.0)
+    age = (now - t.last_observed_at).total_seconds()
+    if points <= 0 or status <= 0 or age > config.threat_memory.total_seconds():
+        return None
+    nominal = (
+        points
+        * config.threat_confidence_factor.get(t.confidence, 0.4)
+        * config.threat_trust_factor.get(t.source_trust, 0.7)
+        * (1.0 if t.indicator_active else config.threat_inactive_factor)
+    )
+    recency = half_life_factor(age, config.threat_half_life.total_seconds())
+    return _Item(
+        key=f"t:{t.id}",
+        effective=nominal * recency * status,
+        nominal=nominal,
+        recency=recency,
+        status_factor=status,
+        category="threat_intel",
+        confidence_value=_THREAT_CONFIDENCE.get(t.confidence, 0.35),
+        order=(-t.last_observed_at.timestamp(), t.indicator_value, t.id),
+        threat=t,
+    )
 
 
 class _Groups:
@@ -416,12 +514,24 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         item = _vulnerability_item(vulnerability, config)
         if item is not None:
             items.append(item)
+    for match in inputs.threat_matches[: config.max_threat_matches]:
+        item = _threat_item(match, config, now)
+        if item is not None:
+            items.append(item)
 
     # --- Agrupación (sin doble conteo) ----------------------------------------------------
     groups = _Groups()
     present = {item.key for item in items}
     for item in items:
         groups.find(item.key)
+        t = item.threat
+        if t is not None:
+            # Matches del mismo indicador (varias observaciones) y la detección TI-001 que
+            # generaron: un solo hecho, cuenta el más fuerte.
+            groups.union(item.key, f"i:{t.indicator_public_id}")
+            if t.detection_id is not None and f"d:{t.detection_id}" in present:
+                groups.union(item.key, f"d:{t.detection_id}")
+            continue
         v = item.vulnerability
         if v is not None:
             # Vulnerabilidad de un servicio expuesto + exposición de ese puerto: el mismo
@@ -724,6 +834,8 @@ def _lead_contribution(
     v = lead.vulnerability
     if v is not None:
         return _vulnerability_contribution(v, _round(points), _round(lead.nominal), common)
+    if lead.threat is not None:
+        return _threat_contribution(lead.threat, _round(points), _round(lead.nominal), common)
     e = lead.exposure
     assert e is not None  # noqa: S101  (un _Item es detección, exposición o vulnerabilidad)
     return RiskContribution(
@@ -765,6 +877,8 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
     v = item.vulnerability
     if v is not None:
         return _vulnerability_contribution(v, 0.0, _round(item.nominal), {"absorbed_by": ref})
+    if item.threat is not None:
+        return _threat_contribution(item.threat, 0.0, _round(item.nominal), {"absorbed_by": ref})
     e = item.exposure
     assert e is not None  # noqa: S101
     return RiskContribution(
@@ -781,15 +895,33 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
 _MATCH_LABELS = {"confirmed": "confirmada", "probable": "probable", "potential": "potencial"}
 
 
+_EXPLOIT_LABELS = {
+    "known_exploited": "explotación conocida reportada (KEV)",
+    "epss_high": "probabilidad de explotación EPSS alta",
+    "epss_elevated": "probabilidad de explotación EPSS elevada",
+}
+
+
 def _vulnerability_contribution(
     v: VulnerabilityInput, points: float, nominal: float, details: dict[str, Any]
 ) -> RiskContribution:
+    reason = exploit_reason(v)
+    suffix = f" · {_EXPLOIT_LABELS[reason]}" if reason else ""
+    exploit = (
+        {
+            "exploitability": reason,
+            "intel_stale": v.intel_stale,
+            "epss_score": v.epss_score,
+        }
+        if reason
+        else {}
+    )
     return RiskContribution(
         factor=VULNERABILITY,
         category="vulnerability",
         label=(
             f"Vulnerabilidad {v.vulnerability_id} ({v.severity},"
-            f" {_MATCH_LABELS.get(v.match_state, v.match_state)})"
+            f" {_MATCH_LABELS.get(v.match_state, v.match_state)}){suffix}"
         ),
         points=points,
         nominal_points=nominal,
@@ -804,11 +936,57 @@ def _vulnerability_contribution(
             "match_state": v.match_state,
             "status": v.status,
             "exposure_state": v.exposure_state,
+        }
+        | exploit,
+    )
+
+
+_CLASSIFICATION_LABELS = {"malicious": "maliciosa", "suspicious": "sospechosa"}
+_OBSERVATION_LABELS = {
+    "auth_source_ip": "IP de origen de inicio de sesión",
+    "connection_remote_ip": "IP remota de una conexión",
+    "asset_address": "IP del propio activo",
+    "asset_name": "nombre del propio activo",
+}
+
+
+def _threat_contribution(
+    t: ThreatMatchInput, points: float, nominal: float, details: dict[str, Any]
+) -> RiskContribution:
+    classification = _CLASSIFICATION_LABELS.get(t.classification, t.classification)
+    return RiskContribution(
+        factor=THREAT_INTEL,
+        category="threat_intel",
+        label=(
+            f"IOC {t.indicator_value[:80]} ({classification} según {t.source_name[:60]})"
+            f" · {_OBSERVATION_LABELS.get(t.observation_type, t.observation_type)}"
+        ),
+        points=points,
+        nominal_points=nominal,
+        threat_match_public_id=t.public_id,
+        details=details
+        | {
+            "threat_match_id": str(t.public_id),
+            "indicator_id": str(t.indicator_public_id),
+            "indicator_type": t.indicator_type,
+            "classification": t.classification,
+            "confidence": t.confidence,
+            "source": t.source_name[:200],
+            "source_trust": t.source_trust,
+            "observation_type": t.observation_type,
+            "status": t.status,
+            "indicator_active": t.indicator_active,
+            "last_observed_at": t.last_observed_at.isoformat(),
         },
     )
 
 
 def _ref(item: _Item) -> dict[str, Any]:
+    if item.threat is not None:
+        return {
+            "threat_match_id": str(item.threat.public_id),
+            "indicator_value": item.threat.indicator_value[:80],
+        }
     if item.vulnerability is not None:
         return {
             "finding_id": str(item.vulnerability.public_id),

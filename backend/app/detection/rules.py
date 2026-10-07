@@ -971,6 +971,48 @@ class NewPrivilegedAccountUsed:
 # --- Registro ----------------------------------------------------------------------------------
 
 
+_TRUSTED_SOURCES = frozenset({"official", "trusted"})
+_OBSERVATION_LABEL = {
+    "auth_source_ip": "como IP de origen de un inicio de sesión",
+    "connection_remote_ip": "como IP remota de una conexión establecida",
+}
+
+
+def _threat_match(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    """TI-001 (Fase 5C): un indicador de una fuente externa casó con actividad local.
+
+    Severidad alta solo para "malicious" con confianza alta; confianza alta solo si además la
+    fuente es oficial o de confianza. Nunca "critical": un IOC externo no prueba un compromiso.
+    """
+    classification = _get(s, "classification")
+    match_confidence = _get(s, "match_confidence")
+    strong = classification == "malicious" and match_confidence == "high"
+    observed = _get(s, "observed_value") or "?"
+    where = _OBSERVATION_LABEL.get(str(_get(s, "observation_type")), "en datos locales")
+    summary = (
+        f"El valor {observed} aparece {where} y coincide con un indicador clasificado como"
+        f" {classification or 'desconocido'} por la fuente {_get(s, 'source') or '?'}."
+        " Es contexto externo: requiere análisis, no confirma un compromiso."
+    )
+    return _single(
+        s,
+        _key(s.subject, "ioc:*"),
+        summary,
+        severity=Sev.HIGH if strong else Sev.MEDIUM,
+        confidence=(
+            Conf.HIGH if strong and _get(s, "source_trust") in _TRUSTED_SOURCES else Conf.MEDIUM
+        ),
+        details={
+            "match_id": _get(s, "match_id"),
+            "indicator_id": _get(s, "indicator_id"),
+            "indicator_type": _get(s, "indicator_type"),
+            "indicator_value": _get(s, "indicator_value"),
+            "source": _get(s, "source"),
+            "observation_type": _get(s, "observation_type"),
+        },
+    )
+
+
 def _meta(**kwargs: Any) -> RuleMeta:
     return RuleMeta(**{"version": 1, "kind": SINGLE, **kwargs})
 
@@ -1405,6 +1447,37 @@ RULES: tuple[DetectionRule, ...] = (
     PowerShellPersistence(),
     ExposureWithNewSoftware(),
     NewPrivilegedAccountUsed(),
+    SimpleRule(
+        _meta(
+            id="TI-001",
+            category="threat_intel",
+            title="Threat Intel IOC Match",
+            description=(
+                "Un indicador (IP o red) de una fuente de inteligencia aparece en actividad"
+                " local observada: IP de origen de un inicio de sesión o IP remota de una"
+                " conexión establecida."
+            ),
+            why=(
+                "La fuente asocia ese valor a actividad maliciosa. Que aparezca en un activo"
+                " merece revisión, pero la inteligencia puede estar desactualizada o ser un"
+                " falso positivo (IPs compartidas, CDNs): no confirma un compromiso."
+            ),
+            severity=Sev.MEDIUM,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.THREAT_INTEL_MATCH}),
+            required_data=(
+                "Fuente de inteligencia con IOCs de IP",
+                "Windows Security 4624/4625 o conexiones del inventario",
+            ),
+            recommendations=(
+                "Revisar el evento o la conexión que coincide y su contexto.",
+                "Comprobar la fuente, la fecha y la confianza del indicador.",
+                "Si es legítimo, descartar el match como falso positivo.",
+            ),
+            cooldown=timedelta(hours=24),
+        ),
+        _threat_match,
+    ),
 )
 
 RULE_IDS = frozenset(rule.meta.id for rule in RULES)

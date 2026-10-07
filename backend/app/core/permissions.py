@@ -72,6 +72,16 @@ class Permission(enum.StrEnum):
     # Decisiones que ocultan riesgo o cambian lo que Sentra evalúa: aceptar riesgo, falso
     # positivo, reabrir, importar el catálogo y forzar una reevaluación. Solo admin.
     VULNERABILITIES_ADMIN = "vulnerabilities:admin"
+    # Threat Intelligence (Fase 5C). Ver fuentes (sin secretos), su estado, indicadores,
+    # matches con datos locales e inteligencia KEV/EPSS de los findings.
+    THREAT_INTEL_READ = "threat_intel:read"
+    # Trabajar matches: reconocer, descartar como falso positivo (con motivo) y abrir o
+    # vincular un incidente desde un match.
+    THREAT_INTEL_TRIAGE = "threat_intel:triage"
+    # Gestionar fuentes (crear, configurar, activar, desactivar, archivar), pedir una
+    # sincronización, importar IOCs y forzar el matching. Solo admin: cambia la inteligencia
+    # que influye en la prioridad, el riesgo y las detecciones de todos.
+    THREAT_INTEL_MANAGE = "threat_intel:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -82,6 +92,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.INCIDENTS_READ,
             Permission.RULES_READ,
             Permission.VULNERABILITIES_READ,
+            Permission.THREAT_INTEL_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -99,6 +110,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RULES_TEST,
             Permission.VULNERABILITIES_READ,
             Permission.VULNERABILITIES_MANAGE,
+            Permission.THREAT_INTEL_READ,
+            Permission.THREAT_INTEL_TRIAGE,
         }
     ),
     Role.ADMIN: frozenset(Permission),
