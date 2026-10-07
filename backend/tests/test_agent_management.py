@@ -240,7 +240,9 @@ def test_agents_listing_states_and_no_secrets(
 
     assert response.status_code == 200
     body = response.json()
-    assert body["summary"] == {"total": 3, "online": 1, "offline": 0, "pending": 1, "revoked": 1}
+    assert body["summary"] == {
+        "total": 3, "online": 1, "offline": 0, "pending": 1, "revoked": 1, "archived": 0
+    }  # fmt: skip
     by_name = {a["hostname"]: a for a in body["items"]}
     assert by_name["online-pc"]["status"] == "online"
     assert by_name["online-pc"]["credential_status"] == "active"

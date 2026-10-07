@@ -62,9 +62,12 @@ class AgentManagementService:
             select(Asset).where(Asset.agent_id.is_not(None)).order_by(Asset.first_seen_at.desc())
         ).all()
         items = [self._read(asset, now) for asset in rows]
-        summary = AgentSummary(total=len(items), online=0, offline=0, pending=0, revoked=0)
+        current = sum(1 for agent in items if agent.asset_state == "active")
+        summary = AgentSummary(total=current, online=0, offline=0, pending=0, revoked=0)
         for agent in items:
-            if agent.credential_status == CredentialStatus.REVOKED:
+            if agent.asset_state == "archived":
+                summary.archived += 1
+            elif agent.credential_status == CredentialStatus.REVOKED:
                 summary.revoked += 1
             elif agent.status == AssetStatus.ONLINE:
                 summary.online += 1
@@ -127,6 +130,9 @@ class AgentManagementService:
             credential_issued_at=asset.agent_token_issued_at,
             revoked_at=asset.agent_token_revoked_at,
             last_seen_at=asset.last_seen_at,
+            asset_state="archived" if asset.archived_at is not None else "active",
+            archived_at=asset.archived_at,
+            lifecycle_version=asset.lifecycle_version,
         )
 
 

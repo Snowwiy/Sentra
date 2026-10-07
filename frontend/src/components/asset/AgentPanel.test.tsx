@@ -26,6 +26,9 @@ const AGENT: Agent = {
   credential_issued_at: new Date().toISOString(),
   revoked_at: null,
   last_seen_at: new Date().toISOString(),
+  asset_state: "active",
+  archived_at: null,
+  lifecycle_version: 0,
 };
 
 let agent: Agent;

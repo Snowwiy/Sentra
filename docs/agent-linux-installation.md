@@ -82,7 +82,12 @@ sudo apt install ./sentra-agent_<new>_amd64.deb   # or the new .deb
 ```
 
 Configuration and identity are kept: no new token is needed and the host stays the same
-asset in Sentra. Running the normal install again on an enrolled host also keeps the
+asset in Sentra. The upgrade also keeps the agent token, the telemetry buffer and the Linux
+event cursors (`/var/lib/sentra-agent/linux_events_state.json`), so no event is sent twice.
+From 0.2.1 the installer adds `sentra-agent` to the `systemd-journal` group (read-only access
+to the system journal, see [linux-events.md](linux-events.md)); the restart that the upgrade
+does applies it. Agents installed by hand need
+`sudo usermod -a -G systemd-journal sentra-agent && sudo systemctl restart sentra-agent`. Running the normal install again on an enrolled host also keeps the
 identity. If you pass a new token to an enrolled host, the agent first checks its own
 credential with one heartbeat: if it works, the new token is not used; if it no longer works
 (the agent was revoked and then reinstated in the dashboard), it enrolls again with the new
@@ -114,7 +119,7 @@ After a purge you can revoke the old agent on the server (Agentes page, **Revoca
 |---|---|---|
 | `/opt/sentra-agent/` | root, 0755 | runtime (agent + psutil), launcher, uninstaller |
 | `/etc/sentra-agent/agent.toml` | root:sentra-agent, 0640 | server URL and paths (no secrets) |
-| `/var/lib/sentra-agent/` | sentra-agent, 0700 | identity and agent token (0600), telemetry buffer, event cursor |
+| `/var/lib/sentra-agent/` | sentra-agent, 0700 | identity and agent token (0600), telemetry buffer, journal cursors (`linux_events_state.json`) |
 | `/var/log/sentra-agent/` | sentra-agent, 0750 | rotating log, 5 × 1 MB |
 | `/etc/systemd/system/sentra-agent.service` | root, 0644 | service (`/lib/systemd/system/` with the .deb) |
 
@@ -128,6 +133,13 @@ users'** processes are not readable and are reported empty rather than guessed: 
 path, process owner on some kernels, and the PID behind another user's network socket.
 Account lock state (from `/etc/shadow`) is reported as unknown. Running the agent as root is
 not needed and not done by the installer.
+
+Linux events (Fase 5C.1) need read access to the journal: the installer adds the user to the
+`systemd-journal` group (or `adm` if that group does not exist). It never uses root,
+`CAP_SYS_ADMIN` or changes journal permissions. Without the group the agent reports the
+coverage `no_permission` instead of pretending there were no events. The agent sends a
+salted hash of `/etc/machine-id` (never the id itself) so that the server can suggest that a
+reinstalled agent is the same machine ([agent-asset-lifecycle.md](agent-asset-lifecycle.md)).
 
 ## Machines where the agent was run by hand before
 
@@ -160,6 +172,14 @@ agent/packaging/linux/build.sh --arch aarch64
 `dist/` is not tracked by git. Builds are reproducible (fixed timestamps, sorted archive,
 pinned psutil wheel).
 
+Line endings: `.gitattributes` forces LF on `*.sh`, `*.service` and `debian/*` even in a
+Windows clone with `core.autocrlf=true` (CRLF breaks bash, systemd and `dpkg`). The build
+also strips CR from the version and from every script, unit and control file it ships, and
+`tests/test_linux_packaging.py` builds from a CRLF copy to prove it. A clone made before
+`.gitattributes` existed keeps its CRLF copies until they are checked out again: with no
+local changes in that folder, delete `agent/packaging/linux` and run
+`git checkout -- agent/packaging/linux` (the repository itself already stores LF).
+
 ## Status of validation
 
 Validated in a Linux container (Ubuntu 24.04, root, **without** systemd as PID 1): build,
@@ -170,4 +190,7 @@ keeping the identity, uninstall and purge, `.deb` install/remove/purge, and
 the Agentes page, installer run with it, registration seen by the page, revoke, reinstate and
 re-enrollment as the same asset). **Pending physical validation**: the service actually
 started by systemd at boot on a real machine (enable/restart/stop/reboot) and the effect of
-the hardening options there.
+the hardening options there. 0.2.1 (Fase 5C.1): package build (tar.gz and .deb), CRLF build, journal group handling
+with fake `usermod`/`getent`, and the journal collector against a fake `journalctl` and against
+the real `journalctl` of a container without journal files (reported as unavailable).
+**Pending**: a real `.deb` install with journald, sshd, sudo and auditd on Debian/Ubuntu/Mint.

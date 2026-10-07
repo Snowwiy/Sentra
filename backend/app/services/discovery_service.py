@@ -554,6 +554,21 @@ def request_cancel(session: Session, public_id: uuid.UUID) -> DiscoveryJob:
     return job
 
 
+def _rank(asset: Asset) -> tuple[bool, bool, bool, datetime]:
+    """Preferencia entre activos de la misma MAC o IP (mayor = preferido).
+
+    Agente antes que descubierto; vigente antes que archivado; credencial activa antes que
+    revocada o pendiente de re-enrolar; y, por último, el visto más recientemente. Así un
+    discovery no actualiza el activo del agente viejo de una máquina reinstalada.
+    """
+    return (
+        asset.is_managed,
+        asset.archived_at is None,
+        asset.agent_token_hash is not None and asset.agent_token_revoked_at is None,
+        asset.last_network_seen_at or asset.last_seen_at or asset.first_seen_at,
+    )
+
+
 class AssetIndex:
     """Address/MAC → asset lookups for one run, loaded once (no query per host)."""
 
@@ -580,9 +595,11 @@ class AssetIndex:
 
     def add(self, asset: Asset, ips: set[str] | None = None, macs: set[str] | None = None) -> None:
         for mac in (macs or set()) | ({asset.mac_address} if asset.mac_address else set()):
-            # An agent asset wins over a discovered record with the same MAC.
+            # An agent asset wins over a discovered record with the same MAC. Fase 5C.1: con
+            # varios activos de la misma MAC (reinstalación: agente viejo revocado + agente
+            # nuevo) gana el vigente: no archivado, con credencial y visto más recientemente.
             current = self.by_mac.get(mac)
-            if current is None or (asset.is_managed and not current.is_managed):
+            if current is None or _rank(asset) > _rank(current):
                 self.by_mac[mac] = asset
         for ip in (ips or set()) | {asset.primary_ip}:
             self.by_ip.setdefault(ip, []).append(asset)
@@ -596,9 +613,7 @@ class AssetIndex:
             if not (mac and a.mac_address and a.mac_address != mac)
         ]
         # Agent assets first, then the most recently seen record of that address.
-        candidates.sort(
-            key=lambda a: (a.is_managed, a.last_network_seen_at or a.first_seen_at), reverse=True
-        )
+        candidates.sort(key=_rank, reverse=True)
         return candidates[0] if candidates else None
 
 
@@ -909,7 +924,7 @@ class ResultApplier:
 
     def _check_agent(self, asset: Asset, now: datetime) -> None:
         """Agent asset reachable on the network: is its agent still reporting?"""
-        if not asset.is_managed or asset.last_seen_at is None:
+        if not asset.is_managed or asset.last_seen_at is None or asset.is_archived:
             return
         if now - asset.last_seen_at > self._config.heartbeat_timeout:
             self._alerts.raise_alert(
@@ -927,7 +942,11 @@ class ResultApplier:
         # Filtered in Python: `seen` can hold tens of thousands of ids (too many SQL params).
         candidates = self._session.scalars(
             select(Asset).where(
-                Asset.discovery_network == str(network), Asset.last_network_seen_at.is_not(None)
+                Asset.discovery_network == str(network),
+                Asset.last_network_seen_at.is_not(None),
+                # Fase 5C.1: un archivado (dispositivo retirado o duplicado) no genera
+                # "desaparecido": que no se vea es lo esperado.
+                Asset.archived_at.is_(None),
             )
         ).all()
         for asset in candidates:

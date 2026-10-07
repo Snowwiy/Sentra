@@ -20,6 +20,14 @@ Python agent that reports this host to the Sentra API. Windows first, Linux-comp
   PowerShell/Operational without message text) and selected Security events (account, group
   and logon-failure changes). Security needs administrator rights: as a standard user the
   agent logs once that the channel is not readable and skips it; it never changes privileges.
+- On Linux (0.2.1, Fase 5C.1): every 60 s sends selected entries of the systemd journal
+  (sshd, sudo with secrets redacted, account and group changes, systemd units, kernel errors,
+  auditd if it logs to the journal) with one cursor per source, plus the coverage of each
+  source (`no_permission` when the user is not in `systemd-journal`). See
+  [docs/linux-events.md](../docs/linux-events.md).
+- Sends a per-application hash of the OS machine id (`/etc/machine-id`, Windows
+  `MachineGuid`), never the id itself, so the server can suggest that a reinstalled agent is
+  the same machine. It is not a credential.
 - Every `processes_interval_seconds` (default 60, 15–3600): sends a process snapshot (pid,
   parent, name, executable, user, CPU %, memory, start time; at most 2000). The server keeps
   only the latest one.

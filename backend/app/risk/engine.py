@@ -57,6 +57,7 @@ from app.risk.calculator import (
 from app.risk.config import FORMULA_VERSION, RiskConfig
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_context_service import contexts_by_asset
+from app.services.asset_service import coverage_view
 from app.threat_intel.freshness import indicator_state
 from app.threat_intel.indicators import lower_confidence
 from app.threat_intel.lookup import load_exploitation
@@ -334,6 +335,8 @@ class RiskEngine:
                     managed=asset.is_managed,
                     os_name=asset.os_name,
                     last_seen_at=asset.last_seen_at,
+                    event_coverage=coverage_view(asset.event_coverage),
+                    event_coverage_at=asset.event_coverage_at,
                     **_business_inputs(business.get(asset.id)),
                 ),
                 detections=detections[asset.id],

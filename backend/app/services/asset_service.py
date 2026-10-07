@@ -89,6 +89,8 @@ class AssetFilter:
     internet_exposed: str | None = None
     department: str | None = None
     tag: str | None = None
+    # Fase 5C.1: "exclude" (por defecto: lo actual), "include" (Mostrar archivados) u "only".
+    archived: str = "exclude"
 
     def refine(
         self, stmt: Select[Asset], status_expr: ColumnElement[Any], *, with_status: bool = True
@@ -98,6 +100,10 @@ class AssetFilter:
         `with_status=False` deja fuera el filtro de estado, para contar por estado los
         activos del resto de filtros (las tarjetas Online/Offline del dashboard).
         """
+        if self.archived == "exclude":
+            stmt = stmt.where(Asset.archived_at.is_(None))
+        elif self.archived == "only":
+            stmt = stmt.where(Asset.archived_at.is_not(None))
         if self.method is not None:
             stmt = stmt.where(Asset.monitoring_method == self.method)
         if with_status and self.status is not None:
@@ -137,6 +143,18 @@ class AssetFilter:
             department=self.department,
             tag=self.tag,
         )
+
+
+def coverage_view(raw: Any) -> dict[str, str] | None:
+    """Cobertura guardada → API, solo pares texto/texto acotados (columna JSONB)."""
+    if not isinstance(raw, dict):
+        return None
+    clean = {
+        str(k)[:32]: str(v)[:32]
+        for k, v in list(raw.items())[:32]
+        if isinstance(k, str) and isinstance(v, str)
+    }
+    return clean or None
 
 
 def open_ports_by_asset(session: Session, asset_ids: Iterable[int]) -> dict[int, list[int]]:
@@ -316,4 +334,11 @@ class AssetService:
             risk_score=risk.score if risk else None,
             risk_level=risk.level if risk else None,
             risk_confidence=risk.confidence if risk else None,
+            archived_at=asset.archived_at,
+            archived_by=asset.archived_by,
+            archive_reason=asset.archive_reason,
+            lifecycle_version=asset.lifecycle_version,
+            managed_history=asset.ever_managed or asset.agent_id is not None,
+            event_coverage=coverage_view(asset.event_coverage),
+            event_coverage_at=asset.event_coverage_at,
         )

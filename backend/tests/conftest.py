@@ -9,6 +9,11 @@ os.environ["AGENT_ENROLLMENT_KEY"] = TEST_ENROLLMENT_KEY
 # Same idea for the administration API (enrollment tokens).
 TEST_ADMIN_KEY = "test-admin-key-0123456789abcdef-xyz"
 os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
+# Fase 5C: la sincronización por red es opt-in (false por defecto). Se fija aquí porque las
+# variables de entorno del proceso ganan al .env: un .env de desarrollo con
+# THREAT_INTEL_SYNC_ENABLED=true (pruebas reales) no debe cambiar lo que comprueban los tests.
+# Los tests del modo con red lo activan de forma explícita.
+os.environ["THREAT_INTEL_SYNC_ENABLED"] = "false"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta

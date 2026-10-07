@@ -43,7 +43,12 @@ BASH = shutil.which("bash") or "/bin/bash"
 
 SHIMS = {
     "id": "echo 0",
-    "getent": '[ -f "$SHIM_STATE/user" ] && echo "sentra-agent:x:999:999::/x:/usr/sbin/nologin"',
+    "getent": (
+        'if [ "$1" = group ]; then [ "$2" = systemd-journal ] && echo "systemd-journal:x:101:"'
+        "; exit; fi\n"
+        '[ -f "$SHIM_STATE/user" ] && echo "sentra-agent:x:999:999::/x:/usr/sbin/nologin"'
+    ),
+    "usermod": 'echo "usermod $*" >> "$SHIM_LOG"',
     "useradd": 'echo "useradd $*" >> "$SHIM_LOG"; touch "$SHIM_STATE/user"',
     "userdel": 'echo "userdel $*" >> "$SHIM_LOG"; rm -f "$SHIM_STATE/user"',
     "chown": 'echo "chown $*" >> "$SHIM_LOG"',
@@ -438,3 +443,93 @@ def test_log_dir_setting(
     log = (tmp_path / "logs" / "agent.log").read_text()
     assert "agent enrolled" in log and TOKEN not in log
     assert not (tmp_path / "state" / "logs").exists()
+
+
+# --- Fase 5C.1: acceso al journal y finales de línea -----------------------------------------
+
+
+def test_install_grants_read_only_journal_access_once(
+    host: Host, fake_api: tuple[str, FakeApiState], tmp_path: Path
+) -> None:
+    url, state = fake_api
+    state.enrollment_tokens.add(TOKEN)
+    result = host.install("--server", url, "--token-file", str(_token_file(tmp_path)))
+    assert result.returncode == 0, result.stderr
+    grants = [c for c in host.calls() if c.startswith("usermod")]
+    # systemd-journal (solo lectura del journal), nunca adm si existe el primero, nunca root.
+    assert grants == ["usermod -a -G systemd-journal sentra-agent"]
+    assert "systemd-journal" in result.stdout
+
+
+def test_repository_forces_lf_on_linux_packaging_files() -> None:
+    git = shutil.which("git")
+    repo = AGENT_DIR.parent
+    if git is None or not (repo / ".git").exists():
+        pytest.skip("not a git checkout")
+    files = [
+        "agent/packaging/linux/build.sh",
+        "agent/packaging/linux/install-sentra-agent.sh",
+        "agent/packaging/linux/sentra-agent.service",
+        "agent/packaging/linux/debian/postinst",
+        "agent/packaging/linux/debian/control.in",
+        "deploy/systemd/sentra.service",
+    ]
+    out = subprocess.run(  # noqa: S603
+        [git, "-C", str(repo), "check-attr", "eol", "--", *files],
+        capture_output=True, text=True, check=True,
+    ).stdout  # fmt: skip
+    assert out.count("eol: lf") == len(files), out
+
+
+def test_build_from_a_crlf_checkout_produces_lf_packages(tmp_path: Path) -> None:
+    """Clon en Windows con autocrlf: el paquete no debe llevar CR (bash/systemd/dpkg)."""
+    repo = tmp_path / "repo"
+    agent = repo / "agent"
+    shutil.copytree(AGENT_DIR / "sentra_agent", agent / "sentra_agent")
+    shutil.copytree(PACKAGING, agent / "packaging" / "linux")
+    shutil.copy2(AGENT_DIR / "pyproject.toml", agent / "pyproject.toml")
+    (repo / "docs").mkdir()
+    shutil.copy2(
+        AGENT_DIR.parent / "docs" / "agent-linux-installation.md",
+        repo / "docs" / "agent-linux-installation.md",
+    )
+    linux = agent / "packaging" / "linux"
+    crlf = [agent / "pyproject.toml", *(p for p in linux.rglob("*") if p.is_file())]
+    for path in crlf:
+        if path.name == "build.sh":
+            continue  # .gitattributes lo mantiene en LF; con CRLF bash ni arrancaría
+        path.write_bytes(path.read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n"))
+    out = tmp_path / "out"
+    env = {**os.environ, "SOURCE_DATE_EPOCH": "1790000000", "PYTHON": sys.executable}
+    subprocess.run(  # noqa: S603
+        [BASH, str(linux / "build.sh"), "--psutil-wheel", str(_fake_psutil_wheel(tmp_path)),
+         "--out", str(out)],
+        check=True, capture_output=True, env=env, timeout=300,
+    )  # fmt: skip
+    from sentra_agent import __version__
+
+    tarball = next(out.glob("*.tar.gz"))
+    assert tarball.name == f"sentra-agent-{__version__}-linux-x86_64.tar.gz"
+    with tarfile.open(tarball) as tar:
+        for member in tar.getmembers():
+            name = member.name.rsplit("/", 1)[-1]
+            if name in ("install-sentra-agent.sh", "uninstall-sentra-agent.sh",
+                        "sentra-agent.service", "VERSION"):  # fmt: skip
+                data = tar.extractfile(member)
+                assert data is not None
+                content = data.read()
+                assert b"\r" not in content, member.name
+                if name == "VERSION":
+                    assert content.startswith(f"version={__version__}\n".encode())
+    dpkg_deb = shutil.which("dpkg-deb")
+    if dpkg_deb:
+        deb = next(out.glob("*.deb"))
+        assert "\r" not in deb.name
+        control = subprocess.run(  # noqa: S603
+            [dpkg_deb, "-f", str(deb)], capture_output=True, check=True
+        ).stdout
+        assert b"\r" not in control and f"Version: {__version__}".encode() in control
+        extract = tmp_path / "deb"
+        subprocess.run([dpkg_deb, "-e", str(deb), str(extract)], check=True)  # noqa: S603
+        for script in ("postinst", "prerm", "postrm"):
+            assert b"\r" not in (extract / script).read_bytes()

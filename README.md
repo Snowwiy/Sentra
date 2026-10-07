@@ -165,7 +165,12 @@ cd backend
 | GET | `/api/v1/assets/{asset_id}/processes` | Latest process snapshot |
 | POST | `/api/v1/telemetry` | Ingest CPU, RAM, disk and uptime (Bearer token) |
 | POST | `/api/v1/events` | Ingest host log events (Bearer token, idempotent) |
-| GET | `/api/v1/events?asset_id=&min_level=&channel=&event_code=&q=&limit=&offset=` | Events, newest first (`has_more` instead of a total) |
+| GET | `/api/v1/events?asset_id=&min_level=&channel=&event_code=&provider=&event_type=&q=&limit=&offset=` | Events, newest first (`has_more` instead of a total); Linux events have `event_code: null` and an `event_type` (Fase 5C.1, [docs/linux-events.md](docs/linux-events.md)) |
+| GET | `/api/v1/assets/duplicates`, `/api/v1/assets/{asset_id}/duplicate-candidates` | Posibles duplicados con razones y confianza (Fase 5C.1, `assets:duplicates_read`: analyst y admin) |
+| GET | `/api/v1/assets/{asset_id}/delete-check` | ¿Se puede borrar? Motivos y dependencias (admin) |
+| POST | `/api/v1/assets/{asset_id}/archive` `{reason, version}`, `/restore` `{version}` | Archivar / restaurar un activo (admin; archivar exige revocar antes su agente; restaurar no reactiva la credencial) |
+| DELETE | `/api/v1/assets/{asset_id}?version=` | Borrar un activo descubierto sin historial (admin; 409 `asset_not_deletable` si tiene historial) |
+| POST | `/api/v1/assets/{asset_id}/reconcile` `{target_asset_id, version, target_version}` | Reasignar el agente nuevo a un activo histórico de la misma máquina (admin, validado por el servidor) ([docs/agent-asset-lifecycle.md](docs/agent-asset-lifecycle.md)) |
 | GET | `/api/v1/assets?method=&status=&device_type=&subnet=&q=&criticality=&role=&environment=&network_zone=&data_sensitivity=&internet_exposed=&department=&tag=&sort=&limit=&offset=` | (filters, all optional) agent and discovered assets; filtros de contexto, orden por criticidad y paginación opcional (Fase 4L) |
 | GET/PATCH | `/api/v1/assets/{asset_id}/context`, GET `/{asset_id}/context/history`, `/assets/context/options` | Asset Context (Fase 4L): rol, entorno, owner, equipo, sensibilidad, zona, exposición a Internet y tags con procedencia; PATCH solo admin (`assets:manage`), `version` obligatoria y 409 `asset_context_conflict`: [docs/asset-context.md](docs/asset-context.md) |
 | GET | `/api/v1/assets/{asset_id}/threat-summary` | Contexto de amenaza interno del activo (detecciones, incidentes, riesgo, cambios recientes; sin feeds externos) |
@@ -266,6 +271,16 @@ riesgo sin doble conteo, alertas solo en cambios relevantes, incidentes manuales
 lectura. Un puerto abierto nunca es una vulnerabilidad
 ([docs/vulnerability-management.md](docs/vulnerability-management.md),
 [docs/vulnerability-catalog.md](docs/vulnerability-catalog.md)).
+**Ciclo de vida de activos y eventos Linux** (Fase 5C.1): revocar un agente, archivar un
+activo y borrarlo son tres cosas distintas. Un activo gestionado nunca se borra: se archiva
+con todo su historial (oculto por defecto, fuera del resumen, restaurable); solo un activo
+descubierto sin historial puede borrarse, y el servidor lo recomprueba con la fila bloqueada.
+Los duplicados (reinstalación del agente) se sugieren con razones y confianza y un admin
+reconcilia el agente nuevo con el activo histórico. El agente Linux 0.2.1 envía un subconjunto
+del journal (SSH, sudo saneado, cuentas y grupos, systemd, kernel, auditd opcional) como
+usuario sin privilegios del grupo `systemd-journal`, con reglas LIN-AUTH-001/002 y
+LIN-SYS-001 ([docs/agent-asset-lifecycle.md](docs/agent-asset-lifecycle.md),
+[docs/linux-events.md](docs/linux-events.md)).
 **Threat Intelligence** (Fase 5C, offline-first): CISA KEV y FIRST EPSS enriquecen los
 findings como contexto de explotabilidad ("explotación conocida reportada", "probabilidad de
 explotación EPSS"), con la procedencia de cada dato y las discrepancias entre fuentes lado a

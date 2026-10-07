@@ -31,7 +31,7 @@ class EventLevel(enum.StrEnum):
 
 
 class SystemEvent(Base):
-    """An event reported by an agent from the host's own logs (e.g. Windows Event Log).
+    """An event reported by an agent from the host's own logs (Windows Event Log, systemd journal).
 
     Kept separate from telemetry (periodic measurements) and alerts (Sentra's own rule
     findings): events are facts the host recorded, which future rules can turn into alerts.
@@ -60,7 +60,12 @@ class SystemEvent(Base):
     source: Mapped[str] = mapped_column(String(32))
     channel: Mapped[str] = mapped_column(String(255))
     record_id: Mapped[int] = mapped_column(BigInteger)
-    event_code: Mapped[int] = mapped_column(Integer)
+    # Id del evento en Windows. Null en Linux (Fase 5C.1): el journal no tiene ids de evento
+    # y un número inventado se confundiría con un id real de Windows.
+    event_code: Mapped[int | None] = mapped_column(Integer)
+    # Tipo normalizado de los eventos Linux (auth_failure, sudo_command, service_failed...),
+    # asignado por el agente con una lista cerrada. Null en los eventos de Windows.
+    event_type: Mapped[str | None] = mapped_column(String(48))
     provider: Mapped[str] = mapped_column(String(255))
     level: Mapped[EventLevel] = mapped_column(
         Enum(

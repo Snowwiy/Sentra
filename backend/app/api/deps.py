@@ -15,6 +15,7 @@ from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_context_service import AssetContextService
+from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.asset_service import AssetService
 from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.event_service import EventService
@@ -99,6 +100,10 @@ def get_agent_management_service(
 
 def get_asset_service(session: DbSession, settings: AppSettings) -> AssetService:
     return AssetService(session, timedelta(seconds=settings.heartbeat_timeout_seconds))
+
+
+def get_asset_lifecycle_service(session: DbSession, settings: AppSettings) -> AssetLifecycleService:
+    return AssetLifecycleService(session, timedelta(seconds=settings.heartbeat_timeout_seconds))
 
 
 def get_asset_context_service(session: DbSession) -> AssetContextService:

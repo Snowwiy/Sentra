@@ -32,6 +32,9 @@ function agent(overrides: Partial<Agent>): Agent {
     credential_issued_at: iso(-86_400_000),
     revoked_at: null,
     last_seen_at: iso(-10_000),
+    asset_state: "active",
+    archived_at: null,
+    lifecycle_version: 0,
     ...overrides,
   };
 }
@@ -43,7 +46,7 @@ const AGENTS = [
   agent({ hostname: "linux-new", status: "unknown", last_seen_at: null }),
 ];
 const [RAVENSLG, OFFLINE, REVOKED] = AGENTS as [Agent, Agent, Agent, Agent];
-const SUMMARY = { total: 4, online: 1, offline: 1, pending: 1, revoked: 1 };
+const SUMMARY = { total: 4, online: 1, offline: 1, pending: 1, revoked: 1, archived: 0 };
 
 function tokenRow(overrides: Partial<EnrollmentToken> = {}): EnrollmentToken {
   return {
@@ -491,4 +494,55 @@ describe("Revocation", () => {
       expect(calls.some((c) => c.method === "POST" && c.path.endsWith("/revoke"))).toBe(true),
     );
   });
+
+  // Fase 5C.1: credencial y activo son estados distintos; los archivados se ocultan.
+  it("separates credential and asset state and hides archived agents by default", async () => {
+    const archived = agent({
+      hostname: "old-pc",
+      credential_status: "revoked",
+      asset_state: "archived",
+      archived_at: iso(-60_000),
+    });
+    routes["GET /agents"] = () => ({ body: { summary: { ...SUMMARY, archived: 1 }, items: [...AGENTS, archived] } });
+    routes["GET /assets/duplicates"] = () => ({
+      body: {
+        items: [
+          {
+            asset: { ...dupAsset(RAVENSLG), agent_version: "0.2.0" },
+            candidate: { ...dupAsset(REVOKED), credential_status: "revoked" },
+            reasons: ["same_hostname", "same_ip"],
+            confidence: "medium",
+            reconcilable: true,
+            reconcile_blockers: [],
+          },
+        ],
+      },
+    });
+    renderPage();
+    await screen.findByText("ravenslg");
+    expect(screen.getByRole("columnheader", { name: "Activo" })).toBeInTheDocument();
+    expect(screen.queryByText("old-pc")).toBeNull();
+    fireEvent.click(screen.getByRole("checkbox", { name: /Mostrar archivados/ }));
+    expect(await screen.findByText("old-pc")).toBeInTheDocument();
+    expect(screen.getByText("Archivado")).toBeInTheDocument();
+    expect(await screen.findByText(/parece corresponder a un activo existente/)).toBeInTheDocument();
+  });
 });
+
+function dupAsset(a: Agent) {
+  return {
+    asset_id: a.asset_id,
+    display_name: a.display_name,
+    hostname: a.hostname,
+    primary_ip: a.primary_ip,
+    mac_address: null,
+    os_name: a.os_name,
+    monitoring_method: "agent",
+    agent_version: a.agent_version,
+    credential_status: a.credential_status,
+    archived: false,
+    last_seen_at: a.last_seen_at,
+    first_seen_at: a.enrolled_at,
+    version: 0,
+  };
+}

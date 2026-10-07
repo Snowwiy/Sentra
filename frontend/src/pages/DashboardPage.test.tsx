@@ -52,6 +52,13 @@ function asset(name: string, overrides: Partial<Asset> = {}): Asset {
     risk_score: null,
     risk_level: null,
     risk_confidence: null,
+    archived_at: null,
+    archived_by: null,
+    archive_reason: null,
+    lifecycle_version: 0,
+    managed_history: false,
+    event_coverage: null,
+    event_coverage_at: null,
     ...overrides,
   };
 }

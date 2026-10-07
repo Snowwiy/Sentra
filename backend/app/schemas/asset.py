@@ -79,6 +79,18 @@ class AssetRead(ResponseModel):
     risk_score: int | None
     risk_level: RiskLevel | None
     risk_confidence: RiskConfidence | None
+    # Fase 5C.1: ciclo de vida. Archivado = oculto por defecto con todo su historial.
+    archived_at: datetime | None = None
+    archived_by: str | None = None
+    archive_reason: str | None = None
+    # Versión para concurrencia optimista de archivar/restaurar/borrar/reconciliar.
+    lifecycle_version: int = 0
+    # Tuvo agente alguna vez (Managed): nunca se borra físicamente, solo se archiva.
+    managed_history: bool = False
+    # Estado de las fuentes de eventos informado por el agente (journal, sshd, sudo,
+    # auditd... o canales de Windows) y cuándo llegó; null si el agente no lo informa.
+    event_coverage: dict[str, str] | None = None
+    event_coverage_at: datetime | None = None
 
 
 class AssetList(ResponseModel):

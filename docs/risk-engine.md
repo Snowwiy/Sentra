@@ -323,8 +323,9 @@ cálculo y en cada snapshot.
 
 - La exposición solo cuenta los puertos sensibles que ve discovery desde el servidor; sin
   discovery configurado no hay exposición. No hay datos de vulnerabilidades (CVE).
-- Linux no envía eventos del sistema: su confianza es como mucho parcial y su riesgo sale de
-  inventario, procesos y red.
+- Linux (Fase 5C.1): la cobertura depende del journal que informa el agente 0.2.1. Sin
+  cobertura reciente, sin permiso o con sshd/sudo con error es parcial; con el journal
+  activo es completa («sin auditd» si auditd no está). Ver docs/linux-events.md.
 - La criticidad es manual: por defecto todo es `medium` hasta que un admin la ajusta.
 - La primera evaluación tras desplegar no alerta, aunque un activo ya esté en crítico (se ve
   en la página Riesgo).

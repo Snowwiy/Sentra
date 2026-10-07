@@ -8,7 +8,7 @@ from app.api.deps import AgentToken, get_event_service
 from app.api.params import text_query
 from app.api.responses import error_responses
 from app.models.event import EventLevel
-from app.schemas.event import EventBatch, EventBatchAccepted, EventList
+from app.schemas.event import EVENT_TYPE_PATTERN, EventBatch, EventBatchAccepted, EventList
 from app.services.event_service import EventFilter, EventService
 
 router = APIRouter(prefix="/events", tags=["events"])
@@ -33,6 +33,9 @@ def list_events(
     min_level: EventLevel | None = None,
     channel: Annotated[str | None, text_query(255)] = None,
     event_code: Annotated[int | None, Query(ge=0, le=2**31 - 1)] = None,
+    # Fase 5C.1: origen (sshd, sudo, systemd, kernel...) y tipo normalizado (Linux).
+    provider: Annotated[str | None, text_query(255)] = None,
+    event_type: Annotated[str | None, Query(pattern=EVENT_TYPE_PATTERN)] = None,
     # Case-insensitive text in the message or the provider.
     q: Annotated[str | None, text_query(200)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
@@ -41,7 +44,14 @@ def list_events(
     search = q.strip() if q else None
     return service.list_events(
         asset_id,
-        EventFilter(min_level=min_level, channel=channel, event_code=event_code, search=search),
+        EventFilter(
+            min_level=min_level,
+            channel=channel,
+            event_code=event_code,
+            search=search,
+            provider=provider,
+            event_type=event_type,
+        ),
         limit,
         offset,
     )

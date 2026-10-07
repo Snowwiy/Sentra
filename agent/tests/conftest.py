@@ -52,6 +52,12 @@ class FakeApiState:
     # Campos de host que este servidor no conoce (simula un backend anterior a la Fase 4F):
     # register y heartbeat responden 422 extra_forbidden si llegan.
     unknown_host_fields: set[str] = field(default_factory=set)
+    # Fase 5C.1: coberturas recibidas en /events; False simula un servidor anterior que
+    # rechaza el campo `coverage` (422 extra_forbidden).
+    coverage: list[dict[str, str]] = field(default_factory=list)
+    accepts_coverage: bool = True
+    # Agentes cuyo activo está archivado: el registro responde 403 asset_archived.
+    archived: set[str] = field(default_factory=set)
 
     def paths(self) -> list[str]:
         return [path for path, _ in self.requests]
@@ -112,6 +118,9 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 if agent_id in state.revoked:
                     self._send(403, {"error": {"code": "agent_revoked", "message": "revoked"}})
                     return
+                if agent_id in state.archived:
+                    self._send(403, {"error": {"code": "asset_archived", "message": "archived"}})
+                    return
                 created = agent_id not in state.agents
                 state.agents.setdefault(agent_id, str(uuid.uuid4()))
                 state.tokens[agent_id] = uuid.uuid4().hex  # rotate on every enrollment
@@ -133,6 +142,22 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
             elif self._reject_unknown_item_fields(body):
                 return
             elif path == "/events":
+                if "coverage" in body and not state.accepts_coverage:
+                    details = [
+                        {"loc": ["body", "coverage"], "msg": "Extra", "type": "extra_forbidden"}
+                    ]
+                    error = {"code": "validation_error", "message": "bad", "details": details}
+                    self._send(422, {"error": error})
+                    return
+                if not body["events"] and not body.get("coverage"):
+                    # Como el servidor real: un lote necesita eventos o cobertura.
+                    self._send(422, {"error": {"code": "validation_error", "message": "empty"}})
+                    return
+                if len(body["events"]) > 500:
+                    self._send(422, {"error": {"code": "validation_error", "message": "big"}})
+                    return
+                if body.get("coverage"):
+                    state.coverage.append(body["coverage"])
                 state.events.extend(body["events"])
                 self._send(201, {"asset_id": state.agents[agent_id]})
             elif path == "/processes" and state.processes_endpoint:

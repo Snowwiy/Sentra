@@ -70,7 +70,14 @@ cuenta; DEF-005 pasa a `critical` si el antimalware no pudo neutralizar la amena
 | DEF-004 | Protección antimalware desactivada | high | high | TA0005 / T1562.001 | 0 | Defender/Operational 5001, 5010, 5012 |
 | DEF-005 | Amenaza detectada por el antimalware | high | high | — | 0 | Defender/Operational 1116–1119 |
 | SYS-001 | Apagado inesperado | low | high | — | 10 | System 41 / 6008 |
-| SYS-002 | Servicio que falla repetidamente | medium | high | — | 60 | System 7031/7034 |
+| SYS-002 | Servicio que falla repetidamente | medium | high | — | 60 | System 7031/7034 o journal Linux (unidad systemd con fallo) |
+| LIN-AUTH-001 | Múltiples inicios de sesión SSH/PAM fallidos (Linux) | medium | medium | TA0006 / T1110 | ventana auth (5) | journal: sshd y PAM |
+| LIN-SYS-001 | Evento crítico del kernel (Linux) | low/medium | high | — | 60 | journal: kernel (OOM, sistema de ficheros, hardware, BUG) |
+
+Fase 5C.1: ACCT-001/002/003 también reciben cuentas y grupos del journal Linux (useradd,
+usermod, gpasswd; grupos privilegiados `sudo`, `wheel`, `admin`, `root`). Las reglas de
+autenticación son por plataforma: AUTH-001/CORR-001 solo ven señales Windows y
+LIN-AUTH-001/LIN-AUTH-002 solo Linux. Detalle en [linux-events.md](linux-events.md).
 
 Criterios de severidad: `critical` = compromiso muy probable con privilegios; `high` = acción
 típica de un atacante o pérdida de una defensa; `medium` = cambio relevante que suele ser
@@ -91,6 +98,7 @@ Todas por activo (nunca se mezclan activos) y dentro de ventanas configurables. 
 | CORR-002 | PowerShell sospechoso (4104 Warning) y servicio instalado o nuevo cerca en el tiempo; confianza `high` si además hay procesos nuevos | correlación (±15 min) | high / medium |
 | CORR-003 | Puerto sensible nuevo en escucha con proceso asociado (inventario) y servicio instalado o nuevo; confianza `high` si discovery confirma que es accesible en la red | cambios (±60 min) | high / medium |
 | CORR-004 | Cuenta creada, añadida a un grupo privilegiado y usada para iniciar sesión | correlación (15 min) | critical / high |
+| LIN-AUTH-002 | ≥ umbral de fallos SSH/PAM de una cuenta y después un acceso SSH correcto de la misma cuenta; sube a `critical` si después usa sudo o entra en un grupo privilegiado (Fase 5C.1) | correlación (15 min) | high / medium |
 
 ## Línea base, deduplicación y cooldown
 
@@ -188,7 +196,9 @@ con orden incremental; sin N+1 (activo y alerta en la misma consulta).
 
 ## Limitaciones y validación pendiente
 
-- Linux no envía eventos: allí solo hay detecciones de inventario, procesos y exposición.
+- Linux (Fase 5C.1) envía un subconjunto del journal (sshd, sudo, cuentas, systemd, kernel,
+  auditd opcional); pendiente de validar con journald real. Las reglas personalizadas y Sigma
+  siguen siendo de canales Windows.
 - Sin líneas de comando no es posible detectar PowerShell codificado (`-EncodedCommand`);
   SCR-001 depende del nivel Warning que Windows asigna a 4104.
 - Tareas programadas (4698) y el canal de eventos del firewall no se recogen: la cobertura

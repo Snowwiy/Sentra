@@ -11,6 +11,7 @@ from typing import Any
 import psutil
 
 from sentra_agent import __version__
+from sentra_agent.machine_identity import machine_id_hash
 
 
 @dataclass(frozen=True)
@@ -21,9 +22,15 @@ class HostInfo:
     architecture: str
     primary_ip: str
     agent_version: str
+    # Fase 5C.1: hash del id del equipo (machine_identity). Solo se envía si existe: un
+    # servidor anterior lo rechazaría como campo desconocido.
+    machine_id_hash: str | None = None
 
     def as_payload(self) -> dict[str, Any]:
-        return asdict(self)
+        payload = asdict(self)
+        if payload["machine_id_hash"] is None:
+            del payload["machine_id_hash"]
+        return payload
 
 
 def _os_version() -> str:
@@ -55,6 +62,7 @@ def collect_host_info() -> HostInfo:
         architecture=(platform.machine() or "unknown")[:32],
         primary_ip=primary_ip(),
         agent_version=__version__,
+        machine_id_hash=machine_id_hash(),
     )
 
 

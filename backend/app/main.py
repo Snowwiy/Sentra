@@ -168,7 +168,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             # validador de CORS_ORIGINS).
             allow_credentials=True,
             # Only what the API actually uses; widen deliberately when new verbs appear.
-            allow_methods=["GET", "POST", "PATCH"],
+            # Fase 5C.1: DELETE para el borrado de activos descubiertos sin historial.
+            allow_methods=["GET", "POST", "PATCH", "DELETE"],
             # X-CSRF-Token: token anti-CSRF de las peticiones mutables (api/auth.py).
             allow_headers=["Content-Type", "X-Request-ID", "X-CSRF-Token"],
         )

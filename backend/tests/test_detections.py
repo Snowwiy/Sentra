@@ -673,7 +673,9 @@ def test_a_failing_rule_does_not_stop_the_others(
 
     run = _run(engine)
 
-    assert run.rule_errors == 6 and run.failed_rules == {"AUTH-001": 6}
+    # Fase 5C.1: la misma clase sirve a AUTH-001 (Windows) y LIN-AUTH-001 (Linux).
+    assert run.rule_errors == 12
+    assert run.failed_rules == {"AUTH-001": 6, "LIN-AUTH-001": 6}
     assert "DEF-001" in _by_rule(client)
     # Las señales quedan evaluadas: una regla rota no bloquea la cola en bucle.
     pending = db.scalar(

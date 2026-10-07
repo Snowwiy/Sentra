@@ -13,6 +13,7 @@ from app.models.asset import Asset
 from app.models.event import EventLevel, SystemEvent
 from app.repositories.alert_repository import escape_like
 from app.repositories.asset_repository import AssetRepository
+from app.risk.queue import request_recalculation
 from app.schemas.event import EventBatch, EventBatchAccepted, EventList, EventRead
 from app.services.agent_service import authenticate_agent, record_contact
 from app.services.alert_service import AlertService, AlertThresholds
@@ -25,6 +26,8 @@ class EventFilter:
     event_code: int | None = None
     # Case-insensitive text in the message or the provider.
     search: str | None = None
+    provider: str | None = None
+    event_type: str | None = None
 
 
 class EventService:
@@ -42,17 +45,23 @@ class EventService:
     def ingest(self, batch: EventBatch, token: str | None) -> EventBatchAccepted:
         asset = authenticate_agent(self._assets, batch.agent_id, token)
         rows = [{"asset_id": asset.id, **event.model_dump()} for event in batch.events]
-        # ON CONFLICT DO NOTHING on the host record id: a batch resent after a lost response
-        # is accepted without duplicates, so the agent can safely retry. RETURNING gives only
-        # the rows really inserted, so alert rules never see the same event twice.
-        stmt = (
-            insert(SystemEvent)
-            .values(rows)
-            .on_conflict_do_nothing(constraint="uq_system_events_record")
-            .returning(SystemEvent)
-        )
-        stored = list(self._session.scalars(stmt))
-        record_contact(self._session, asset, datetime.now(UTC))
+        stored: list[SystemEvent] = []
+        if rows:
+            # ON CONFLICT DO NOTHING on the host record id: a batch resent after a lost
+            # response is accepted without duplicates, so the agent can safely retry. RETURNING
+            # gives only the rows really inserted, so alert rules never see the same event
+            # twice. Linux: record_id es un hash estable del cursor del journal (mismo efecto).
+            stmt = (
+                insert(SystemEvent)
+                .values(rows)
+                .on_conflict_do_nothing(constraint="uq_system_events_record")
+                .returning(SystemEvent)
+            )
+            stored = list(self._session.scalars(stmt))
+        now = datetime.now(UTC)
+        record_contact(self._session, asset, now)
+        if batch.coverage is not None:
+            self._update_coverage(asset, batch.coverage, now)
         # Same transaction as the events: an alert never points at an event rolled back.
         self._alerts.evaluate_events(asset, stored)
         # Fase 4H: solo se guardan señales (aisladas en un savepoint); las reglas las evalúa
@@ -60,6 +69,18 @@ class EventService:
         self._signals.record_events(asset.id, stored)
         self._session.commit()
         return EventBatchAccepted(asset_id=asset.public_id, received=len(rows), stored=len(stored))
+
+    def _update_coverage(self, asset: Asset, coverage: dict[str, str], now: datetime) -> None:
+        """Guarda el estado de las fuentes de eventos (Fase 5C.1).
+
+        Si cambia, el riesgo se recalcula: su confianza depende de qué fuentes llegan (un
+        journal sin permiso de lectura no es lo mismo que un equipo sin eventos).
+        """
+        changed = asset.event_coverage != coverage
+        asset.event_coverage = coverage
+        asset.event_coverage_at = now
+        if changed:
+            request_recalculation(self._session, [asset.id])
 
     def list_events(
         self,
@@ -80,6 +101,10 @@ class EventService:
             stmt = stmt.where(SystemEvent.channel == f.channel)
         if f.event_code is not None:
             stmt = stmt.where(SystemEvent.event_code == f.event_code)
+        if f.provider:
+            stmt = stmt.where(SystemEvent.provider == f.provider)
+        if f.event_type:
+            stmt = stmt.where(SystemEvent.event_type == f.event_type)
         if f.search:
             pattern = f"%{escape_like(f.search)}%"
             stmt = stmt.where(
@@ -103,6 +128,7 @@ class EventService:
                 source=event.source,
                 channel=event.channel,
                 event_code=event.event_code,
+                event_type=event.event_type,
                 provider=event.provider,
                 level=event.level,
                 message=event.message,

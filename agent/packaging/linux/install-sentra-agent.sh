@@ -155,6 +155,28 @@ create_user() {
   say "created system user $SERVICE_USER (no login shell)"
 }
 
+# Fase 5C.1: leer el journal del sistema (eventos Linux) sin root. Se usa el grupo
+# systemd-journal (solo lectura del journal); `adm` solo si no existe, porque además da
+# lectura de /var/log. Nunca root, CAP_SYS_ADMIN ni permisos sobre los ficheros del
+# journal. Sin grupo el agente sigue funcionando e informa la cobertura "no_permission".
+# El grupo se aplica al (re)iniciar el servicio, que este instalador hace a continuación.
+grant_journal_access() {
+  local group
+  for group in systemd-journal adm; do
+    getent group "$group" >/dev/null 2>&1 || continue
+    if id -nG "$SERVICE_USER" 2>/dev/null | tr ' ' '\n' | grep -qx "$group"; then
+      return 0
+    fi
+    if usermod -a -G "$group" "$SERVICE_USER"; then
+      say "added $SERVICE_USER to group $group (read-only access to the system journal)"
+    else
+      warn "could not add $SERVICE_USER to $group: Linux events will report no permission"
+    fi
+    return 0
+  done
+  warn "no systemd-journal or adm group: Linux events will report no permission"
+}
+
 create_dirs() {
   install -d -m 0755 "$OPT_DIR" "$OPT_DIR/bin"
   install -d -m 0750 "$ETC_DIR"
@@ -301,6 +323,7 @@ main() {
   if [ "$PACKAGE_MODE" = "postinst" ]; then
     # .deb postinst: user, directories and launcher; enrollment comes with sentra-agent-setup.
     create_user
+    grant_journal_access
     create_dirs
     write_launcher
     have_systemd && systemctl daemon-reload || true
@@ -313,6 +336,7 @@ main() {
     die "--upgrade needs an existing installation (no $CONFIG_FILE)"
   fi
   create_user
+  grant_journal_access
   create_dirs
   stop_service
   if [ -z "$PACKAGE_MODE" ]; then

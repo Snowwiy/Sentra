@@ -6,6 +6,7 @@ sobre índices existentes: el coste no depende de serializar filas.
 """
 
 from datetime import UTC, datetime, timedelta
+from typing import Any
 
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.orm import Session
@@ -31,6 +32,15 @@ from app.vulnerabilities.catalog import SEVERITIES
 from app.vulnerabilities.workflow import ACTIVE_STATUSES as VULNERABILITY_ACTIVE
 
 DETECTION_ACTIVE = (DetectionStatus.OPEN, DetectionStatus.ACKNOWLEDGED)
+# Fase 5C.1: el resumen describe lo ACTUAL. Los activos archivados conservan su historial
+# (detecciones, findings, alertas, riesgo) pero no cuentan aquí; los incidentes sí, porque
+# son casos de trabajo, no estado de un activo.
+CURRENT = Asset.archived_at.is_(None)
+
+
+def _current_assets(column: Any) -> Any:
+    """Condición: la fila pertenece a un activo no archivado (subconsulta, sin JOIN)."""
+    return column.in_(select(Asset.id).where(CURRENT))
 
 
 class DashboardService:
@@ -50,7 +60,9 @@ class DashboardService:
             incidents=self._incidents() if include_incidents else None,
             detections=self._detections(),
             active_alerts=self._session.scalar(
-                select(func.count()).select_from(Alert).where(Alert.status.in_(ALERT_ACTIVE))
+                select(func.count())
+                .select_from(Alert)
+                .where(Alert.status.in_(ALERT_ACTIVE), _current_assets(Alert.asset_id))
             )
             or 0,
             vulnerabilities=self._vulnerabilities() if include_vulnerabilities else None,
@@ -62,16 +74,18 @@ class DashboardService:
         by_method = {m.value: 0 for m in MonitoringMethod}
         # Una sola pasada: estado efectivo x método.
         for state, method, count in self._session.execute(
-            select(status, Asset.monitoring_method, func.count()).group_by(
-                status, Asset.monitoring_method
-            )
+            select(status, Asset.monitoring_method, func.count())
+            .where(CURRENT)
+            .group_by(status, Asset.monitoring_method)
         ):
             by_status[str(state)] = by_status.get(str(state), 0) + count
             by_method[MonitoringMethod(method).value] += count
         device = func.coalesce(Asset.device_type, "unknown").label("device_type")
         by_type = {
             str(kind): count
-            for kind, count in self._session.execute(select(device, func.count()).group_by(device))
+            for kind, count in self._session.execute(
+                select(device, func.count()).where(CURRENT).group_by(device)
+            )
         }
         return DashboardAssets(
             total=sum(by_status.values()),
@@ -86,7 +100,7 @@ class DashboardService:
         levels = {level.value: 0 for level in RiskLevel}
         for level, count in self._session.execute(
             select(cast(AssetRisk.level, String), func.count())
-            .where(AssetRisk.calculated_at.is_not(None))
+            .where(AssetRisk.calculated_at.is_not(None), _current_assets(AssetRisk.asset_id))
             .group_by(AssetRisk.level)
         ):
             levels[str(level)] = count
@@ -106,14 +120,16 @@ class DashboardService:
         severities = {s.value: 0 for s in DetectionSeverity}
         for severity, count in self._session.execute(
             select(cast(Detection.severity, String), func.count())
-            .where(Detection.status.in_(DETECTION_ACTIVE))
+            .where(Detection.status.in_(DETECTION_ACTIVE), _current_assets(Detection.asset_id))
             .group_by(Detection.severity)
         ):
             severities[str(severity)] = count
         return DashboardDetections(active=sum(severities.values()), by_severity=severities)
 
     def _vulnerabilities(self) -> DashboardVulnerabilities:
-        active = VulnerabilityFinding.status.in_(sorted(VULNERABILITY_ACTIVE))
+        active = VulnerabilityFinding.status.in_(sorted(VULNERABILITY_ACTIVE)) & _current_assets(
+            VulnerabilityFinding.asset_id
+        )
         evidenced = VulnerabilityFinding.match_state.in_(("confirmed", "probable"))
         severities = {s: 0 for s in SEVERITIES}
         for severity, count in self._session.execute(

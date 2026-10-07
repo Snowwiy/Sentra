@@ -12,6 +12,7 @@ import {
   type AgentState,
 } from "../components/agents/AgentBadges";
 import { TokensPanel } from "../components/agents/TokensPanel";
+import { DuplicatePairsPanel } from "../components/asset/LifecyclePanel";
 import { SearchInput, SortHeader, Toolbar } from "../components/ListControls";
 import { MethodBadge } from "../components/NetworkBadges";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
@@ -55,6 +56,8 @@ export function AgentsPage() {
   const [adding, setAdding] = useState(false);
   const navigate = useNavigate();
   const list = useListState<Key, { state: string }>({ key: "name", dir: "asc" }, { state: "" });
+  // Fase 5C.1: los agentes de activos archivados se ocultan por defecto (como en Activos).
+  const [showArchived, setShowArchived] = useState(false);
 
   const refreshAgents = agents.refresh;
   const refreshTokens = tokens.refresh;
@@ -67,6 +70,7 @@ export function AgentsPage() {
   const summary = agents.data?.summary;
   const page = listPage(items, {
     filter: (a) =>
+      (showArchived || a.asset_state !== "archived") &&
       (!list.filters.state || agentState(a) === list.filters.state) &&
       matchesText(list.query, a.hostname, a.display_name, a.primary_ip, a.agent_id, a.os_name),
     compare: compareBy(SORTERS[list.sort.key], list.sort.dir),
@@ -142,6 +146,10 @@ export function AgentsPage() {
             placeholder="Buscar hostname, IP o agent ID"
             label="Buscar agentes"
           />
+          <label className="checkbox small">
+            <input type="checkbox" checked={showArchived} onChange={(e) => setShowArchived(e.target.checked)} />{" "}
+            Mostrar archivados{summary?.archived ? ` (${summary.archived})` : ""}
+          </label>
         </Toolbar>
         {items.length === 0 ? (
           <EmptyState title="Todavía no hay agentes">
@@ -165,7 +173,8 @@ export function AgentsPage() {
                   {header("Enrolado", "enrolled")}
                   <th>Método</th>
                   <th>Agent ID</th>
-                  <th>Credencial</th>
+                  <th title="Estado del token del agente (revocar no archiva)">Credencial</th>
+                  <th title="Estado del activo (archivar no revoca)">Activo</th>
                   <th aria-label="Acciones" />
                 </tr>
               </thead>
@@ -210,6 +219,15 @@ export function AgentsPage() {
                       <CredentialBadge status={agent.credential_status} />
                     </td>
                     <td>
+                      {agent.asset_state === "archived" ? (
+                        <span className="badge badge--muted" title={formatDateTime(agent.archived_at)}>
+                          Archivado
+                        </span>
+                      ) : (
+                        <span className="badge badge--ok">Activo</span>
+                      )}
+                    </td>
+                    <td>
                       <AgentActions agent={agent} console={consoleState} onChanged={changed} compact />
                     </td>
                   </tr>
@@ -219,6 +237,8 @@ export function AgentsPage() {
           </div>
         )}
       </section>
+
+      <DuplicatePairsPanel />
 
       {/* Los tokens de instalación son credenciales: solo los ve quien puede gestionarlos. */}
       {consoleState.allowed && (

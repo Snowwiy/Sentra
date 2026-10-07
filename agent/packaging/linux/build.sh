@@ -40,13 +40,25 @@ case "$ARCH" in
   *) echo "unsupported --arch $ARCH (x86_64, aarch64)" >&2; exit 2 ;;
 esac
 
-VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' "$AGENT_DIR/pyproject.toml" | head -1)"
-[ -n "$VERSION" ] || { echo "version not found in pyproject.toml" >&2; exit 1; }
+# tr -d '\r': un pyproject.toml con CRLF (clon en Windows) dejaría "0.2.1\r" en el nombre
+# del paquete y en DEBIAN/control.
+VERSION="$(tr -d '\r' < "$AGENT_DIR/pyproject.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)"
+case "$VERSION" in
+  ''|*[!0-9A-Za-z.+~-]*) echo "invalid version in pyproject.toml: '$VERSION'" >&2; exit 1 ;;
+esac
 # Fixed timestamps for reproducible archives: last commit time if available, else a constant.
 if [ -z "${SOURCE_DATE_EPOCH:-}" ]; then
   SOURCE_DATE_EPOCH="$(git -C "$REPO_DIR" log -1 --format=%ct 2>/dev/null || echo 1790000000)"
 fi
 export SOURCE_DATE_EPOCH
+
+# Copia un fichero de texto ejecutado en Linux quitando los CR (Fase 5C.1): aunque
+# .gitattributes fija LF, una copia ya extraída con CRLF no debe producir un paquete roto.
+install_lf() {
+  local mode="$1" src="$2" dest="$3"
+  tr -d '\r' < "$src" > "$dest"
+  chmod "$mode" "$dest"
+}
 
 WORK="$(mktemp -d)"
 trap 'rm -rf "$WORK"' EXIT
@@ -70,8 +82,9 @@ find "$STAGE/payload/lib" -name '__pycache__' -type d -prune -exec rm -rf {} +
 find "$STAGE/payload/lib" -name '*.pyc' -delete
 
 # 3. Installer, service and docs.
-install -m 0755 "$HERE/install-sentra-agent.sh" "$HERE/uninstall-sentra-agent.sh" "$STAGE/"
-install -m 0644 "$HERE/sentra-agent.service" "$STAGE/"
+install_lf 0755 "$HERE/install-sentra-agent.sh" "$STAGE/install-sentra-agent.sh"
+install_lf 0755 "$HERE/uninstall-sentra-agent.sh" "$STAGE/uninstall-sentra-agent.sh"
+install_lf 0644 "$HERE/sentra-agent.service" "$STAGE/sentra-agent.service"
 install -m 0644 "$REPO_DIR/docs/agent-linux-installation.md" "$STAGE/README.md"
 printf 'version=%s\narch=%s\npsutil=%s\n' "$VERSION" "$ARCH" "$(basename "$PSUTIL_WHEEL")" \
   > "$STAGE/VERSION"
@@ -99,17 +112,19 @@ if [ "$BUILD_DEB" = "1" ] && command -v dpkg-deb >/dev/null 2>&1; then
   mkdir -p "$DEB/DEBIAN" "$DEB/opt/sentra-agent/share" "$DEB/opt/sentra-agent/bin" \
     "$DEB/lib/systemd/system" "$DEB/usr/sbin" "$DEB/usr/share/doc/sentra-agent"
   cp -R "$STAGE/payload/lib" "$DEB/opt/sentra-agent/lib"
-  install -m 0755 "$HERE/install-sentra-agent.sh" "$HERE/uninstall-sentra-agent.sh" \
-    "$DEB/opt/sentra-agent/share/"
+  install_lf 0755 "$STAGE/install-sentra-agent.sh" "$DEB/opt/sentra-agent/share/install-sentra-agent.sh"
+  install_lf 0755 "$STAGE/uninstall-sentra-agent.sh" \
+    "$DEB/opt/sentra-agent/share/uninstall-sentra-agent.sh"
   install -m 0644 "$STAGE/VERSION" "$DEB/opt/sentra-agent/VERSION"
-  install -m 0644 "$HERE/sentra-agent.service" "$DEB/lib/systemd/system/"
+  install_lf 0644 "$HERE/sentra-agent.service" "$DEB/lib/systemd/system/sentra-agent.service"
   install -m 0644 "$STAGE/README.md" "$DEB/usr/share/doc/sentra-agent/README.md"
-  install -m 0755 "$HERE/debian/sentra-agent-setup" "$DEB/usr/sbin/sentra-agent-setup"
+  install_lf 0755 "$HERE/debian/sentra-agent-setup" "$DEB/usr/sbin/sentra-agent-setup"
   for script in postinst prerm postrm; do
-    install -m 0755 "$HERE/debian/$script" "$DEB/DEBIAN/$script"
+    install_lf 0755 "$HERE/debian/$script" "$DEB/DEBIAN/$script"
   done
-  sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$DEB_ARCH/" \
-    -e "s/@SIZE@/$(du -sk "$DEB/opt" | cut -f1)/" "$HERE/debian/control.in" > "$DEB/DEBIAN/control"
+  tr -d '\r' < "$HERE/debian/control.in" | sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$DEB_ARCH/" \
+    -e "s/@SIZE@/$(du -sk "$DEB/opt" | cut -f1)/" > "$DEB/DEBIAN/control"
+  chmod 0644 "$DEB/DEBIAN/control"
   normalize "$DEB"
   DEB_FILE="$OUT_DIR/sentra-agent_${VERSION}_${DEB_ARCH}.deb"
   dpkg-deb --root-owner-group -Zxz --build "$DEB" "$DEB_FILE" >/dev/null

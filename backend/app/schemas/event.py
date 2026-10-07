@@ -2,7 +2,7 @@ import re
 from datetime import UTC, datetime
 from uuid import UUID
 
-from pydantic import AwareDatetime, Field, field_validator
+from pydantic import AwareDatetime, Field, field_validator, model_validator
 
 from app.models.event import EventLevel
 from app.schemas.common import BIGINT_MAX, NUL, RequestModel, ResponseModel
@@ -16,13 +16,22 @@ MAX_DATA_FIELDS = 16
 MAX_DATA_VALUE_LENGTH = 512
 # Nombres de campo de Windows: "TargetUserName", "param1", "Threat Name"...
 _DATA_KEY = re.compile(r"^[A-Za-z][A-Za-z0-9 _.\-]{0,63}$")
+# Fase 5C.1: tipo normalizado de los eventos Linux (auth_failure, sudo_command...).
+EVENT_TYPE_PATTERN = r"^[a-z][a-z0-9_]{0,47}$"
+# Cobertura de eventos que informa el agente: fuente -> estado. Valores cerrados para que un
+# agente manipulado no pueda escribir texto libre que la UI muestre.
+COVERAGE_STATES = frozenset({"active", "unavailable", "no_permission", "error", "disabled"})
+_COVERAGE_SOURCE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
+MAX_COVERAGE_SOURCES = 16
 
 
 class EventIn(RequestModel):
     source: str = Field(min_length=1, max_length=32, examples=["windows_eventlog"])
     channel: str = Field(min_length=1, max_length=255, examples=["System"])
     record_id: int = Field(ge=0, le=BIGINT_MAX)
-    event_code: int = Field(ge=0, le=2**31 - 1)
+    # Id de evento de Windows. Fase 5C.1: opcional, los eventos Linux no tienen (null).
+    event_code: int | None = Field(default=None, ge=0, le=2**31 - 1)
+    event_type: str | None = Field(default=None, pattern=EVENT_TYPE_PATTERN)
     provider: str = Field(min_length=1, max_length=255)
     level: EventLevel
     # Long messages are truncated by the agent; the bound protects the API either way.
@@ -62,7 +71,28 @@ class EventIn(RequestModel):
 
 class EventBatch(RequestModel):
     agent_id: UUID
-    events: list[EventIn] = Field(min_length=1, max_length=MAX_EVENTS_PER_BATCH)
+    # Fase 5C.1: puede ir vacío si el lote solo informa la cobertura (p. ej. el journal no
+    # se puede leer): así "sin permiso" no se confunde con "0 eventos".
+    events: list[EventIn] = Field(max_length=MAX_EVENTS_PER_BATCH)
+    coverage: dict[str, str] | None = Field(default=None, max_length=MAX_COVERAGE_SOURCES)
+
+    @field_validator("coverage")
+    @classmethod
+    def _check_coverage(cls, value: dict[str, str] | None) -> dict[str, str] | None:
+        if not value:
+            return None
+        for key, state in value.items():
+            if not _COVERAGE_SOURCE.match(key):
+                raise ValueError(f"invalid coverage source: {key[:32]!r}")
+            if state not in COVERAGE_STATES:
+                raise ValueError(f"invalid coverage state for {key}")
+        return value
+
+    @model_validator(mode="after")
+    def _not_empty(self) -> "EventBatch":
+        if not self.events and not self.coverage:
+            raise ValueError("a batch needs events or coverage")
+        return self
 
 
 class EventBatchAccepted(ResponseModel):
@@ -77,7 +107,9 @@ class EventRead(ResponseModel):
     hostname: str
     source: str
     channel: str
-    event_code: int
+    event_code: int | None
+    # Fase 5C.1: tipo normalizado (Linux); null en Windows.
+    event_type: str | None = None
     provider: str
     level: EventLevel
     message: str

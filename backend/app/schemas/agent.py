@@ -20,6 +20,10 @@ class HostInfo(RequestModel):
     installation_method: str | None = Field(
         default=None, pattern=r"^[a-z][a-z0-9_]{0,31}$", examples=["windows_service"]
     )
+    # Fase 5C.1: identidad estable de la máquina, ya derivada en el agente (HMAC-SHA256 en
+    # hexadecimal de /etc/machine-id o MachineGuid). Nunca el valor en claro. Opcional: los
+    # agentes anteriores no la envían.
+    machine_id_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
 
 
 class AgentRegisterRequest(HostInfo):

@@ -79,6 +79,115 @@ export interface Asset {
   risk_score: number | null;
   risk_level: RiskLevel | null;
   risk_confidence: RiskConfidence | null;
+  /** Fase 5C.1: archivado = oculto por defecto, con todo su historial. */
+  archived_at: IsoDateTime | null;
+  archived_by: string | null;
+  archive_reason: string | null;
+  /** Concurrencia optimista de archivar/restaurar/borrar/reconciliar (409 si cambió). */
+  lifecycle_version: number;
+  /** Tuvo agente alguna vez: nunca se borra, solo se archiva. */
+  managed_history: boolean;
+  /** Estado de las fuentes de eventos (journal, sshd, sudo, auditd...); null si no se informa. */
+  event_coverage: Record<string, EventCoverageState> | null;
+  event_coverage_at: IsoDateTime | null;
+}
+
+// --- Ciclo de vida de activos (Fase 5C.1) -----------------------------------------------------
+
+export type EventCoverageState = "active" | "unavailable" | "no_permission" | "error" | "disabled";
+
+export type ArchivedFilter = "exclude" | "include" | "only";
+
+export type DeleteBlockingReason =
+  | "managed_history"
+  | "agent_history"
+  | "detections"
+  | "incidents"
+  | "vulnerabilities"
+  | "threat_intel"
+  | "audit_dependency"
+  | "other";
+
+export type DuplicateReason = "same_machine_id" | "same_hostname" | "same_ip" | "same_mac";
+export type DuplicateConfidence = "high" | "medium" | "low";
+export type ReconcileBlocker =
+  | "same_asset"
+  | "source_without_agent"
+  | "source_archived"
+  | "target_never_managed"
+  | "target_agent_online"
+  | "platform_mismatch"
+  | "machine_id_mismatch"
+  | "insufficient_evidence";
+
+export interface AssetDeleteCheck {
+  asset_id: string;
+  deletable: boolean;
+  blocking_reasons: DeleteBlockingReason[];
+  /** Recuento por dependencia que bloquea ({"vulnerability_findings": 2}). */
+  dependencies: Record<string, number>;
+  /** Lo que se borraría junto al activo (puertos, cambios, detecciones de bajo impacto...). */
+  removes: Record<string, number>;
+  can_archive: boolean;
+  version: number;
+  display_name: string;
+  hostname: string | null;
+  primary_ip: string;
+  mac_address: string | null;
+  monitoring_method: MonitoringMethod;
+  last_seen_at: IsoDateTime | null;
+}
+
+export interface DuplicateAsset {
+  asset_id: string;
+  display_name: string;
+  hostname: string | null;
+  primary_ip: string;
+  mac_address: string | null;
+  os_name: string | null;
+  monitoring_method: MonitoringMethod;
+  agent_version: string | null;
+  credential_status: CredentialStatus | null;
+  archived: boolean;
+  last_seen_at: IsoDateTime | null;
+  first_seen_at: IsoDateTime;
+  version: number;
+}
+
+export interface DuplicateCandidate {
+  asset: DuplicateAsset;
+  reasons: DuplicateReason[];
+  confidence: DuplicateConfidence;
+  /** El activo consultado puede reconciliarse con este candidato como destino. */
+  reconcilable: boolean;
+  reconcile_blockers: ReconcileBlocker[];
+}
+
+export interface DuplicateCandidateList {
+  asset_id: string;
+  items: DuplicateCandidate[];
+}
+
+export interface DuplicatePair {
+  /** El más reciente (normalmente el agente nuevo). */
+  asset: DuplicateAsset;
+  /** El histórico. */
+  candidate: DuplicateAsset;
+  reasons: DuplicateReason[];
+  confidence: DuplicateConfidence;
+  reconcilable: boolean;
+  reconcile_blockers: ReconcileBlocker[];
+}
+
+export interface DuplicatePairList {
+  items: DuplicatePair[];
+}
+
+export interface AssetReconcileResult {
+  asset: Asset;
+  archived_duplicate_id: string;
+  confidence: DuplicateConfidence;
+  reasons: DuplicateReason[];
 }
 
 // --- Asset Context (Fase 4L) ------------------------------------------------------------------
@@ -561,7 +670,10 @@ export interface SystemEvent {
   hostname: string;
   source: string;
   channel: string;
-  event_code: number;
+  /** Event ID de Windows; null en Linux (Fase 5C.1). */
+  event_code: number | null;
+  /** Tipo normalizado (Linux: auth_failure, sudo_command, service_failed...); null en Windows. */
+  event_type: string | null;
   provider: string;
   level: EventLevel;
   message: string;
@@ -757,6 +869,10 @@ export interface Agent {
   credential_issued_at: IsoDateTime | null;
   revoked_at: IsoDateTime | null;
   last_seen_at: IsoDateTime | null;
+  /** Fase 5C.1: estado del activo, separado del de la credencial (revocar no archiva). */
+  asset_state: "active" | "archived";
+  archived_at: IsoDateTime | null;
+  lifecycle_version: number;
 }
 
 export interface AgentSummary {
@@ -765,6 +881,8 @@ export interface AgentSummary {
   offline: number;
   pending: number;
   revoked: number;
+  /** Agentes cuyo activo está archivado (no cuentan en los demás totales). */
+  archived: number;
 }
 
 export interface AgentList {
@@ -825,6 +943,7 @@ export type Permission =
   | "alerts:manage"
   | "detections:manage"
   | "assets:manage"
+  | "assets:duplicates_read"
   | "discovery:run"
   | "agents:manage"
   | "enrollment:manage"

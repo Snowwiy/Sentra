@@ -10,6 +10,7 @@ import { ChangesList } from "../components/asset/ChangesList";
 import { ContextTab } from "../components/asset/ContextTab";
 import { EventsTab } from "../components/asset/EventsTab";
 import { ExposureTab } from "../components/asset/ExposureTab";
+import { LifecyclePanel } from "../components/asset/LifecyclePanel";
 import { NetworkTab } from "../components/asset/NetworkTab";
 import { OverviewTab } from "../components/asset/OverviewTab";
 import { RiskPanel } from "../components/risk/RiskPanel";
@@ -206,6 +207,12 @@ export function AssetDetailPage() {
           <h1 className="detail__title">
             {assetTitle(asset)} <StatusBadge status={asset.status} />{" "}
             <MethodBadge method={asset.monitoring_method} />
+            {asset.archived_at && (
+              <>
+                {" "}
+                <span className="badge badge--muted">Archivado</span>
+              </>
+            )}
           </h1>
           <p className="muted small">
             <span className="mono">{asset.primary_ip}</span> · {typeWithConfidence(asset)}
@@ -239,6 +246,7 @@ export function AssetDetailPage() {
       <div role="tabpanel">
         {tab === "overview" && (
           <div className="stack">
+            <LifecyclePanel asset={asset} onChanged={refresh} />
             <OverviewTab asset={asset} />
             <AIAnalyzePanel
               title="AI Insights del activo"
@@ -251,7 +259,7 @@ export function AssetDetailPage() {
           </div>
         )}
         {INVENTORY_TABS.includes(tab) && inventoryContent()}
-        {tab === "events" && <EventsTab assetId={asset.asset_id} />}
+        {tab === "events" && <EventsTab asset={asset} />}
         {tab === "exposure" && <ExposureTab assetId={asset.asset_id} managed={managed} />}
         {tab === "risk" && <RiskPanel assetId={asset.asset_id} />}
         {tab === "context" && <ContextTab assetId={asset.asset_id} />}

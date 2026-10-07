@@ -29,6 +29,10 @@ class Permission(enum.StrEnum):
     # Cambiar datos de contexto de un activo que alteran el riesgo (criticidad, Fase 4I).
     # Solo admin: un viewer o analyst no puede rebajar el riesgo de un activo a mano.
     ASSETS_MANAGE = "assets:manage"
+    # Fase 5C.1: ver sugerencias de posibles duplicados (reinstalaciones, activos descubiertos
+    # del mismo equipo). Archivar, restaurar, borrar y reconciliar siguen siendo assets:manage
+    # (y agents:manage para reconciliar): solo admin.
+    ASSET_DUPLICATES_READ = "assets:duplicates_read"
     # Iniciar y cancelar descubrimientos de red (siempre dentro de la allowlist del servidor).
     DISCOVERY_RUN = "discovery:run"
     # Revocar y rehabilitar agentes.
@@ -103,6 +107,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.ALERTS_MANAGE,
             Permission.DETECTIONS_MANAGE,
             Permission.DISCOVERY_RUN,
+            Permission.ASSET_DUPLICATES_READ,
             Permission.AI_USE,
             Permission.INCIDENTS_READ,
             Permission.INCIDENTS_MANAGE,

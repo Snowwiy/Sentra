@@ -45,6 +45,10 @@ class AgentRead(ResponseModel):
     credential_issued_at: datetime | None
     revoked_at: datetime | None
     last_seen_at: datetime | None
+    # Fase 5C.1: estado del ACTIVO, separado del de la credencial (revocar no archiva).
+    asset_state: Literal["active", "archived"] = "active"
+    archived_at: datetime | None = None
+    lifecycle_version: int = 0
 
 
 class AgentSummary(ResponseModel):
@@ -54,6 +58,8 @@ class AgentSummary(ResponseModel):
     # Enrolled but never reported (or waiting to re-enroll).
     pending: int
     revoked: int
+    # Fase 5C.1: agentes cuyo activo está archivado. No cuentan en los demás totales.
+    archived: int = 0
 
 
 class AgentList(ResponseModel):

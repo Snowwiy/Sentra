@@ -183,6 +183,15 @@ def acted_by(admin_change: DetectionSignal, logon: DetectionSignal) -> bool:
     return actor is not None and actor == logon.subject
 
 
+def signal_platform(signal: DetectionSignal) -> str:
+    """Plataforma de una señal de evento: "linux" (journal, Fase 5C.1) o "windows".
+
+    Solo las señales de eventos Linux llevan `platform`; las de Windows y las de inventario
+    no, y se tratan como hasta ahora.
+    """
+    return "linux" if _get(signal, "platform") == "linux" else "windows"
+
+
 def _label(signal: DetectionSignal) -> str:
     """Nombre legible de la cuenta de una señal (nombre, o SID si no hay nombre)."""
     return str(_get(signal, "account") or signal.subject or _get(signal, "sid") or "desconocida")
@@ -259,9 +268,19 @@ AUTH_001 = RuleMeta(
 
 
 class FailedLogonBurst:
-    meta = AUTH_001
+    """AUTH-001 (Windows) y LIN-AUTH-001 (Linux, SSH/PAM): misma lógica, textos propios.
+
+    Cada instancia solo evalúa señales de su plataforma: un fallo SSH nunca abre AUTH-001
+    (que habla de 4625) ni un 4625 abre LIN-AUTH-001.
+    """
+
+    def __init__(self, meta: RuleMeta = AUTH_001, platform: str = "windows") -> None:
+        self.meta = meta
+        self._platform = platform
 
     def evaluate(self, ctx: RuleContext, signal: DetectionSignal) -> list[RuleResult]:
+        if signal_platform(signal) != self._platform:
+            return []
         config = ctx.config
         start = signal.occurred_at - config.auth_failure_window
         kinds = [SignalKind.AUTH_FAILURE]
@@ -619,11 +638,30 @@ CORR_001 = RuleMeta(
 
 
 class FailedThenSuccess:
-    meta = CORR_001
+    """CORR-001 (Windows) y LIN-AUTH-002 (Linux): fallos -> acceso -> privilegios.
+
+    En Linux el paso de privilegios es, además del alta en un grupo privilegiado (sudo,
+    wheel...), un comando con sudo de la misma cuenta: es lo que hace un atacante que acaba
+    de entrar por SSH. Mismo motor y misma lógica; solo cambia qué señal cuenta como escalada.
+    """
+
+    def __init__(self, meta: RuleMeta = CORR_001, platform: str = "windows") -> None:
+        self.meta = meta
+        self._platform = platform
+
+    def _escalations(self) -> list[SignalKind]:
+        kinds = [SignalKind.ADMIN_GROUP_ADDED]
+        if self._platform == "linux":
+            kinds.append(SignalKind.SUDO_COMMAND)
+        return kinds
 
     def evaluate(self, ctx: RuleContext, signal: DetectionSignal) -> list[RuleResult]:
         if signal.kind == SignalKind.AUTH_SUCCESS:
+            if signal_platform(signal) != self._platform:
+                return []
             return self._from_success(ctx, signal, None)
+        if signal.kind == SignalKind.SUDO_COMMAND and self._platform != "linux":
+            return []
         # Cambio de privilegios: ¿lo precede una cadena fallos -> acceso de esa cuenta?
         successes = ctx.signals(
             signal.asset_id,
@@ -632,7 +670,7 @@ class FailedThenSuccess:
             signal.occurred_at,
         )
         for success in reversed(successes):
-            if acted_by(signal, success):
+            if signal_platform(success) == self._platform and acted_by(signal, success):
                 return self._from_success(ctx, success, signal)
         return []
 
@@ -656,7 +694,7 @@ class FailedThenSuccess:
         if admin is None:
             changes = ctx.signals(
                 success.asset_id,
-                [SignalKind.ADMIN_GROUP_ADDED],
+                self._escalations(),
                 success.occurred_at,
                 success.occurred_at + config.change_window,
             )
@@ -664,7 +702,11 @@ class FailedThenSuccess:
         sources = {str(_get(f, "source_ip")) for f in failures if _get(f, "source_ip")}
         success_ip = _get(success, "source_ip")
         # Más confianza si el acceso viene del mismo origen que los fallos o es remoto (RDP).
-        strong = (success_ip and success_ip in sources) or _get(success, "logon_type") == "10"
+        # Fase 5C.1: "ssh" (Linux) cuenta como acceso remoto igual que RDP.
+        strong = (success_ip and success_ip in sources) or _get(success, "logon_type") in (
+            "10",
+            "ssh",
+        )
         confidence = Conf.HIGH if strong or admin else Conf.MEDIUM
         severity = Sev.CRITICAL if admin else Sev.HIGH
         minutes = int(config.correlation_window.total_seconds() // 60)
@@ -675,7 +717,11 @@ class FailedThenSuccess:
             + "."
         )
         evidence = [*_tail(failures, "failure"), Evidence(success, "success")]
-        if admin is not None:
+        if admin is not None and admin.kind == SignalKind.SUDO_COMMAND:
+            target = _get(admin, "target_user") or "root"
+            summary += f" Después, {_label(admin)} ejecutó un comando con sudo como {target}."
+            evidence.append(Evidence(admin, "privilege_escalation"))
+        elif admin is not None:
             group = _get(admin, "group") or "un grupo privilegiado"
             summary += f" Después, {_label(admin)} entró en {group}."
             evidence.append(Evidence(admin, "admin_change"))
@@ -1017,8 +1063,104 @@ def _meta(**kwargs: Any) -> RuleMeta:
     return RuleMeta(**{"version": 1, "kind": SINGLE, **kwargs})
 
 
+# --- Linux (Fase 5C.1, eventos del journal) ----------------------------------------------------
+
+LIN_AUTH_001 = RuleMeta(
+    id="LIN-AUTH-001",
+    version=1,
+    kind=SINGLE,
+    category="authentication",
+    title="Múltiples inicios de sesión SSH/PAM fallidos (Linux)",
+    description=(
+        "Varios fallos de autenticación de la misma cuenta en el mismo equipo Linux (sshd:"
+        " contraseña o clave pública rechazada, usuario inexistente; PAM de su/sudo/login)"
+        " dentro de DETECTION_AUTH_FAILURE_WINDOW_MINUTES."
+    ),
+    why=(
+        "Es el patrón de un intento de adivinar contraseñas por SSH. Por sí solo no significa"
+        " acceso: también lo produce un usuario que olvidó su contraseña o un script con"
+        " credenciales antiguas."
+    ),
+    severity=Sev.MEDIUM,
+    confidence=Conf.MEDIUM,
+    triggers=frozenset({SignalKind.AUTH_FAILURE}),
+    required_data=("systemd journal: sshd y PAM (agente Linux en el grupo systemd-journal)",),
+    recommendations=(
+        "Revisar el origen (IP) de los intentos y si el servidor SSH debe ser accesible desde ahí.",
+        "Comprobar si hubo un inicio de sesión correcto posterior (ver LIN-AUTH-002).",
+        "Valorar deshabilitar la autenticación por contraseña en sshd (solo claves).",
+        "Si el origen no es conocido, bloquearlo según el procedimiento de la organización.",
+    ),
+    mitre=Mitre("TA0006", "T1110"),
+    cooldown_setting="auth_failure_window",
+)
+
+LIN_AUTH_002 = RuleMeta(
+    id="LIN-AUTH-002",
+    version=1,
+    kind=CORRELATION,
+    category="authentication",
+    title="Acceso SSH tras fallos repetidos (Linux)",
+    description=(
+        "Inicio de sesión correcto (SSH) de una cuenta precedido, dentro de"
+        " DETECTION_CORRELATION_WINDOW_MINUTES, de al menos DETECTION_AUTH_FAILURE_THRESHOLD"
+        " fallos de esa misma cuenta. Si después la cuenta usa sudo o entra en un grupo"
+        " privilegiado dentro de DETECTION_CHANGE_WINDOW_MINUTES, se eleva a crítica."
+    ),
+    why=(
+        "Fallos seguidos de un acierto pueden indicar que alguien adivinó la contraseña; usar"
+        " sudo justo después es lo que haría un atacante para tomar el control. También puede"
+        " ser el propio usuario tras equivocarse: hay que confirmarlo con él."
+    ),
+    severity=Sev.HIGH,
+    confidence=Conf.MEDIUM,
+    triggers=frozenset(
+        {SignalKind.AUTH_SUCCESS, SignalKind.ADMIN_GROUP_ADDED, SignalKind.SUDO_COMMAND}
+    ),
+    required_data=(
+        "systemd journal: sshd (fallos y accesos) con usuario e IP de origen",
+        "Opcional: sudo y cambios de grupos (usermod/gpasswd) del journal",
+    ),
+    recommendations=(
+        "Verificar con el usuario si reconoce el acceso y su origen.",
+        "Revisar los comandos ejecutados con sudo en la ventana (pestaña Eventos).",
+        "Si no se reconoce: cambiar la contraseña, revisar authorized_keys y los grupos"
+        " privilegiados, y aislar el equipo según el procedimiento institucional.",
+    ),
+    mitre=Mitre("TA0006", "T1110"),
+)
+
+_KERNEL_CATEGORY = {
+    "oom_kill": ("El kernel terminó un proceso por falta de memoria (OOM)", Sev.LOW),
+    "filesystem_error": ("Error del sistema de ficheros", Sev.MEDIUM),
+    "hardware_error": ("Error de hardware informado por el kernel", Sev.MEDIUM),
+    "kernel_bug": ("Fallo interno del kernel (BUG/Oops)", Sev.MEDIUM),
+}
+
+
+def _kernel(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    category = str(_get(s, "category") or s.subject or "kernel")
+    title, severity = _KERNEL_CATEGORY.get(category, ("Evento crítico del kernel", Sev.LOW))
+    process = _get(s, "process")
+    device = _get(s, "device")
+    summary = (
+        title
+        + (f" (proceso {process})" if process else "")
+        + (f" en {device}" if device else "")
+        + "."
+    )
+    return _single(
+        s,
+        _key(category, "kernel"),
+        summary,
+        severity=severity,
+        details={"category": category, "process": process, "device": device},
+    )
+
+
 RULES: tuple[DetectionRule, ...] = (
     FailedLogonBurst(),
+    FailedLogonBurst(LIN_AUTH_001, "linux"),
     SimpleRule(
         _meta(
             id="AUTH-002",
@@ -1054,7 +1196,9 @@ RULES: tuple[DetectionRule, ...] = (
             severity=Sev.MEDIUM,
             confidence=Conf.HIGH,
             triggers=frozenset({SignalKind.ACCOUNT_CREATED}),
-            required_data=("Windows Security 4720 o cuentas del inventario",),
+            required_data=(
+                "Windows Security 4720, journal Linux (useradd) o cuentas del inventario",
+            ),
             recommendations=(
                 "Confirmar que la cuenta corresponde a un alta aprobada.",
                 "Revisar quién la creó y sus grupos.",
@@ -1079,7 +1223,10 @@ RULES: tuple[DetectionRule, ...] = (
             severity=Sev.HIGH,
             confidence=Conf.HIGH,
             triggers=frozenset({SignalKind.ADMIN_GROUP_ADDED}),
-            required_data=("Windows Security 4728/4732/4756 o administradores del inventario",),
+            required_data=(
+                "Windows Security 4728/4732/4756, journal Linux (usermod/gpasswd: sudo, wheel)"
+                " o administradores del inventario",
+            ),
             recommendations=(
                 "Confirmar que el cambio está aprobado.",
                 "Revisar quién hizo el cambio y desde qué sesión.",
@@ -1430,7 +1577,10 @@ RULES: tuple[DetectionRule, ...] = (
             severity=Sev.MEDIUM,
             confidence=Conf.HIGH,
             triggers=frozenset({SignalKind.SERVICE_CRASHED}),
-            required_data=("System 7031/7034 con nombre del servicio",),
+            required_data=(
+                "System 7031/7034 con nombre del servicio o systemd (journal Linux):"
+                " unidad que termina con fallo",
+            ),
             recommendations=(
                 "Revisar el registro de la aplicación del servicio.",
                 "Comprobar actualizaciones o cambios recientes del software.",
@@ -1444,6 +1594,35 @@ RULES: tuple[DetectionRule, ...] = (
         by_subject=True,
     ),
     FailedThenSuccess(),
+    FailedThenSuccess(LIN_AUTH_002, "linux"),
+    SimpleRule(
+        _meta(
+            id="LIN-SYS-001",
+            category="system",
+            title="Evento crítico del kernel (Linux)",
+            description=(
+                "El kernel informó un problema relevante: proceso terminado por falta de"
+                " memoria (OOM), error de sistema de ficheros, error de hardware o un fallo"
+                " interno (BUG/Oops). Una ocurrencia por categoría y hora."
+            ),
+            why=(
+                "Afecta a la disponibilidad y a la integridad de los datos; un error de disco o"
+                " de memoria repetido anticipa una avería. No es un indicio de ataque por sí"
+                " solo."
+            ),
+            severity=Sev.LOW,
+            confidence=Conf.HIGH,
+            triggers=frozenset({SignalKind.KERNEL_CRITICAL}),
+            required_data=("systemd journal: mensajes del kernel de nivel warning o superior",),
+            recommendations=(
+                "Revisar `journalctl -k` en el equipo alrededor de la hora del evento.",
+                "OOM: revisar el consumo de memoria del proceso y los límites del servicio.",
+                "Errores de disco o hardware: comprobar SMART, cables y copias de seguridad.",
+            ),
+            cooldown=timedelta(hours=1),
+        ),
+        _kernel,
+    ),
     PowerShellPersistence(),
     ExposureWithNewSoftware(),
     NewPrivilegedAccountUsed(),

@@ -1,5 +1,5 @@
 import logging
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
 from sqlalchemy import func, update
@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, object_session
 
 from app.core.exceptions import (
     AgentRevokedError,
+    AssetArchivedError,
     ConflictError,
     ForbiddenError,
     NotFoundError,
@@ -28,6 +29,7 @@ from app.schemas.agent import (
     HeartbeatResponse,
     HostInfo,
 )
+from app.services import audit_service
 from app.services.alert_service import resolve_offline_alert
 from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import refresh_identity
@@ -35,6 +37,8 @@ from app.services.reconciliation import adopt_discovered
 from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
+# Actor de las entradas de auditoría que genera el propio servidor (sin usuario).
+SYSTEM = audit_service.Actor("system")
 
 
 def record_contact(session: Session, asset: Asset, now: datetime) -> None:
@@ -71,6 +75,10 @@ def apply_host_info(asset: Asset, host: HostInfo) -> None:
     # Se asigna aunque venga vacío: refleja cómo corre el agente que informa ahora (p. ej.
     # un servicio desinstalado y el agente lanzado a mano deja de mostrar "Servicio Windows").
     asset.agent_installation_method = host.installation_method
+    # Fase 5C.1: solo se actualiza si llega. Un agente anterior (o uno que no pudo leer
+    # /etc/machine-id) no borra la identidad ya conocida, que sirve para sugerir duplicados.
+    if host.machine_id_hash:
+        asset.machine_id_hash = host.machine_id_hash
     # El agente es la fuente autoritativa del nombre y del tipo: se recalcula con lo que
     # acaba de reportar (sin escrituras si nada cambió).
     refresh_identity(asset)
@@ -167,6 +175,10 @@ class AgentService:
         # callers without one. A revoked agent does not consume the enrollment token.
         if asset is not None and asset.agent_token_revoked_at is not None:
             raise AgentRevokedError("This agent has been revoked by an operator")
+        # Fase 5C.1: un activo archivado no recibe datos nuevos sin que un admin lo restaure
+        # (si no, un agente reinstalado con la identidad antigua lo reactivaría a escondidas).
+        if asset is not None and asset.archived_at is not None:
+            raise AssetArchivedError("The asset of this agent is archived")
 
         token = generate_agent_token()
         created = asset is None
@@ -181,6 +193,8 @@ class AgentService:
                     primary_ip=str(data.primary_ip),
                     agent_version=data.agent_version,
                     agent_installation_method=data.installation_method,
+                    machine_id_hash=data.machine_id_hash,
+                    ever_managed=True,
                     # Registration alone does not prove the agent keeps running; it becomes
                     # online with its first heartbeat or telemetry sample.
                     status=AssetStatus.UNKNOWN,
@@ -198,6 +212,8 @@ class AgentService:
             # Installed on a host discovery already knew: converge into this asset. Only by
             # address here (the agent reports MACs with its inventory, which retries it).
             adopt_discovered(self._session, asset, {str(data.primary_ip)}, set())
+            if created:
+                self._note_duplicates(asset)
             if bootstrap is not None:
                 self._tokens.consume(bootstrap, asset)
             else:
@@ -220,6 +236,37 @@ class AgentService:
             agent_token=token,
         )
         return response, created
+
+    def _note_duplicates(self, asset: Asset) -> None:
+        """Audita si el agente nuevo parece un activo ya conocido (reinstalación).
+
+        Solo sugiere: nada se une automáticamente (docs/agent-asset-lifecycle.md). Un fallo
+        aquí nunca impide enrolar: va en su propio SAVEPOINT.
+        """
+        # Import local: asset_lifecycle_service importa servicios que importan este módulo.
+        from app.services.asset_lifecycle_service import AssetLifecycleService
+
+        try:
+            with self._session.begin_nested():
+                found = AssetLifecycleService(self._session, timedelta(0)).detect_for_new_agent(
+                    asset
+                )
+                if found:
+                    audit_service.record(
+                        self._session,
+                        SYSTEM,
+                        "asset_duplicate_detected",
+                        target_type="asset",
+                        target_id=asset.public_id,
+                        details={
+                            "candidates": [str(other.public_id) for other, _ in found[:10]],
+                            "confidence": [result.confidence for _, result in found[:10]],
+                            "reasons": sorted({r for _, result in found for r in result.reasons}),
+                        },
+                        commit=False,
+                    )
+        except Exception:
+            logger.exception("duplicate detection failed at enrollment")
 
     def heartbeat(self, data: HeartbeatRequest, token: str | None) -> HeartbeatResponse:
         asset = authenticate_agent(self._assets, data.agent_id, token)

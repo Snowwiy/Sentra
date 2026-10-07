@@ -3,7 +3,18 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Enum, Index, Integer, String, Uuid, func
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    Index,
+    Integer,
+    String,
+    Uuid,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -61,6 +72,9 @@ class Asset(Base):
         # Discovery and reconciliation look assets up by address.
         Index("ix_assets_primary_ip", "primary_ip"),
         Index("ix_assets_mac_address", "mac_address"),
+        # Fase 5C.1: sugerencias de duplicados (misma identidad de máquina o mismo nombre).
+        Index("ix_assets_machine_id_hash", "machine_id_hash"),
+        Index("ix_assets_hostname_lower", text("lower(hostname)")),
     )
 
     # Internal surrogate key; never exposed through the API.
@@ -155,6 +169,28 @@ class Asset(Base):
         server_default=AssetCriticality.MEDIUM.value,
     )
 
+    # --- Lifecycle (Fase 5C.1, docs/agent-asset-lifecycle.md) ------------------------------
+    # Archivado: el activo conserva todo su historial pero no aparece por defecto ni cuenta en
+    # el resumen actual. Nunca se archiva solo: lo decide un admin (o una reconciliación).
+    archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    archived_by: Mapped[str | None] = mapped_column(String(64))
+    archive_reason: Mapped[str | None] = mapped_column(String(500))
+    # Concurrencia optimista de archivar/restaurar/borrar/reconciliar. No sirve updated_at:
+    # cambia con cada heartbeat y la UI recibiría 409 sin que nadie tocara el ciclo de vida.
+    lifecycle_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # True desde que el activo tuvo agente, aunque luego lo pierda (reconciliación). Un activo
+    # que fue Managed tiene historial de agente y nunca se borra físicamente desde la UI.
+    ever_managed: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # Identidad estable de la máquina derivada en el agente (HMAC-SHA256 de /etc/machine-id
+    # o MachineGuid con una clave fija de Sentra): permite reconocer una reinstalación sin
+    # que el identificador real salga del equipo. No es un secreto ni sirve para autenticar,
+    # pero tampoco se expone en la API: solo se compara.
+    machine_id_hash: Mapped[str | None] = mapped_column(String(64))
+    # Estado de las fuentes de eventos informado por el agente ({"journal": "active",
+    # "auditd": "unavailable", ...}) y cuándo llegó. Null: agente que no lo informa.
+    event_coverage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    event_coverage_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
     # Last status set by agent activity. Staleness (offline) is resolved at read time.
     status: Mapped[AssetStatus] = mapped_column(
         Enum(
@@ -170,6 +206,10 @@ class Asset(Base):
     @property
     def is_managed(self) -> bool:
         return self.agent_id is not None
+
+    @property
+    def is_archived(self) -> bool:
+        return self.archived_at is not None
 
     @property
     def display_name(self) -> str:

@@ -1,0 +1,9 @@
+# Fase 5C.1: los ficheros que se ejecutan o interpretan en Linux deben tener LF aunque el
+# repositorio se clone en Windows con core.autocrlf=true. Con CRLF, bash falla con
+# "$'\r': command not found", systemd lee "sentra-agent\r" como usuario y la versión del
+# paquete acaba con "\r". (Los .ps1 y el resto conservan el comportamiento por defecto.)
+*.sh text eol=lf
+*.service text eol=lf
+*.timer text eol=lf
+agent/packaging/linux/debian/* text eol=lf
+agent/pyproject.toml text eol=lf

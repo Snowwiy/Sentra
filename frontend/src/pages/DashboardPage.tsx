@@ -214,6 +214,8 @@ export function DashboardPage() {
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
   const [page, setPage] = useState(1);
+  // Fase 5C.1: los activos archivados no se muestran salvo que se pida (con su historial).
+  const [showArchived, setShowArchived] = useState(false);
   // Los campos de texto esperan a que se deje de escribir antes de consultar.
   const debouncedFilters = useDebounced(contextFilters, 300);
   const q = useDebounced(query.trim(), 300);
@@ -223,10 +225,11 @@ export function DashboardPage() {
         ...toQuery(debouncedFilters),
         status: filter === "all" ? undefined : filter,
         q: q || undefined,
+        archived: showArchived ? "include" : undefined,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
       }),
-    [debouncedFilters, filter, q, page],
+    [debouncedFilters, filter, q, page, showArchived],
   );
   const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
     fetchAssets,
@@ -358,6 +361,17 @@ export function DashboardPage() {
             onChange={(event) => changeQuery(event.target.value)}
             aria-label="Buscar activos"
           />
+          <label className="checkbox small">
+            <input
+              type="checkbox"
+              checked={showArchived}
+              onChange={(event) => {
+                setShowArchived(event.target.checked);
+                setPage(1);
+              }}
+            />{" "}
+            Mostrar archivados
+          </label>
         </div>
         <ContextFilterBar filters={contextFilters} onChange={changeFilters} />
 
@@ -398,6 +412,11 @@ export function DashboardPage() {
                     >
                       <td>
                         <AssetName asset={asset} showIp={false} />
+                        {asset.archived_at && (
+                          <span className="badge badge--muted" title={asset.archive_reason ?? undefined}>
+                            Archivado
+                          </span>
+                        )}
                       </td>
                       <td>
                         <StatusBadge status={asset.status} />

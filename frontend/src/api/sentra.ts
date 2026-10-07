@@ -1,5 +1,10 @@
-import { apiGet, apiPatch, apiPost } from "./client";
+import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
 import type {
+  ArchivedFilter,
+  AssetDeleteCheck,
+  AssetReconcileResult,
+  DuplicateCandidateList,
+  DuplicatePairList,
   FindingThreatIntel,
   IndicatorClassification,
   IndicatorDetail,
@@ -205,6 +210,8 @@ export interface AssetQuery {
   tag?: string;
   sort?: AssetSortKey;
   order?: "asc" | "desc";
+  /** Fase 5C.1: archivados excluidos por defecto ("include" los muestra, "only" solo ellos). */
+  archived?: ArchivedFilter;
   /** Fase 4M: paginación en el servidor (por defecto 100, máximo 500). */
   limit?: number;
   offset?: number;
@@ -226,7 +233,9 @@ export interface EventQuery {
   assetId?: string;
   minLevel?: EventLevel;
   channel?: string;
-  /** Text in the message or provider. */
+  /** Fase 5C.1: origen (sshd, sudo, systemd, kernel...) y tipo normalizado (Linux). */
+  provider?: string;
+  eventType?: string;
   q?: string;
   limit?: number;
   offset?: number;
@@ -263,6 +272,7 @@ export const sentraApi = {
         internet_exposed: query.internetExposed,
         department: query.department,
         tag: query.tag,
+        archived: query.archived === "exclude" ? undefined : query.archived,
         sort: query.sort,
         order: query.order,
         limit: query.limit,
@@ -290,9 +300,21 @@ export const sentraApi = {
       `/assets/${encodeURIComponent(assetId)}/changes${queryString({ ...query })}`,
       { signal },
     ),
-  listEvents: ({ assetId, minLevel, channel, q, limit, offset }: EventQuery, signal?: AbortSignal) =>
+  listEvents: (
+    { assetId, minLevel, channel, provider, eventType, q, limit, offset }: EventQuery,
+    signal?: AbortSignal,
+  ) =>
     apiGet<EventList>(
-      `/events${queryString({ asset_id: assetId, min_level: minLevel, channel, q, limit, offset })}`,
+      `/events${queryString({
+        asset_id: assetId,
+        min_level: minLevel,
+        channel,
+        provider,
+        event_type: eventType,
+        q,
+        limit,
+        offset,
+      })}`,
       { signal },
     ),
   listAlerts: (
@@ -343,6 +365,31 @@ export const consoleApi = {
     apiPost<DiscoveryJobDetail>("/console/discovery/jobs", { target }),
   cancelDiscovery: (jobId: string) =>
     apiPost<DiscoveryJobDetail>(`/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`),
+};
+
+/**
+ * Ciclo de vida de activos (Fase 5C.1). Archivar, restaurar, borrar y reconciliar: solo admin
+ * (assets:manage; reconciliar además agents:manage). Duplicados: assets:duplicates_read.
+ * Todas las escrituras llevan la `lifecycle_version` que la UI mostró (409 si cambió).
+ */
+export const lifecycleApi = {
+  duplicates: (signal?: AbortSignal) => apiGet<DuplicatePairList>("/assets/duplicates", { signal }),
+  candidates: (assetId: string, signal?: AbortSignal) =>
+    apiGet<DuplicateCandidateList>(`/assets/${encodeURIComponent(assetId)}/duplicate-candidates`, { signal }),
+  deleteCheck: (assetId: string, signal?: AbortSignal) =>
+    apiGet<AssetDeleteCheck>(`/assets/${encodeURIComponent(assetId)}/delete-check`, { signal }),
+  archive: (assetId: string, reason: string, version: number) =>
+    apiPost<Asset>(`/assets/${encodeURIComponent(assetId)}/archive`, { reason, version }),
+  restore: (assetId: string, version: number) =>
+    apiPost<Asset>(`/assets/${encodeURIComponent(assetId)}/restore`, { version }),
+  remove: (assetId: string, version: number) =>
+    apiDelete<void>(`/assets/${encodeURIComponent(assetId)}${queryString({ version: String(version) })}`),
+  reconcile: (assetId: string, targetAssetId: string, version: number, targetVersion: number) =>
+    apiPost<AssetReconcileResult>(`/assets/${encodeURIComponent(assetId)}/reconcile`, {
+      target_asset_id: targetAssetId,
+      version,
+      target_version: targetVersion,
+    }),
 };
 
 /** Acciones sobre alertas (permiso alerts:manage). */

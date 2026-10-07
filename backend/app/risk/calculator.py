@@ -42,7 +42,7 @@ sube o baja la puntuación aparece con sus puntos.
 import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
@@ -196,6 +196,10 @@ class AssetContext:
     environment: AssetEnvironment = AssetEnvironment.UNKNOWN
     data_sensitivity: DataSensitivity = DataSensitivity.UNKNOWN
     internet_exposed: bool | None = None
+    # Fase 5C.1: estado de las fuentes de eventos que informa el agente ({"journal":
+    # "active", "auditd": "unavailable", ...}) y cuándo llegó. None: agente que no lo informa.
+    event_coverage: dict[str, str] | None = None
+    event_coverage_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -493,11 +497,40 @@ def _completeness(asset: AssetContext, config: RiskConfig, now: datetime) -> tup
         return LIMITED, "Solo visibilidad de red (sin agente)"
     if asset.last_seen_at is None or now - asset.last_seen_at > config.stale_data:
         return LIMITED, "Datos del agente desactualizados"
-    if "windows" not in (asset.os_name or "").lower():
-        # Hoy solo el agente de Windows envía eventos del sistema (Linux: inventario,
-        # procesos y exposición). Menos fuentes = evaluación parcial.
+    os_name = (asset.os_name or "").lower()
+    if "linux" in os_name:
+        return _linux_completeness(asset, config, now)
+    if "windows" not in os_name:
+        # Solo Windows y Linux envían eventos del sistema. Menos fuentes = evaluación parcial.
         return PARTIAL, "Sin eventos del sistema en este SO (solo inventario y red)"
     return FULL, "Agente activo con eventos, inventario y procesos"
+
+
+def _linux_completeness(asset: AssetContext, config: RiskConfig, now: datetime) -> tuple[str, str]:
+    """Fase 5C.1: cobertura de un equipo Linux según lo que su agente puede leer.
+
+    "unavailable" no es lo mismo que "0 eventos": un journal sin permiso de lectura deja al
+    equipo sin eventos aunque haya actividad, y la confianza debe decirlo. auditd es
+    opcional: sin él la cobertura sigue siendo completa, pero se indica.
+    """
+    coverage = asset.event_coverage or {}
+    fresh = asset.event_coverage_at is not None and now - asset.event_coverage_at <= max(
+        config.stale_data, timedelta(hours=2)
+    )
+    journal = coverage.get("journal")
+    if not coverage or not fresh:
+        return PARTIAL, "Sin eventos del sistema de este equipo Linux (solo inventario y red)"
+    if journal == "no_permission":
+        return PARTIAL, "Journal de Linux sin permiso de lectura (solo inventario y red)"
+    if journal != "active":
+        return PARTIAL, "Journal de Linux no disponible (solo inventario y red)"
+    auth = [coverage.get(source) for source in ("sshd", "sudo")]
+    # "unavailable" = el servicio no está instalado (sin sshd no hay SSH que vigilar).
+    if any(state not in (None, "active", "unavailable") for state in auth):
+        return PARTIAL, "Journal de Linux activo con fuentes de autenticación incompletas"
+    if coverage.get("auditd") == "active":
+        return FULL, "Agente activo con journal, auditd, inventario y procesos"
+    return FULL, "Agente activo con journal (sin auditd), inventario y procesos"
 
 
 def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResult:

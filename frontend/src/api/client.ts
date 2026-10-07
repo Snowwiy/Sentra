@@ -154,7 +154,7 @@ export function onUnauthorized(handler: (() => void) | undefined): void {
   unauthorizedHandler = handler;
 }
 
-type Method = "GET" | "POST" | "PATCH";
+type Method = "GET" | "POST" | "PATCH" | "DELETE";
 
 interface RequestOptions {
   signal?: AbortSignal;
@@ -213,4 +213,8 @@ export function apiPost<T>(path: string, body?: unknown, options: RequestOptions
 
 export function apiPatch<T>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
   return request<T>("PATCH", path, body, options);
+}
+
+export function apiDelete<T>(path: string, options: RequestOptions = {}): Promise<T> {
+  return request<T>("DELETE", path, undefined, options);
 }

@@ -54,6 +54,20 @@ from tests.test_vulnerabilities import (
 )
 
 TI = f"{API}/threat-intel"
+
+
+@pytest.fixture
+def sync_offline(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Valor por defecto (offline), forzado: no depende del .env ni de otro test."""
+    monkeypatch.setattr(get_settings(), "threat_intel_sync_enabled", False)
+
+
+@pytest.fixture
+def sync_online(monkeypatch: pytest.MonkeyPatch) -> None:
+    """THREAT_INTEL_SYNC_ENABLED=true activado de forma explícita en el test."""
+    monkeypatch.setattr(get_settings(), "threat_intel_sync_enabled", True)
+
+
 MALICIOUS_IP = "203.0.113.66"
 
 
@@ -204,6 +218,7 @@ def _connection_inventory(client: TestClient, agent_id: str, remote: str) -> Non
 # --- Sin fuentes: estado neutro, nunca un error ------------------------------------------------
 
 
+@pytest.mark.usefixtures("sync_offline")
 def test_fresh_install_reports_no_source_configured(client: TestClient, db: Session) -> None:
     overview = _ok(client.get(f"{TI}/overview"))
     assert overview["status"] == "none_configured"
@@ -434,6 +449,7 @@ def test_sync_refuses_a_suspiciously_small_feed(
     )
 
 
+@pytest.mark.usefixtures("sync_offline")
 def test_sync_request_api_respects_offline_default(
     client: TestClient, engine: Engine, db: Session
 ) -> None:
@@ -441,6 +457,52 @@ def test_sync_request_api_respects_offline_default(
     _error(client.post(f"{TI}/sources/{source['id']}/sync"), 422, "threat_intel_sync_disabled")
     local = _source(client, "local-iocs")
     _error(client.post(f"{TI}/sources/{local['id']}/sync"), 422, "threat_source_manual")
+
+
+@pytest.mark.usefixtures("sync_online")
+def test_sync_enabled_reported_and_sync_request_accepted(client: TestClient, db: Session) -> None:
+    assert _ok(client.get(f"{TI}/overview"))["sync_enabled"] is True
+    source = _enable(client, "cisa-kev")
+    response = client.post(f"{TI}/sources/{source['id']}/sync")
+    assert response.status_code == 202, response.text
+    # La petición solo marca la fuente; la descarga la hace el job.
+    assert response.json()["sync_requested_at"] is not None
+    local = _source(client, "local-iocs")
+    _error(client.post(f"{TI}/sources/{local['id']}/sync"), 422, "threat_source_manual")
+
+
+@pytest.mark.usefixtures("sync_online")
+def test_cli_sync_runs_when_enabled_without_due_sources(
+    client: TestClient,
+    engine: Engine,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(cli, "get_sessionmaker", lambda: sessionmaker(bind=engine))
+    monkeypatch.setattr(cli, "get_engine", lambda: engine)
+    # Fuentes de red desactivadas (instalación nueva): nada que descargar, sin red.
+    assert cli.main(["threat-intel-sync"]) == 0
+    assert "matching:" in capsys.readouterr().out
+
+
+def test_sync_default_ignores_a_developer_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.core.config import Settings
+
+    # Hermético: no depende de conftest ni del .env real. DATABASE_URL es obligatorio en
+    # Settings; basta con una URL válida (Settings no conecta).
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://test:test@127.0.0.1:5433/sentra_test")
+    monkeypatch.setenv("THREAT_INTEL_SYNC_ENABLED", "false")
+    env_file = tmp_path / ".env"
+    env_file.write_text("THREAT_INTEL_SYNC_ENABLED=true\n")
+    # La variable del proceso gana al .env del desarrollador.
+    assert Settings(_env_file=env_file).threat_intel_sync_enabled is False
+    # Sin ella el .env sí cambiaría el valor (lo que pasaba en un entorno real).
+    monkeypatch.delenv("THREAT_INTEL_SYNC_ENABLED")
+    assert Settings(_env_file=env_file).threat_intel_sync_enabled is True
+    # Y sin .env queda el valor por defecto de producción: offline.
+    assert Settings(_env_file=None).threat_intel_sync_enabled is False
 
 
 def test_custom_source_never_takes_a_url_from_the_api(client: TestClient, db: Session) -> None:
@@ -799,6 +861,7 @@ def test_reclassified_indicator_updates_matches(
 # --- CLI, métricas y migración -------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("sync_offline")
 def test_cli_status_and_imports(
     client: TestClient,
     engine: Engine,

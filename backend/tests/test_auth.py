@@ -186,7 +186,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
         "incidents:read", "incidents:manage", "rules:read", "rules:test",
         "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
-        "threat_intel:triage",
+        "threat_intel:triage", "assets:duplicates_read",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -467,7 +467,8 @@ def test_role_permissions_are_least_privilege() -> None:
     assert ROLE_PERMISSIONS[Role.ANALYST] == {
         Permission.MONITORING_READ, Permission.ALERTS_MANAGE, Permission.DETECTIONS_MANAGE,
         Permission.DISCOVERY_RUN, Permission.AI_USE, Permission.INCIDENTS_READ,
-        Permission.INCIDENTS_MANAGE, Permission.RULES_READ, Permission.RULES_TEST,
+        Permission.INCIDENTS_MANAGE, Permission.ASSET_DUPLICATES_READ, Permission.RULES_READ,
+        Permission.RULES_TEST,
         Permission.VULNERABILITIES_READ, Permission.VULNERABILITIES_MANAGE,
         Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
     }  # fmt: skip

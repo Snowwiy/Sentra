@@ -124,7 +124,14 @@ class AlertRepository:
         # clause, so a fresh last_seen_at drops it from the result.
         return self._session.scalars(
             select(Asset)
-            .where(Asset.last_seen_at.is_not(None), Asset.last_seen_at < seen_before, ~active_alert)
+            .where(
+                Asset.last_seen_at.is_not(None),
+                Asset.last_seen_at < seen_before,
+                # Fase 5C.1: un activo archivado (equipo retirado, agente revocado) no debe
+                # abrir alertas de "offline" nuevas: su silencio es lo esperado.
+                Asset.archived_at.is_(None),
+                ~active_alert,
+            )
             .with_for_update(skip_locked=True, of=Asset)
         ).all()
 

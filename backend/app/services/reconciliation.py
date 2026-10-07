@@ -10,7 +10,8 @@ Matching, strongest first:
 - MAC address: the discovered MAC is one of the agent's interface MACs;
 - IP address: the discovered address is one of the agent's addresses, and the discovered
   record has no MAC or the same MAC. A known, different MAC means another device that now
-  uses the address (e.g. DHCP): never merged.
+  uses the address (e.g. DHCP): never merged. Network gear (router, switch, access point,
+  gateway) is never merged by address alone (Fase 5C.1).
 If more than one discovered record matches, nothing is merged (ambiguous) and it is logged.
 """
 
@@ -22,6 +23,7 @@ from typing import Any
 from sqlalchemy import or_, select, update
 from sqlalchemy.orm import Session
 
+from app.discovery.device_types import DeviceType
 from app.discovery.probes import normalize_mac
 from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset, AssetCriticality
@@ -82,7 +84,12 @@ def find_discovered_match(
     by_ip = [
         c
         for c in candidates
-        if c.primary_ip in ips and (not c.mac_address or c.mac_address in macs)
+        if c.primary_ip in ips
+        and (not c.mac_address or c.mac_address in macs)
+        # Fase 5C.1: solo por IP nunca se adopta un equipo de red (router, switch, punto de
+        # acceso) ni el gateway: su IP la comparten o la reenvían otros dispositivos
+        # (NAT, port forwarding) y unirlo al agente perdería un activo real.
+        and not _network_gear(c)
     ]
     matches = by_mac or by_ip
     if len(matches) > 1:
@@ -92,6 +99,16 @@ def find_discovered_match(
         )
         return None
     return matches[0] if matches else None
+
+
+_NETWORK_GEAR = frozenset(
+    {DeviceType.ROUTER.value, DeviceType.NETWORK_SWITCH.value, DeviceType.ACCESS_POINT.value}
+)
+
+
+def _network_gear(asset: Asset) -> bool:
+    observations = asset.identity_observations or {}
+    return asset.device_type in _NETWORK_GEAR or bool(observations.get("gateway"))
 
 
 def adopt_discovered(session: Session, managed: Asset, ips: set[str], macs: set[str]) -> bool:

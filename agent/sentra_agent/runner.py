@@ -2,11 +2,13 @@
 
 import logging
 import random
+import sys
 import threading
 import time
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
@@ -17,6 +19,7 @@ from sentra_agent.config import AgentConfig
 from sentra_agent.events import EventCollector
 from sentra_agent.identity import Identity, IdentityStore
 from sentra_agent.inventory import collect_inventory
+from sentra_agent.linux_events import COVERAGE_REFRESH_SECONDS
 from sentra_agent.logs import register_secret
 from sentra_agent.processes import ProcessSampler
 
@@ -33,10 +36,25 @@ PERMANENT_REJECTIONS = {HTTP_PAYLOAD_TOO_LARGE, HTTP_UNPROCESSABLE}
 AGENT_REVOKED_CODE = "agent_revoked"
 
 
-class EventSource(Protocol):
-    def pending(self) -> tuple[list[dict[str, Any]], dict[str, int]]: ...
+# Máximo de eventos por petición que acepta el servidor (EventBatch).
+EVENTS_PER_REQUEST = 500
+ASSET_ARCHIVED_CODE = "asset_archived"
 
-    def commit(self, cursor: dict[str, int]) -> None: ...
+
+class EventSource(Protocol):
+    # El cursor es opaco para el runner: lo devuelve pending() y se confirma con commit().
+    def pending(self) -> tuple[list[dict[str, Any]], Any]: ...
+
+    def commit(self, cursor: Any) -> None: ...
+
+
+def default_event_source(state_dir: Path) -> EventSource:
+    """Visor de eventos en Windows, journal en Linux (Fase 5C.1); nada en otros sistemas."""
+    if sys.platform.startswith("linux"):
+        from sentra_agent.linux_events import LinuxJournalCollector
+
+        return LinuxJournalCollector(state_dir)
+    return EventCollector(state_dir)
 
 
 class EnrollmentKeyMissingError(Exception):
@@ -86,9 +104,13 @@ class Agent:
         self.host_info = host_info
         self.metrics = metrics
         self.inventory = inventory
-        self.events: EventSource = events or EventCollector(config.state_dir)
+        self.events: EventSource = events or default_event_source(config.state_dir)
         self.processes = processes or ProcessSampler().snapshot
         self._events_sent_at: float | None = None
+        # Fase 5C.1: última cobertura de eventos enviada y cuándo (se reenvía al cambiar o
+        # cada COVERAGE_REFRESH_SECONDS para que el servidor sepa que sigue vigente).
+        self._coverage_sent: dict[str, str] | None = None
+        self._coverage_sent_at: float | None = None
         # Monotonic clock: wall-clock jumps (NTP sync, DST, manual changes) must not
         # suppress or flood inventory uploads.
         self._inventory_sent_at: float | None = None
@@ -209,21 +231,54 @@ class Agent:
             and now - self._events_sent_at < self.config.events_interval_seconds
         ):
             return
-        events, cursor = self.events.pending()
-        if events:
-            try:
-                self._send_adapting(
-                    "events",
-                    lambda body: self.client.send_events(
-                        self.identity.agent_id, token, body["events"]
-                    ),
-                    {"events": events},
-                )
-            except ApiError as exc:
-                if exc.status not in PERMANENT_REJECTIONS:
-                    raise
-                # A batch the server rejects would be re-read forever; skip past it.
-                logger.warning("event batch rejected", extra={"body": exc.body})
+        try:
+            events, cursor = self.events.pending()
+        except Exception:
+            # Fase 5C.1: un colector de eventos roto nunca afecta a heartbeat, telemetría ni
+            # inventario (ya enviados en este ciclo); se reintenta en el siguiente intervalo.
+            logger.exception("event collection failed")
+            self._events_sent_at = now
+            return
+        coverage = _source_coverage(self.events)
+        coverage_due = coverage is not None and (
+            coverage != self._coverage_sent
+            or self._coverage_sent_at is None
+            or now - self._coverage_sent_at >= COVERAGE_REFRESH_SECONDS
+        )
+        if ("coverage",) in self._unsupported.get("events", set()):
+            # Servidor anterior a la Fase 5C.1: no hay a quién informar la cobertura.
+            coverage_due = False
+        if events or coverage_due:
+            # Lotes de como mucho EVENTS_PER_REQUEST; la cobertura viaja en el primero. Si un
+            # lote posterior falla, no se confirma el cursor y se reenvía todo: el servidor
+            # ignora los repetidos (record_id), así que no se duplica nada.
+            chunks = [
+                events[i : i + EVENTS_PER_REQUEST]
+                for i in range(0, len(events), EVENTS_PER_REQUEST)
+            ] or [[]]
+            for index, chunk in enumerate(chunks):
+                payload: dict[str, Any] = {"events": chunk}
+                if index == 0 and coverage_due:
+                    payload["coverage"] = coverage
+                try:
+                    self._send_adapting(
+                        "events",
+                        lambda body: self.client.send_events(
+                            self.identity.agent_id,
+                            token,
+                            body["events"],
+                            body.get("coverage"),
+                        ),
+                        payload,
+                    )
+                except ApiError as exc:
+                    if exc.status not in PERMANENT_REJECTIONS:
+                        raise
+                    # A batch the server rejects would be re-read forever; skip past it.
+                    logger.warning("event batch rejected", extra={"body": exc.body})
+            if coverage_due:
+                self._coverage_sent = coverage
+                self._coverage_sent_at = now
         # Advance only after the API accepted (or permanently rejected) the batch; on a
         # transport error we never get here and the same events are re-read next time.
         self.events.commit(cursor)
@@ -357,11 +412,14 @@ class Agent:
                 self._forget_bootstrap()
             if exc.status == HTTP_FORBIDDEN:
                 # Either this agent was revoked by an operator or enrollment is disabled.
-                reason = (
-                    "agent revoked by an operator"
-                    if exc.code == AGENT_REVOKED_CODE
-                    else "enrollment disabled on server"
-                )
+                if exc.code == AGENT_REVOKED_CODE:
+                    reason = "agent revoked by an operator"
+                elif exc.code == ASSET_ARCHIVED_CODE:
+                    # Fase 5C.1: el activo de este agente está archivado; un administrador
+                    # debe restaurarlo (o reconciliarlo) antes de que vuelva a informar.
+                    reason = "asset archived by an operator; restore it on the server"
+                else:
+                    reason = "enrollment disabled on server"
                 raise CredentialsRejectedError(reason, exc.status) from exc
             if exc.status == HTTP_UNAUTHORIZED:
                 reason = (
@@ -506,6 +564,19 @@ class Agent:
         if self.identity.asset_id is None or str(self.identity.asset_id) != asset_id:
             self.identity.asset_id = UUID(asset_id)
             self.store.save(self.identity)
+
+
+def _source_coverage(source: EventSource) -> dict[str, str] | None:
+    """Cobertura de la fuente de eventos si la ofrece (el colector de Windows no)."""
+    coverage = getattr(source, "coverage", None)
+    if not callable(coverage):
+        return None
+    try:
+        value = coverage()
+    except Exception:
+        logger.exception("event coverage unavailable")
+        return None
+    return dict(value) if isinstance(value, dict) and value else None
 
 
 def _raise_if_forbidden(exc: ApiError) -> None:

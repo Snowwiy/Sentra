@@ -1,6 +1,7 @@
 import { Link } from "react-router-dom";
 import type { EventLevel, SystemEvent } from "../api/types";
 import { formatDateTime, formatRelative } from "../lib/format";
+import { eventTypeLabel } from "../lib/linuxEvents";
 
 const LEVEL_LABELS: Record<EventLevel, string> = {
   info: "Info",
@@ -17,7 +18,25 @@ const LEVEL_CLASS: Record<EventLevel, string> = {
   critical: "critical",
 };
 
-export function EventTable({ events, showAsset = true }: { events: SystemEvent[]; showAsset?: boolean }) {
+/** Origen legible: Windows "proveedor · canal · ID", Linux "proveedor · tipo" (Fase 5C.1). */
+function origin(event: SystemEvent): string {
+  if (event.event_code === null) return eventTypeLabel(event.event_type);
+  return `${event.channel} · ID ${event.event_code}`;
+}
+
+/**
+ * Tabla de eventos. `linux` muestra las columnas del journal (fuente, tipo, usuario, IP de
+ * origen) en lugar del canal y el Event ID de Windows, que en Linux no existen.
+ */
+export function EventTable({
+  events,
+  showAsset = true,
+  linux = false,
+}: {
+  events: SystemEvent[];
+  showAsset?: boolean;
+  linux?: boolean;
+}) {
   return (
     <div className="table-wrap table-wrap--scroll">
       <table className="table table--wrap">
@@ -26,7 +45,16 @@ export function EventTable({ events, showAsset = true }: { events: SystemEvent[]
             <th>Nivel</th>
             <th>Cuándo</th>
             {showAsset && <th>Activo</th>}
-            <th>Origen</th>
+            {linux ? (
+              <>
+                <th>Fuente</th>
+                <th>Tipo</th>
+                <th>Usuario</th>
+                <th>Origen/IP</th>
+              </>
+            ) : (
+              <th>Origen</th>
+            )}
             <th>Mensaje</th>
           </tr>
         </thead>
@@ -48,13 +76,19 @@ export function EventTable({ events, showAsset = true }: { events: SystemEvent[]
                   </Link>
                 </td>
               )}
-              <td className="nowrap">
-                {event.provider}
-                <span className="muted small">
-                  {" "}
-                  · {event.channel} {event.event_code}
-                </span>
-              </td>
+              {linux ? (
+                <>
+                  <td className="nowrap">{event.provider}</td>
+                  <td className="nowrap">{eventTypeLabel(event.event_type)}</td>
+                  <td className="nowrap mono small">{event.data?.user ?? "—"}</td>
+                  <td className="nowrap mono small">{event.data?.source_ip ?? "—"}</td>
+                </>
+              ) : (
+                <td className="nowrap">
+                  {event.provider}
+                  <span className="muted small"> · {origin(event)}</span>
+                </td>
+              )}
               <td title={event.message}>
                 {/* Clamped in a div: line clamping does not work on a table cell itself. */}
                 <div className="event-message">

@@ -10,6 +10,7 @@ from app.api.deps import (
     DbSession,
     get_agent_management_service,
     get_asset_context_service,
+    get_asset_lifecycle_service,
     get_asset_service,
     get_exposure_service,
     get_inventory_service,
@@ -41,6 +42,15 @@ from app.schemas.asset_context import (
     AssetThreatSummary,
     normalize_tag,
 )
+from app.schemas.asset_lifecycle import (
+    AssetArchiveRequest,
+    AssetDeleteCheck,
+    AssetReconcileRequest,
+    AssetReconcileResult,
+    AssetVersionRequest,
+    DuplicateCandidateList,
+    DuplicatePairList,
+)
 from app.schemas.change import ChangeList
 from app.schemas.discovery import ExposureRead
 from app.schemas.inventory import InventoryRead
@@ -51,6 +61,7 @@ from app.services import audit_service
 from app.services.agent_management_service import AgentManagementService
 from app.services.alert_service import AlertThresholds
 from app.services.asset_context_service import AssetContextService
+from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.asset_service import (
     DEFAULT_PAGE_SIZE,
     MAX_PAGE_SIZE,
@@ -71,6 +82,11 @@ router = APIRouter(prefix="/assets", tags=["assets"], dependencies=[READ])
 Service = Annotated[AssetService, Depends(get_asset_service)]
 ContextService = Annotated[AssetContextService, Depends(get_asset_context_service)]
 AssetManager = Annotated[AuthContext, Depends(require_permission(Permission.ASSETS_MANAGE))]
+Lifecycle = Annotated[AssetLifecycleService, Depends(get_asset_lifecycle_service)]
+DuplicateReader = Annotated[
+    AuthContext, Depends(require_permission(Permission.ASSET_DUPLICATES_READ))
+]
+AgentManager = Annotated[AuthContext, Depends(require_permission(Permission.AGENTS_MANAGE))]
 
 
 @router.get("", response_model=AssetList)
@@ -99,6 +115,8 @@ def list_assets(
     # (antes devolvía todos los activos, ~1,5 s con 10 000).
     limit: Annotated[int, Query(ge=1, le=MAX_PAGE_SIZE)] = DEFAULT_PAGE_SIZE,
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
+    # Fase 5C.1: los archivados no se muestran por defecto ("Mostrar archivados" = include).
+    archived: Literal["exclude", "include", "only"] = "exclude",
 ) -> AssetList:
     search = q.strip() if q else None
     try:
@@ -122,6 +140,7 @@ def list_assets(
             internet_exposed=internet_exposed,
             department=" ".join(department.split()) if department else None,
             tag=tag_value,
+            archived=archived,
         ),
         sort=sort,
         limit=limit,
@@ -135,6 +154,16 @@ def list_assets(
 def get_asset_context_options(service: ContextService) -> AssetContextOptions:
     """Valores permitidos, límites y departamentos/etiquetas ya usados (autocompletar)."""
     return service.options()
+
+
+@router.get("/duplicates", response_model=DuplicatePairList, responses=error_responses(403))
+def list_duplicate_pairs(service: Lifecycle, _: DuplicateReader) -> DuplicatePairList:
+    """Pares de posibles duplicados (confianza media o alta). Solo sugiere: nunca une nada.
+
+    Analyst y admin (assets:duplicates_read). Nunca devuelve la identidad de máquina, solo
+    si coincide.
+    """
+    return service.duplicate_pairs()
 
 
 @router.get("/{asset_id}", response_model=AssetRead, responses=error_responses(404))
@@ -347,3 +376,207 @@ def set_asset_criticality(
         )
         session.commit()
     return service.detail(asset_id)
+
+
+# --- Ciclo de vida (Fase 5C.1, docs/agent-asset-lifecycle.md) ---------------------------------
+
+
+def _lifecycle_failed(
+    session: DbSession,
+    ctx: AuthContext,
+    action: str,
+    asset_id: UUID,
+    exc: SentraError,
+    details: dict[str, object] | None = None,
+) -> None:
+    session.rollback()
+    audit_service.record(
+        session,
+        actor(ctx),
+        action,
+        audit_service.FAILURE,
+        "asset",
+        asset_id,
+        details={"error": exc.code, **(details or {})},
+    )
+
+
+@router.get(
+    "/{asset_id}/duplicate-candidates",
+    response_model=DuplicateCandidateList,
+    responses=error_responses(403, 404),
+)
+def get_duplicate_candidates(
+    asset_id: UUID, service: Lifecycle, _: DuplicateReader
+) -> DuplicateCandidateList:
+    """Posibles duplicados de este activo con razones y confianza (high/medium/low)."""
+    return DuplicateCandidateList(asset_id=asset_id, items=service.duplicate_candidates(asset_id))
+
+
+@router.get(
+    "/{asset_id}/delete-check",
+    response_model=AssetDeleteCheck,
+    responses=error_responses(401, 403, 404),
+)
+def get_delete_check(asset_id: UUID, service: Lifecycle, _: AssetManager) -> AssetDeleteCheck:
+    """¿Se puede borrar físicamente? Motivos que lo impiden y lo que se borraría con él.
+
+    Informativo: DELETE vuelve a comprobarlo todo dentro de su transacción.
+    """
+    return service.delete_check(asset_id)
+
+
+@router.post(
+    "/{asset_id}/archive",
+    response_model=AssetRead,
+    responses=error_responses(401, 403, 404, 409),
+)
+def archive_asset(
+    asset_id: UUID,
+    body: AssetArchiveRequest,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Lifecycle,
+    assets: Service,
+) -> AssetRead:
+    """Archiva el activo (solo admin): oculto por defecto, con todo su historial.
+
+    409 asset_state_conflict si su agente tiene la credencial activa (revocar antes) o ya
+    está archivado; 409 asset_lifecycle_conflict si cambió desde que se cargó.
+    """
+    action = "asset_archived"
+    try:
+        asset = service.archive(asset_id, body.reason, body.version, actor(ctx))
+    except SentraError as exc:
+        _lifecycle_failed(session, ctx, action, asset_id, exc)
+        raise
+    audit_service.record(
+        session,
+        actor(ctx),
+        action,
+        target_type="asset",
+        target_id=asset_id,
+        details={"reason": asset.archive_reason, "managed": asset.ever_managed},
+        commit=False,
+    )
+    session.commit()
+    return assets.get_asset(asset_id)
+
+
+@router.post(
+    "/{asset_id}/restore",
+    response_model=AssetRead,
+    responses=error_responses(401, 403, 404, 409),
+)
+def restore_asset(
+    asset_id: UUID,
+    body: AssetVersionRequest,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Lifecycle,
+    assets: Service,
+) -> AssetRead:
+    """Restaura un activo archivado. No reactiva la credencial de su agente."""
+    action = "asset_restored"
+    try:
+        service.restore(asset_id, body.version)
+    except SentraError as exc:
+        _lifecycle_failed(session, ctx, action, asset_id, exc)
+        raise
+    audit_service.record(
+        session, actor(ctx), action, target_type="asset", target_id=asset_id, commit=False
+    )
+    session.commit()
+    return assets.get_asset(asset_id)
+
+
+@router.delete(
+    "/{asset_id}",
+    status_code=204,
+    responses=error_responses(401, 403, 404, 409),
+)
+def delete_asset(
+    asset_id: UUID,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Lifecycle,
+    version: Annotated[int, Query(ge=0)],
+) -> None:
+    """Borra físicamente un activo descubierto SIN historial (solo admin).
+
+    El servidor recalcula las dependencias con la fila bloqueada; si hay alguna responde
+    409 asset_not_deletable con los motivos (y se audita asset_delete_rejected). Un activo
+    que tuvo agente nunca se borra: se archiva.
+    """
+    try:
+        summary = service.delete(asset_id, version)
+    except SentraError as exc:
+        details: dict[str, object] = {}
+        if exc.details:
+            details["blocking_reasons"] = exc.details[0].get("blocking_reasons")
+        _lifecycle_failed(session, ctx, "asset_delete_rejected", asset_id, exc, details)
+        raise
+    audit_service.record(
+        session,
+        actor(ctx),
+        "asset_deleted",
+        target_type="asset",
+        target_id=asset_id,
+        # Solo identificadores de red para saber qué se borró; nada de telemetría.
+        details=summary,
+        commit=False,
+    )
+    session.commit()
+
+
+@router.post(
+    "/{asset_id}/reconcile",
+    response_model=AssetReconcileResult,
+    responses=error_responses(401, 403, 404, 409),
+)
+def reconcile_asset(
+    asset_id: UUID,
+    body: AssetReconcileRequest,
+    ctx: AgentManager,
+    _: AssetManager,
+    session: DbSession,
+    service: Lifecycle,
+    assets: Service,
+) -> AssetReconcileResult:
+    """Asocia el agente de este activo (nuevo) a un activo histórico de la misma máquina.
+
+    Solo admin (agents:manage y assets:manage) y solo si el servidor valida la evidencia
+    (misma identidad de máquina, o mismo hostname con MAC/IP); si no, 409
+    asset_reconcile_refused con los motivos. Este activo queda sin agente y archivado.
+    """
+    action = "agent_asset_reconciled"
+    try:
+        target, source, result = service.reconcile(
+            asset_id, body.target_asset_id, body.version, body.target_version
+        )
+    except SentraError as exc:
+        _lifecycle_failed(
+            session, ctx, action, asset_id, exc, {"target": str(body.target_asset_id)}
+        )
+        raise
+    audit_service.record(
+        session,
+        actor(ctx),
+        action,
+        target_type="asset",
+        target_id=target.public_id,
+        details={
+            "agent_id": str(target.agent_id),
+            "from_asset": str(source.public_id),
+            "confidence": result.confidence,
+            "reasons": result.reasons,
+        },
+        commit=False,
+    )
+    session.commit()
+    return AssetReconcileResult(
+        asset=assets.get_asset(target.public_id),
+        archived_duplicate_id=source.public_id,
+        confidence=result.confidence,
+        reasons=result.reasons,
+    )

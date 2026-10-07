@@ -153,7 +153,8 @@ class RiskService:
         offset: int,
     ) -> RiskAssetList:
         now = datetime.now(UTC)
-        stmt = self._summary_select(now)
+        # Fase 5C.1: los archivados conservan su riesgo histórico pero no son riesgo actual.
+        stmt = self._summary_select(now).where(Asset.archived_at.is_(None))
         if f.level is not None:
             stmt = stmt.where(AssetRisk.level == f.level, AssetRisk.calculated_at.is_not(None))
         if f.confidence is not None:
@@ -212,8 +213,14 @@ class RiskService:
 
     def overview(self) -> RiskOverview:
         now = datetime.now(UTC)
-        total_assets = self._session.scalar(select(func.count()).select_from(Asset)) or 0
-        evaluated_q = AssetRisk.calculated_at.is_not(None)
+        current = Asset.archived_at.is_(None)
+        total_assets = (
+            self._session.scalar(select(func.count()).select_from(Asset).where(current)) or 0
+        )
+        # Fase 5C.1: solo activos vigentes (no archivados) en el riesgo actual.
+        evaluated_q = AssetRisk.calculated_at.is_not(None) & AssetRisk.asset_id.in_(
+            select(Asset.id).where(current)
+        )
         by_level = {level: 0 for level in RiskLevel}
         for level, count in self._session.execute(
             select(AssetRisk.level, func.count()).where(evaluated_q).group_by(AssetRisk.level)
@@ -228,12 +235,24 @@ class RiskService:
             by_confidence[confidence] = count
         pending = (
             self._session.scalar(
-                select(func.count()).select_from(AssetRisk).where(AssetRisk.dirty_at.is_not(None))
+                select(func.count())
+                .select_from(AssetRisk)
+                .where(
+                    AssetRisk.dirty_at.is_not(None),
+                    AssetRisk.asset_id.in_(select(Asset.id).where(current)),
+                )
             )
             or 0
         )
         last = self._session.scalar(select(func.max(AssetRisk.calculated_at)))
-        rows = self._session.scalar(select(func.count()).select_from(AssetRisk)) or 0
+        rows = (
+            self._session.scalar(
+                select(func.count())
+                .select_from(AssetRisk)
+                .where(AssetRisk.asset_id.in_(select(Asset.id).where(current)))
+            )
+            or 0
+        )
 
         top_assets = self._session.execute(
             self._summary_select(now)
@@ -280,6 +299,7 @@ class RiskService:
             .join(item, literal(True))
             .where(
                 AssetRisk.score > 0,
+                AssetRisk.asset_id.in_(select(Asset.id).where(Asset.archived_at.is_(None))),
                 item.c.value["factor"].astext.in_(["detection", "exposure", "threat_intel"]),
                 points > 0,
             )

@@ -5,7 +5,9 @@ dependencia de ids de evento de Windows está aquí, en tablas, y no repartida p
 las reglas solo conocen tipos de señal (SignalKind).
 
 Los ids salen de lo que el agente realmente recoge (sentra_agent/events.py, CHANNELS); un
-evento que el agente no envía no aparece aquí.
+evento que el agente no envía no aparece aquí. Fase 5C.1: los eventos Linux (journal) no
+tienen id: se mapean por su `event_type` normalizado (_linux_signal) a los mismos tipos de
+señal, así las reglas y correlaciones existentes los consumen sin un motor paralelo.
 """
 
 import enum
@@ -52,6 +54,10 @@ class SignalKind(enum.StrEnum):
     # Fase 5C: un IOC casó con actividad local (evento o conexión) y la política de
     # THREAT_INTEL_DETECTION_POLICY lo permite. Lo emite app/threat_intel/matching.py.
     THREAT_INTEL_MATCH = "threat_intel_match"
+    # Fase 5C.1 (Linux, journal): comando ejecutado con sudo (escalada de privilegios) y
+    # evento crítico del kernel (OOM, errores de sistema de ficheros o de hardware, BUG).
+    SUDO_COMMAND = "sudo_command"
+    KERNEL_CRITICAL = "kernel_critical"
 
 
 class SourceType(enum.StrEnum):
@@ -78,6 +84,9 @@ SECURITY = "Security"
 SYSTEM = "System"
 POWERSHELL = "Microsoft-Windows-PowerShell/Operational"
 DEFENDER = "Microsoft-Windows-Windows Defender/Operational"
+# Fase 5C.1: eventos del journal de systemd que envía el agente Linux (linux_events.py).
+LINUX_JOURNAL = "linux_journal"
+LINUX = "linux"
 
 # Grupos privilegiados por SID, independiente del idioma de Windows ("Administradores").
 _PRIVILEGED_BUILTIN = {
@@ -340,6 +349,94 @@ def _image_executable(image_path: str | None) -> str | None:
     return value[: end + 4] if end != -1 else value.split(" ", 1)[0]
 
 
+# Grupos que dan control del equipo en Linux (sudo en Debian/Ubuntu/Mint, wheel en
+# RHEL/Fedora, admin en Ubuntu antiguo, root). Otros grupos se guardan como evento sin señal.
+LINUX_PRIVILEGED_GROUPS = frozenset({"sudo", "wheel", "admin", "root"})
+# Tipos de evento Linux con señal (el agente asigna event_type con una lista cerrada). El
+# resto (sesiones abiertas/cerradas, servicios arrancados, usuario inválido...) se guarda
+# como evento visible pero no alimenta reglas: no son por sí mismos indicio de nada.
+_LINUX_KERNEL = frozenset({"oom_kill", "filesystem_error", "hardware_error", "kernel_bug"})
+
+
+def _linux_signal(event: SystemEvent) -> SignalDraft | None:
+    """Señales de un evento del journal (Fase 5C.1). Nunca depende de ids de Windows.
+
+    Los campos estructurados los extrae el agente con expresiones fijas; aquí se vuelven a
+    limpiar porque son datos no confiables. `platform=linux` en los datos permite a las
+    reglas de autenticación separar LIN-AUTH-* de AUTH-001/CORR-001.
+    """
+    data = _event_data(event)
+    kind_name = event.event_type or ""
+    draft = _draft_factory(event)
+    base = {"platform": LINUX, "service": text.clean_or_none(event.provider, 64)}
+    user = text.clean_or_none(data.get("user"), 255)
+    if kind_name in ("auth_failure", "auth_success"):
+        values = {
+            **base,
+            "account": user,
+            "source_ip": text.clean_or_none(data.get("source_ip"), 64),
+            "auth_method": text.clean_or_none(data.get("auth_method"), 32),
+            "invalid_user": data.get("invalid_user") == "true" or None,
+            # "ssh" equivale a un logon remoto (RDP, tipo 10) para la confianza de LIN-AUTH-002.
+            "logon_type": "ssh" if (event.provider or "").startswith("sshd") else None,
+        }
+        kind = SignalKind.AUTH_FAILURE if kind_name == "auth_failure" else SignalKind.AUTH_SUCCESS
+        return draft(kind, text.principal(user), values)
+    if kind_name == "sudo_command":
+        values = {
+            **base,
+            "account": user,
+            "target_user": text.clean_or_none(data.get("target_user"), 255),
+            # El agente ya redactó secretos; aquí solo se acota.
+            "command": text.clean_or_none(data.get("command"), 256),
+            "tty": text.clean_or_none(data.get("tty"), 32),
+        }
+        return draft(SignalKind.SUDO_COMMAND, text.principal(user), values)
+    if kind_name == "account_created":
+        uid = text.clean_or_none(data.get("uid"), 16)
+        values = {**base, "account": user, "uid": uid, "is_admin": uid == "0" or None}
+        return draft(SignalKind.ACCOUNT_CREATED, text.principal(user), values)
+    if kind_name == "account_deleted":
+        return draft(SignalKind.ACCOUNT_DELETED, text.principal(user), {**base, "account": user})
+    if kind_name in ("account_locked", "account_unlocked"):
+        kind = (
+            SignalKind.ACCOUNT_DISABLED
+            if kind_name == "account_locked"
+            else SignalKind.ACCOUNT_ENABLED
+        )
+        return draft(kind, text.principal(user), {**base, "account": user})
+    if kind_name in ("group_member_added", "group_member_removed"):
+        group = (text.clean_or_none(data.get("group"), 64) or "").lower()
+        if group not in LINUX_PRIVILEGED_GROUPS:
+            return None
+        values = {
+            **base,
+            "account": user,
+            "group": group,
+            "actor": text.clean_or_none(data.get("actor"), 255),
+        }
+        kind = (
+            SignalKind.ADMIN_GROUP_ADDED
+            if kind_name == "group_member_added"
+            else SignalKind.ADMIN_GROUP_REMOVED
+        )
+        return draft(kind, text.principal(user), values)
+    if kind_name == "service_failed":
+        unit = text.clean_or_none(data.get("unit"), 255)
+        values = {**base, "service": unit, "result": text.clean_or_none(data.get("result"), 64)}
+        return draft(SignalKind.SERVICE_CRASHED, unit.lower() if unit else None, values)
+    if kind_name in _LINUX_KERNEL:
+        values = {
+            **base,
+            "category": kind_name,
+            "process": text.clean_or_none(data.get("process"), 255),
+            "device": text.clean_or_none(data.get("device"), 64),
+            "message": text.clean_or_none(event.message, 256),
+        }
+        return draft(SignalKind.KERNEL_CRITICAL, kind_name, values)
+    return None
+
+
 def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> list[SignalDraft]:
     """Señales de eventos recién guardados (nunca de un reenvío, que no se inserta).
 
@@ -351,7 +448,9 @@ def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> 
         if event.occurred_at < not_before:
             continue
         signal: SignalDraft | None = None
-        if event.channel == SECURITY:
+        if event.source == LINUX_JOURNAL:
+            signal = _linux_signal(event)
+        elif event.channel == SECURITY:
             signal = _security_signal(event)
         elif event.channel == SYSTEM:
             signal = _system_signal(event)

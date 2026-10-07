@@ -109,9 +109,17 @@ class SentraClient:
         return self._post("/inventory", {"agent_id": str(agent_id), **snapshot}, _bearer(token))
 
     def send_events(
-        self, agent_id: UUID, token: str, events: list[dict[str, Any]]
+        self,
+        agent_id: UUID,
+        token: str,
+        events: list[dict[str, Any]],
+        coverage: dict[str, str] | None = None,
     ) -> dict[str, Any]:
-        return self._post("/events", {"agent_id": str(agent_id), "events": events}, _bearer(token))
+        body: dict[str, Any] = {"agent_id": str(agent_id), "events": events}
+        # Fase 5C.1: solo si hay algo que informar (un servidor anterior no conoce el campo).
+        if coverage:
+            body["coverage"] = coverage
+        return self._post("/events", body, _bearer(token))
 
     def send_processes(
         self, agent_id: UUID, token: str, snapshot: dict[str, Any]

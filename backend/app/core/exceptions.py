@@ -212,6 +212,36 @@ class ThreatIntelConflictError(ConflictError):
     code = "threat_intel_conflict"
 
 
+class AssetLifecycleConflictError(ConflictError):
+    # Fase 5C.1: el activo cambió (archivado, restaurado, reconciliado) desde que la UI lo
+    # cargó. `details` lleva la versión actual; nunca se aplica una acción sobre datos viejos.
+    code = "asset_lifecycle_conflict"
+
+
+class AssetStateError(ConflictError):
+    # La acción no procede en el estado actual del activo (archivar con el agente activo,
+    # restaurar uno no archivado, reconciliar con un activo que tiene su propio agente...).
+    code = "asset_state_conflict"
+
+
+class AssetNotDeletableError(ConflictError):
+    # El activo tiene historial que hay que conservar: `details` lista los motivos. Se
+    # comprueba en el servidor dentro de la transacción del borrado, nunca en la UI.
+    code = "asset_not_deletable"
+
+
+class AssetReconcileRefusedError(ConflictError):
+    # La evidencia no basta para afirmar que ambos activos son la misma máquina (o la
+    # contradice: identidades de máquina distintas). `details` dice por qué.
+    code = "asset_reconcile_refused"
+
+
+class AssetArchivedError(ForbiddenError):
+    # Un agente cuyo activo está archivado intenta enrolarse: igual que un agente revocado,
+    # no entra hasta que un admin restaure el activo.
+    code = "asset_archived"
+
+
 class DiscoveryTargetError(SentraError):
     # Target fuera de la allowlist, inválido, demasiado grande o de espacio no permitido.
     # 422 y no 403: el operador puede corregirlo eligiendo una red autorizada.
