@@ -34,3 +34,6 @@ Thumbs.db
 REVIEW_BEFORE_PUSH.md
 
 agent/agent.toml
+
+# Estado local de la orquestación multiagente (ids de sesión Codex)
+.claude/orchestration/state/
