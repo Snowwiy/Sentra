@@ -186,7 +186,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "monitoring:read", "alerts:manage", "detections:manage", "discovery:run", "ai:use",
         "incidents:read", "incidents:manage", "rules:read", "rules:test",
         "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
-        "threat_intel:triage", "assets:duplicates_read",
+        "threat_intel:triage", "assets:duplicates_read", "response:read", "response:execute",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -456,10 +456,12 @@ def test_role_permissions_are_least_privilege() -> None:
     # ai:use (Fase 4J) solo permite pedir análisis de datos que el rol ya puede leer;
     # incidents:read (Fase 4K) solo lectura de casos; rules:read (Fase 5A) solo el catálogo;
     # vulnerabilities:read (Fase 5B) solo findings, exposición y catálogo; threat_intel:read
-    # (Fase 5C) solo fuentes, indicadores y coincidencias.
+    # (Fase 5C) solo fuentes, indicadores y coincidencias; response:read (Fase 5D) solo el
+    # catálogo, las vistas previas y el historial de ejecuciones.
     reads = {
         Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
         Permission.RULES_READ, Permission.VULNERABILITIES_READ, Permission.THREAT_INTEL_READ,
+        Permission.RESPONSE_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -471,7 +473,10 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.RULES_TEST,
         Permission.VULNERABILITIES_READ, Permission.VULNERABILITIES_MANAGE,
         Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
+        Permission.RESPONSE_READ, Permission.RESPONSE_EXECUTE,
     }  # fmt: skip
+    # Acciones MEDIUM, gestión de playbooks y cancelación (response:manage): solo admin (5D).
+    assert Permission.RESPONSE_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Fuentes, importación de IOCs y reevaluación (threat_intel:manage): solo admin (Fase 5C).
     assert Permission.THREAT_INTEL_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Crear, editar, activar e importar reglas (rules:manage) es solo de admin (Fase 5A).
@@ -583,6 +588,8 @@ NON_SESSION_ROUTES = {
     ("POST", "/api/v1/inventory"),
     ("POST", "/api/v1/processes"),
     ("POST", "/api/v1/events"),
+    ("POST", "/api/v1/agents/commands/poll"),  # token de agente (Fase 5D)
+    ("POST", "/api/v1/agents/commands/{request_id}/result"),
     ("GET", "/api/v1/agent-enrollment-tokens"),  # X-Admin-Key (legacy)
     ("POST", "/api/v1/agent-enrollment-tokens"),
     ("POST", "/api/v1/agent-enrollment-tokens/{token_id}/revoke"),
@@ -603,6 +610,7 @@ def _concrete(path: str) -> str:
     for name in (
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
         "model_id", "benchmark_id", "incident_id", "finding_id", "indicator_id", "match_id",
+        "execution_id", "playbook_id", "run_id", "request_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.

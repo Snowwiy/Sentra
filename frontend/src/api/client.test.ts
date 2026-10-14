@@ -52,6 +52,26 @@ describe("apiGet", () => {
     expect((await failure(apiGet("/incidents"))).message).toBe("Referencia no válida: Asset not found: x");
   });
 
+  it("translates response engine errors and keeps the blocked details (Fase 5D)", async () => {
+    const details = [{ execution_id: "e1" }, { code: "agent_offline", message: "offline" }];
+    respond(409, JSON.stringify({ error: { code: "response_blocked", message: "blocked", details } }));
+    const blocked = await failure(apiGet("/response/executions"));
+    expect(blocked.code).toBe("response_blocked");
+    expect(blocked.details).toEqual(details);
+
+    respond(409, JSON.stringify({ error: { code: "response_conflict", message: "The execution changed" } }));
+    expect((await failure(apiGet("/x"))).message).toMatch(/Otro operador ha modificado/);
+
+    respond(409, JSON.stringify({ error: { code: "response_invalid_state", message: "x" } }));
+    expect((await failure(apiGet("/x"))).message).toBe("La ejecución ya ha terminado y no se puede cancelar.");
+
+    respond(422, JSON.stringify({ error: { code: "playbook_continue_not_allowed", message: "step 2 is medium" } }));
+    expect((await failure(apiGet("/x"))).message).toBe("Playbook no válido: step 2 is medium");
+
+    respond(422, JSON.stringify({ error: { code: "response_invalid_parameters", message: "hours too large" } }));
+    expect((await failure(apiGet("/x"))).message).toBe("Parámetros no válidos: hours too large");
+  });
+
   it("reports a gateway error without envelope as the API being unreachable", async () => {
     respond(502, "<html>Bad Gateway</html>", "text/html");
 

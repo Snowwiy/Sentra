@@ -541,6 +541,28 @@ class Settings(BaseSettings):
     asset_cleanup_batch_size: int = Field(default=50, ge=1, le=500)
     asset_cleanup_interval_minutes: int = Field(default=360, ge=5, le=10_080)
 
+    # --- Response Engine y Playbooks (Fase 5D, docs/response-engine.md) ---------------------
+    # Solo acciones del catálogo (allowlist en código), siempre manuales: no existe ejecución
+    # automática por detecciones. Apagado, la API responde 409 response_disabled y los agentes
+    # no reciben comandos nuevos (los ya encolados caducan por TTL).
+    response_enabled: bool = True
+    playbooks_enabled: bool = True
+    # Vida máxima de un comando de agente en cola: si el agente no lo recoge antes, la
+    # ejecución termina en timed_out. Nunca se guardan comandos indefinidamente.
+    response_command_ttl_minutes: int = Field(default=15, ge=1, le=1440)
+    # Tiempo que el agente tiene para devolver el resultado de un comando ya entregado. Al
+    # vencer se reentrega (solo acciones idempotentes) o la ejecución termina en timed_out.
+    response_command_lease_seconds: int = Field(default=300, ge=30, le=3600)
+    # Tamaño máximo (KiB, JSON serializado) del resultado estructurado de una ejecución.
+    response_result_max_kb: int = Field(default=64, ge=1, le=512)
+    # Agente offline: "block" (por defecto) rechaza la acción como blocked; "queue" la deja
+    # en cola hasta el TTL por si el equipo vuelve. Nunca se finge éxito.
+    response_offline_agent_policy: Literal["block", "queue"] = "block"
+    # Ejecuciones activas (pending/queued/running) por activo: acota la cola por equipo.
+    response_max_active_per_asset: int = Field(default=10, ge=1, le=100)
+    # Cada cuánto el job response-engine caduca comandos y avanza playbooks.
+    response_sweep_interval_seconds: int = Field(default=15, ge=5, le=3600)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en

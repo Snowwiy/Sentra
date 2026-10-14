@@ -86,6 +86,15 @@ class Permission(enum.StrEnum):
     # sincronización, importar IOCs y forzar el matching. Solo admin: cambia la inteligencia
     # que influye en la prioridad, el riesgo y las detecciones de todos.
     THREAT_INTEL_MANAGE = "threat_intel:manage"
+    # Response Engine y Playbooks (Fase 5D). Ver el catálogo de acciones y playbooks y el
+    # historial de ejecuciones (estado, objetivo, resultado acotado). No ejecuta nada.
+    RESPONSE_READ = "response:read"
+    # Previsualizar y ejecutar acciones LOW del catálogo y playbooks cuyos pasos permita el
+    # rol. Cada acción exige además sus permisos de dominio (p. ej. detections:manage).
+    RESPONSE_EXECUTE = "response:execute"
+    # Acciones MEDIUM (mutaciones internas: abrir incidente, nota, archivar), administrar
+    # playbooks (crear, versionar, activar, desactivar) y cancelar ejecuciones. Solo admin.
+    RESPONSE_MANAGE = "response:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -97,6 +106,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RULES_READ,
             Permission.VULNERABILITIES_READ,
             Permission.THREAT_INTEL_READ,
+            Permission.RESPONSE_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -117,6 +127,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.VULNERABILITIES_MANAGE,
             Permission.THREAT_INTEL_READ,
             Permission.THREAT_INTEL_TRIAGE,
+            Permission.RESPONSE_READ,
+            Permission.RESPONSE_EXECUTE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

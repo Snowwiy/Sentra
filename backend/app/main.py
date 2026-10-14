@@ -29,6 +29,7 @@ from app.services.background import (
     purge_old_data,
     run_asset_cleanup,
     run_detection_engine,
+    run_response_engine,
     run_risk_engine,
     run_threat_intel,
     run_vulnerability_engine,
@@ -106,6 +107,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "asset-cleanup",
                     settings.asset_cleanup_interval_minutes * 60,
                     run_asset_cleanup,
+                )
+            )
+        # Fase 5D: TTL de comandos, plazos y avance de playbooks (nunca ejecuta nada nuevo).
+        if settings.response_enabled:
+            jobs.append(
+                PeriodicJob(
+                    "response-engine",
+                    settings.response_sweep_interval_seconds,
+                    run_response_engine,
                 )
             )
         # Only when a retention period is configured: by default nothing is ever deleted.

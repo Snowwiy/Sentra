@@ -190,6 +190,11 @@ class Asset(Base):
     # "auditd": "unavailable", ...}) y cuándo llegó. Null: agente que no lo informa.
     event_coverage: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     event_coverage_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 5D: tipos de comando de Response que el agente declara saber ejecutar (lista
+    # allowlisted, ver app/response/catalog.py) y cuándo lo declaró. Null: agente anterior a
+    # 5D, que no recibe acciones de agente (la UI no muestra botones que no podría ejecutar).
+    agent_capabilities: Mapped[list[str] | None] = mapped_column(JSONB)
+    agent_capabilities_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Last status set by agent activity. Staleness (offline) is resolved at read time.
     status: Mapped[AssetStatus] = mapped_column(

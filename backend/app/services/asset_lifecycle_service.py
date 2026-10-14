@@ -1133,6 +1133,12 @@ class AssetLifecycleService:
         target.machine_id_hash = source.machine_id_hash or target.machine_id_hash
         target.event_coverage = source.event_coverage
         target.event_coverage_at = source.event_coverage_at
+        # Fase 5D: las capacidades de Response son del agente, no del equipo: el activo
+        # canónico pasa a ofrecer solo lo que declara el agente actual (nunca las del viejo).
+        target.agent_capabilities = source.agent_capabilities
+        target.agent_capabilities_at = source.agent_capabilities_at
+        source.agent_capabilities = None
+        source.agent_capabilities_at = None
         if source.last_seen_at and (
             target.last_seen_at is None or source.last_seen_at > target.last_seen_at
         ):

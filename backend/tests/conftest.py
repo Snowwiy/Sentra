@@ -24,6 +24,17 @@ os.environ["MANAGED_STALE_AFTER_DAYS"] = "30"
 os.environ["ASSET_AUTO_CLEANUP"] = "false"
 os.environ["ASSET_CLEANUP_BATCH_SIZE"] = "50"
 os.environ["ASSET_CLEANUP_INTERVAL_MINUTES"] = "360"
+# Fase 5D: Response Engine con sus valores por defecto, por la misma razón (un .env de
+# desarrollo con RESPONSE_OFFLINE_AGENT_POLICY=queue o con Response apagado cambiaría lo que
+# comprueban los tests). Los tests de otra política la construyen explícita.
+os.environ["RESPONSE_ENABLED"] = "true"
+os.environ["PLAYBOOKS_ENABLED"] = "true"
+os.environ["RESPONSE_COMMAND_TTL_MINUTES"] = "15"
+os.environ["RESPONSE_COMMAND_LEASE_SECONDS"] = "300"
+os.environ["RESPONSE_RESULT_MAX_KB"] = "64"
+os.environ["RESPONSE_OFFLINE_AGENT_POLICY"] = "block"
+os.environ["RESPONSE_MAX_ACTIVE_PER_ASSET"] = "10"
+os.environ["RESPONSE_SWEEP_INTERVAL_SECONDS"] = "15"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -172,7 +183,7 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
-                " detection_rules, detection_rule_stats, vulnerability_sources"
+                " detection_rules, detection_rule_stats, vulnerability_sources, playbooks"
                 " RESTART IDENTITY CASCADE"
             )
         )

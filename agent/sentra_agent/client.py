@@ -126,6 +126,24 @@ class SentraClient:
     ) -> dict[str, Any]:
         return self._post("/processes", {"agent_id": str(agent_id), **snapshot}, _bearer(token))
 
+    def poll_commands(self, agent_id: UUID, token: str, max_commands: int = 5) -> dict[str, Any]:
+        # Fase 5D: comandos de Response en cola para este agente (con su propio token).
+        return self._post(
+            "/agents/commands/poll",
+            {"agent_id": str(agent_id), "max_commands": max_commands},
+            _bearer(token),
+        )
+
+    def send_command_result(
+        self, agent_id: UUID, token: str, request_id: UUID, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        # request_id es un UUID ya validado: nunca se interpola texto del servidor en la URL.
+        return self._post(
+            f"/agents/commands/{UUID(str(request_id))}/result",
+            {"agent_id": str(agent_id), **body},
+            _bearer(token),
+        )
+
     def send_telemetry(self, agent_id: UUID, token: str, sample: dict[str, Any]) -> dict[str, Any]:
         return self._post("/telemetry", {"agent_id": str(agent_id), **sample}, _bearer(token))
 

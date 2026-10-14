@@ -1,6 +1,7 @@
 """Agent main loop: registration, heartbeat, telemetry, buffering and retry policy."""
 
 import logging
+import platform
 import random
 import sys
 import threading
@@ -15,6 +16,18 @@ from uuid import UUID, uuid4
 from sentra_agent.buffer import BUFFER_FILE, SampleBuffer
 from sentra_agent.client import ApiError, SentraClient, TransportError
 from sentra_agent.collectors import HostInfo, collect_host_info, collect_metrics
+from sentra_agent.commands import (
+    COLLECT_DIAGNOSTICS,
+    COLLECT_EVENTS,
+    COLLECT_INVENTORY,
+    COLLECT_PROCESSES,
+    COLLECT_TELEMETRY,
+    CommandMemory,
+    CommandRejectedError,
+    capabilities,
+    parse_command,
+    result_body,
+)
 from sentra_agent.config import AgentConfig
 from sentra_agent.events import EventCollector
 from sentra_agent.identity import Identity, IdentityStore
@@ -134,6 +147,13 @@ class Agent:
         # A one-time token is tried at most once per run: once used (or refused) it cannot
         # work again, so it is forgotten and never sent anywhere else.
         self._bootstrap_spent = False
+        # Fase 5D: comandos de Response pendientes según el último heartbeat. Solo se pide la
+        # cola cuando el servidor avisa (> 0): ninguna petición extra en cada ciclo.
+        self._pending_commands = 0
+        # False tras un 404 en /agents/commands/poll (servidor anterior a 5D).
+        self._commands_supported = True
+        self._commands = CommandMemory()
+        self._started_at = time.monotonic()
 
     def run(self, once: bool = False) -> None:
         logger.info(
@@ -223,14 +243,21 @@ class Agent:
         self._authenticated(self._maybe_send_inventory)
         self._authenticated(self._maybe_send_processes)
         self._authenticated(self._maybe_send_events)
+        # Fase 5D: al final, para que un comando lento nunca retrase heartbeat ni telemetría.
+        self._authenticated(self._run_commands)
 
     def _maybe_send_events(self, token: str) -> None:
+        self._send_events(token, force=False)
+
+    def _send_events(self, token: str, force: bool) -> int:
+        """Envía los eventos pendientes (si toca o si `force`) y devuelve cuántos salieron."""
         now = time.monotonic()
         if (
-            self._events_sent_at is not None
+            not force
+            and self._events_sent_at is not None
             and now - self._events_sent_at < self.config.events_interval_seconds
         ):
-            return
+            return 0
         try:
             events, cursor = self.events.pending()
         except Exception:
@@ -238,7 +265,9 @@ class Agent:
             # inventario (ya enviados en este ciclo); se reintenta en el siguiente intervalo.
             logger.exception("event collection failed")
             self._events_sent_at = now
-            return
+            if force:
+                raise
+            return 0
         coverage = _source_coverage(self.events)
         coverage_due = coverage is not None and (
             coverage != self._coverage_sent
@@ -283,6 +312,7 @@ class Agent:
         # transport error we never get here and the same events are re-read next time.
         self.events.commit(cursor)
         self._events_sent_at = now
+        return len(events)
 
     def _authenticated(self, call: Callable[[str], None]) -> None:
         """Run an API call with our token; on 401 enroll again once and retry.
@@ -458,6 +488,9 @@ class Agent:
             {"host": self._host_payload()},
         )
         self._remember_asset(response["asset_id"])
+        # Fase 5D: un servidor anterior no lo envía (0). Solo se acepta un entero.
+        pending = response.get("pending_commands")
+        self._pending_commands = pending if isinstance(pending, int) and pending > 0 else 0
 
     def _host_payload(self) -> dict[str, Any]:
         payload = self.host_info().as_payload()
@@ -465,6 +498,9 @@ class Agent:
         # rechazaría con 422 extra_forbidden (y _send_adapting lo quitaría para esta ejecución).
         if self.config.installation_method:
             payload["installation_method"] = self.config.installation_method
+        # Fase 5D: tipos de comando que sabe ejecutar. Un servidor anterior lo rechaza como
+        # campo desconocido y _send_adapting lo quita para el resto de la ejecución.
+        payload["capabilities"] = capabilities()
         return payload
 
     def _flush_buffer(self, token: str) -> None:
@@ -532,6 +568,150 @@ class Agent:
             else:
                 logger.warning("process snapshot rejected", extra={"body": exc.body})
         self._processes_sent_at = now
+
+    # --- Fase 5D: comandos de Response ------------------------------------------------------
+
+    def _run_commands(self, token: str) -> None:
+        """Pide la cola (si el heartbeat avisó), ejecuta tipos allowlisted y envía resultados."""
+        if self._commands.unsent:
+            self._flush_results(token)
+        if not self._commands_supported or self._pending_commands <= 0:
+            return
+        try:
+            response = self.client.poll_commands(self.identity.agent_id, token)
+        except ApiError as exc:
+            if exc.status == HTTP_NOT_FOUND:
+                logger.info("server does not deliver response commands; disabled for this run")
+                self._commands_supported = False
+                return
+            if exc.status in PERMANENT_REJECTIONS:
+                logger.warning("command poll rejected", extra={"body": exc.body})
+                return
+            raise
+        self._pending_commands = 0
+        commands = response.get("commands")
+        for raw in (commands if isinstance(commands, list) else [])[:10]:
+            try:
+                request_id = UUID(str(raw.get("request_id"))) if isinstance(raw, dict) else None
+            except ValueError:
+                request_id = None
+            if request_id is None:
+                logger.warning("ignoring malformed command (no valid request_id)")
+                continue
+            body = self._commands.done.get(request_id)
+            if body is None:
+                body = self._execute_command(raw, token)
+                self._commands.remember(request_id, body)
+            self._send_result(token, request_id, body)
+
+    def _execute_command(self, raw: dict[str, Any], token: str) -> dict[str, Any]:
+        try:
+            _, kind = parse_command(raw)
+        except CommandRejectedError as exc:
+            # Nunca se ejecuta nada fuera de la allowlist: se informa y ya.
+            logger.warning("rejected response command", extra={"reason": exc.code})
+            return result_body("rejected", "Command rejected by the agent", error_code=exc.code)
+        logger.info("running response command", extra={"command": kind})
+        try:
+            summary, data = self._handlers()[kind](token)
+        except TransportError:
+            # Sin red: el servidor lo reentregará (o caducará); no se inventa un resultado.
+            raise
+        except ApiError as exc:
+            return result_body(
+                "failed",
+                f"Server rejected the data (HTTP {exc.status})",
+                error_code="server_rejected",
+            )
+        except Exception:
+            # El detalle (traza) va al log local con secretos redactados, nunca al servidor.
+            logger.exception("response command failed", extra={"command": kind})
+            return result_body(
+                "failed", "Collection failed on the agent", error_code="collector_failed"
+            )
+        return result_body("succeeded", summary, data)
+
+    def _handlers(self) -> dict[str, Callable[[str], tuple[str, dict[str, Any]]]]:
+        return {
+            COLLECT_INVENTORY: self._command_inventory,
+            COLLECT_PROCESSES: self._command_processes,
+            COLLECT_EVENTS: self._command_events,
+            COLLECT_TELEMETRY: self._command_telemetry,
+            COLLECT_DIAGNOSTICS: self._command_diagnostics,
+        }
+
+    def _command_inventory(self, token: str) -> tuple[str, dict[str, Any]]:
+        snapshot = self.inventory()
+        self._send_inventory(token, snapshot)
+        self._inventory_sent_at = time.monotonic()
+        counts = {key: len(value) for key, value in snapshot.items() if isinstance(value, list)}
+        return "Inventory sent", {"sections": counts}
+
+    def _command_processes(self, token: str) -> tuple[str, dict[str, Any]]:
+        snapshot = self.processes()
+        self._send_adapting(
+            "processes",
+            lambda body: self.client.send_processes(self.identity.agent_id, token, body),
+            snapshot,
+        )
+        self._processes_sent_at = time.monotonic()
+        return "Process snapshot sent", {"processes": len(snapshot.get("processes") or [])}
+
+    def _command_events(self, token: str) -> tuple[str, dict[str, Any]]:
+        sent = self._send_events(token, force=True)
+        return f"{sent} events sent", {"events_sent": sent}
+
+    def _command_telemetry(self, token: str) -> tuple[str, dict[str, Any]]:
+        sample = self.metrics()
+        sample.setdefault("sample_id", str(uuid4()))
+        self.buffer.append(sample)
+        self._flush_buffer(token)
+        keys = ("cpu_percent", "ram_percent", "disk_percent", "uptime_seconds")
+        return "Telemetry sample sent", {key: sample.get(key) for key in keys}
+
+    def _command_diagnostics(self, token: str) -> tuple[str, dict[str, Any]]:
+        # Solo estado operativo: nunca tokens, claves, rutas de credenciales ni la config
+        # completa (que puede llevar la clave de enrollment legacy).
+        return "Agent diagnostics", {
+            "agent_version": self.host_info().agent_version,
+            "platform": sys.platform,
+            "os": platform.system(),
+            "python": platform.python_version(),
+            "uptime_seconds": int(time.monotonic() - self._started_at),
+            "intervals": {
+                "cycle": self.config.interval_seconds,
+                "inventory": self.config.inventory_interval_seconds,
+                "events": self.config.events_interval_seconds,
+                "processes": self.config.processes_interval_seconds,
+            },
+            "buffered_samples": len(self.buffer),
+            "event_coverage": _source_coverage(self.events),
+            "fields_not_accepted_by_server": {
+                endpoint: sorted(".".join(path) for path in paths)
+                for endpoint, paths in self._unsupported.items()
+                if paths
+            },
+            "capabilities": capabilities(),
+        }
+
+    def _send_result(self, token: str, request_id: UUID, body: dict[str, Any]) -> None:
+        try:
+            self.client.send_command_result(self.identity.agent_id, token, request_id, body)
+        except TransportError:
+            # Se reintenta en el siguiente ciclo (el servidor lo acepta mientras su lease o la
+            # reentrega sigan vivos; si no, la ejecución ya estará en timed_out).
+            self._commands.queue_unsent(request_id, body)
+            raise
+        except ApiError as exc:
+            if exc.status == HTTP_UNAUTHORIZED:
+                raise
+            # 404 (caducado, de otro agente) o 409: no hay nada más que hacer con él.
+            logger.warning("command result not accepted", extra={"status": exc.status})
+        self._commands.unsent.pop(request_id, None)
+
+    def _flush_results(self, token: str) -> None:
+        for request_id, body in list(self._commands.unsent.items()):
+            self._send_result(token, request_id, body)
 
     def _send_adapting(
         self,

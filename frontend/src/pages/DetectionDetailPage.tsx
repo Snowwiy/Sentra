@@ -13,6 +13,7 @@ import {
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { AssetContextSummary } from "../components/incidents/IncidentTabs";
 import { RelatedIncidentsPanel } from "../components/incidents/RelatedIncidentsPanel";
+import { InvestigateButton } from "../components/response/InvestigateButton";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { SOURCE_LABELS } from "../lib/rules";
@@ -157,6 +158,12 @@ export function DetectionDetailPage() {
           <ConfidenceBadge confidence={d.confidence} />
           <DetectionStatusBadge status={d.status} />
         </div>
+        {/* Fase 5D: playbook de investigación sobre el activo con la detección como contexto. */}
+        <InvestigateButton
+          detectionId={d.detection_id}
+          playbookKeys={["investigate_detection"]}
+          targets={[{ assetId: d.asset_id, label: d.hostname }]}
+        />
       </div>
       {error && (
         <div className="banner banner--warn" role="alert">

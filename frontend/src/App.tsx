@@ -49,6 +49,9 @@ const RuleDetailPage = lazy(() => import("./pages/RuleDetailPage").then((m) => (
 const RuleEditorPage = lazy(() => import("./pages/RuleEditorPage").then((m) => ({ default: m.RuleEditorPage })));
 const rulesFallback = <LoadingState label="Cargando reglas…" />;
 // Fase 5C.2: administración del ciclo de vida (solo admin) en su propio chunk.
+// Fase 5D: Response Engine y Playbooks en su propio chunk.
+const ResponsePage = lazy(() => import("./pages/ResponsePage").then((m) => ({ default: m.ResponsePage })));
+const PlaybooksPage = lazy(() => import("./pages/PlaybooksPage").then((m) => ({ default: m.PlaybooksPage })));
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -198,6 +201,26 @@ export function AppRoutes() {
               <RequirePermission permission="incidents:read">
                 <Suspense fallback={incidentsFallback}>
                   <IncidentDetailPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="response"
+            element={
+              <RequirePermission permission="response:read">
+                <Suspense fallback={incidentsFallback}>
+                  <ResponsePage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="playbooks"
+            element={
+              <RequirePermission permission="response:read">
+                <Suspense fallback={incidentsFallback}>
+                  <PlaybooksPage />
                 </Suspense>
               </RequirePermission>
             }

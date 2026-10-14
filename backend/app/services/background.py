@@ -265,6 +265,21 @@ def run_asset_cleanup() -> None:
     )
 
 
+def run_response_engine() -> None:
+    """Fase 5D: caduca comandos de agente (TTL), cierra plazos vencidos y avanza playbooks.
+
+    Solo trabaja sobre filas vivas (índices parciales) y en lotes acotados. Nunca lanza
+    acciones nuevas por su cuenta: solo continúa playbooks que un usuario empezó.
+    """
+    from app.services.discovery_runner import get_discovery_runner
+    from app.services.response_service import ResponseService
+
+    with get_sessionmaker()() as session:
+        counts = ResponseService(session, get_settings(), get_discovery_runner).sweep()
+    if any(counts[key] for key in ("expired", "timed_out", "cancelled", "redelivered")):
+        logger.info("response sweep", extra={f"response_{k}": v for k, v in counts.items()})
+
+
 def discovery_job(stop: threading.Event) -> Callable[[], None]:
     """Periodic discovery over every allowed network; `stop` cancels a run in progress."""
 

@@ -100,6 +100,17 @@ export const ACTION_LABELS: Record<string, string> = {
   merged: "Fusionado",
   merged_into: "Fusionado en otro",
   risk_snapshot: "Snapshot de riesgo",
+  // Fase 5D: acciones de respuesta y playbooks lanzados con contexto del incidente.
+  response_requested: "Respuesta solicitada",
+  response_blocked: "Respuesta bloqueada",
+  response_completed: "Respuesta completada",
+  response_failed: "Respuesta fallida",
+  response_cancelled: "Respuesta cancelada",
+  playbook_started: "Playbook iniciado",
+  playbook_blocked: "Playbook bloqueado",
+  playbook_succeeded: "Playbook completado",
+  playbook_failed: "Playbook fallido",
+  playbook_cancelled: "Playbook cancelado",
 };
 
 /** Estados activos: el caso sigue vivo y admite trabajo. */

@@ -2,7 +2,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 from uuid import UUID
 
-from sqlalchemy import func, update
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, object_session
 
@@ -21,6 +21,7 @@ from app.core.security import (
     token_matches,
 )
 from app.models.asset import Asset, AssetStatus
+from app.models.response import AgentCommand
 from app.repositories.asset_repository import AssetRepository
 from app.schemas.agent import (
     AgentRegisterRequest,
@@ -35,6 +36,38 @@ from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered
 from app.vulnerabilities.queue import mark_dirty
+
+# Copia de app/response/catalog.AGENT_COMMAND_TYPES sin importar el catálogo (que importa
+# servicios que importan este módulo). test_response.py comprueba que coinciden.
+AGENT_COMMAND_TYPES = frozenset(
+    {
+        "collect_inventory",
+        "collect_processes",
+        "collect_events",
+        "collect_telemetry",
+        "collect_diagnostics",
+    }
+)
+
+
+def pending_commands(session: Session, asset: Asset, now: datetime) -> int:
+    """Comandos de Response en cola para el agente actual del activo (heartbeat)."""
+    if asset.agent_id is None:
+        return 0
+    return int(
+        session.scalar(
+            select(func.count())
+            .select_from(AgentCommand)
+            .where(
+                AgentCommand.asset_id == asset.id,
+                AgentCommand.agent_id == asset.agent_id,
+                AgentCommand.status == "queued",
+                AgentCommand.expires_at > now,
+            )
+        )
+        or 0
+    )
+
 
 logger = logging.getLogger(__name__)
 # Actor de las entradas de auditoría que genera el propio servidor (sin usuario).
@@ -86,6 +119,13 @@ def apply_host_info(asset: Asset, host: HostInfo) -> None:
     # /etc/machine-id) no borra la identidad ya conocida, que sirve para sugerir duplicados.
     if host.machine_id_hash:
         asset.machine_id_hash = host.machine_id_hash
+    # Fase 5D: capacidades de Response declaradas por el agente, filtradas por la allowlist
+    # del servidor. Solo si llegan: un agente anterior las deja en null (sin acciones).
+    if host.capabilities is not None:
+        capabilities = sorted(set(host.capabilities) & AGENT_COMMAND_TYPES)
+        if asset.agent_capabilities != capabilities:
+            asset.agent_capabilities = capabilities
+            asset.agent_capabilities_at = datetime.now(UTC)
     # El agente es la fuente autoritativa del nombre y del tipo: se recalcula con lo que
     # acaba de reportar (sin escrituras si nada cambió).
     refresh_identity(asset)
@@ -209,6 +249,9 @@ class AgentService:
                 )
             )
             refresh_identity(asset)
+            if data.capabilities is not None:
+                asset.agent_capabilities = sorted(set(data.capabilities) & AGENT_COMMAND_TYPES)
+                asset.agent_capabilities_at = datetime.now(UTC)
         else:
             apply_host_info(asset, data)
         asset.agent_token_hash = hash_token(token)
@@ -288,4 +331,5 @@ class AgentService:
             # The stored value: a delayed heartbeat never reports an older time than the
             # newest contact already recorded.
             last_seen_at=asset.last_seen_at or now,
+            pending_commands=pending_commands(self._session, asset, now),
         )

@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Annotated
 from uuid import UUID
 
 from pydantic import Field, IPvAnyAddress
@@ -24,6 +25,12 @@ class HostInfo(RequestModel):
     # hexadecimal de /etc/machine-id o MachineGuid). Nunca el valor en claro. Opcional: los
     # agentes anteriores no la envían.
     machine_id_hash: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    # Fase 5D: tipos de comando de Response que este agente sabe ejecutar. El servidor solo
+    # guarda los de su allowlist (app/response/catalog.py) e ignora el resto. Opcional: un
+    # agente anterior no lo envía y no recibe acciones de agente.
+    capabilities: list[Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]{1,47}$")]] | None = Field(
+        default=None, max_length=32
+    )
 
 
 class AgentRegisterRequest(HostInfo):
@@ -50,3 +57,6 @@ class HeartbeatResponse(ResponseModel):
     asset_id: UUID
     status: AssetStatus
     last_seen_at: datetime
+    # Fase 5D: comandos de Response en cola para este agente. Solo si es > 0 el agente pide
+    # sus comandos (POST /agents/commands/poll): sin sondeo extra en cada ciclo.
+    pending_commands: int = 0
