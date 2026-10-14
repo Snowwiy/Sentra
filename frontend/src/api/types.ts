@@ -1106,7 +1106,10 @@ export type Permission =
   | "vulnerabilities:admin"
   | "threat_intel:read"
   | "threat_intel:triage"
-  | "threat_intel:manage";
+  | "threat_intel:manage"
+  | "response:read"
+  | "response:execute"
+  | "response:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -2983,4 +2986,231 @@ export interface FindingThreatIntel {
   conflicting: boolean;
   changes: { occurred_at: string; source_name: string; change: string; details: Record<string, unknown> | null }[];
   priority_factors: Record<string, unknown>[];
+}
+
+// --- Fase 5D: Response Engine y Playbooks -----------------------------------------------------
+
+/** Bloqueo o aviso de la política de respuesta: código estable y mensaje del servidor. */
+export interface ResponseIssue {
+  code: string;
+  message: string;
+}
+
+export type ResponseRiskLevel = "low" | "medium" | "high" | "critical";
+
+export type ExecutionStatus =
+  | "pending"
+  | "approval_required"
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "cancelled"
+  | "timed_out"
+  | "blocked";
+
+export type PlaybookRunStatus = "running" | "succeeded" | "failed" | "cancelled" | "blocked";
+
+export interface ResponseAction {
+  id: string;
+  name: string;
+  description: string;
+  category: string;
+  scope: "server" | "agent";
+  target_type: "asset" | "incident";
+  risk_level: string;
+  destructive: boolean;
+  requires_confirmation: boolean;
+  requires_agent: boolean;
+  supported_platforms: string[];
+  required_role: string;
+  required_permissions: string[];
+  timeout_seconds: number;
+  retry_policy: string;
+  /** "available" o "not_implemented" (reservada: visible pero nunca ejecutable). */
+  availability: string;
+  expected_effect: string;
+  /** JSON Schema de los parámetros, generado en el servidor (solo para el formulario). */
+  parameters_schema: Record<string, unknown>;
+  /** Si el rol del usuario puede ejecutarla (con ?asset_id=, y qué la bloquea ahí). */
+  permitted: boolean;
+  blockers: ResponseIssue[];
+}
+
+export interface ResponseActionList {
+  items: ResponseAction[];
+  response_enabled: boolean;
+  playbooks_enabled: boolean;
+}
+
+export interface ResponsePreview {
+  action: string;
+  action_name: string;
+  target_type: string;
+  target_id: string;
+  target_label: string;
+  parameters: Record<string, unknown>;
+  risk_level: string;
+  required_role: string;
+  requires_confirmation: boolean;
+  requires_agent: boolean;
+  expected_effect: string;
+  preconditions: string[];
+  blockers: ResponseIssue[];
+  warnings: ResponseIssue[];
+  allowed: boolean;
+}
+
+export interface ResponseExecution {
+  execution_id: string;
+  correlation_id: string;
+  action_id: string;
+  action_name: string;
+  status: string;
+  risk_level: string;
+  requires_agent: boolean;
+  target_type: string;
+  target_id: string;
+  target_label: string;
+  asset_id: string | null;
+  incident_id: string | null;
+  detection_id: string | null;
+  parameters: Record<string, unknown>;
+  /** Resultado estructurado: se muestra siempre como texto (JSON.stringify), nunca como HTML. */
+  result: Record<string, unknown> | null;
+  result_summary: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  blockers: ResponseIssue[];
+  actor: string;
+  reason: string | null;
+  playbook_run_id: string | null;
+  step_index: number | null;
+  created_at: string;
+  queued_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  deadline_at: string | null;
+  duration_ms: number | null;
+  version: number;
+  /** True si la petición coincidió con una ejecución ya existente (idempotencia/dedupe). */
+  deduplicated: boolean;
+}
+
+export interface ResponseExecutionList {
+  items: ResponseExecution[];
+  total: number;
+}
+
+export interface PlaybookStep {
+  order: number;
+  action_id: string;
+  action_name: string;
+  parameters: Record<string, unknown>;
+  on_success: string;
+  on_failure: string;
+  timeout_seconds: number;
+  risk_level: string;
+}
+
+export interface Playbook {
+  playbook_id: string;
+  key: string;
+  name: string;
+  description: string;
+  builtin: boolean;
+  enabled: boolean;
+  version: number;
+  risk_level: string;
+  required_role: string;
+  requires_confirmation: boolean;
+  requires_agent: boolean;
+  steps: PlaybookStep[];
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  revision: number;
+  permitted: boolean;
+  blockers: ResponseIssue[];
+}
+
+export interface PlaybookList {
+  items: Playbook[];
+}
+
+/** Paso de un playbook al crear o editar (PlaybookStepIn en el backend). */
+export interface PlaybookStepInput {
+  action_id: string;
+  parameters?: Record<string, unknown>;
+  on_success?: "continue" | "stop";
+  on_failure?: "stop" | "continue";
+  timeout_seconds?: number | null;
+}
+
+export interface PlaybookStepPreview {
+  order: number;
+  action_id: string;
+  action_name: string;
+  risk_level: string;
+  requires_agent: boolean;
+  blockers: ResponseIssue[];
+  warnings: ResponseIssue[];
+}
+
+export interface PlaybookPreview {
+  playbook_id: string;
+  name: string;
+  version: number;
+  target_id: string;
+  target_label: string;
+  risk_level: string;
+  required_role: string;
+  requires_confirmation: boolean;
+  steps: PlaybookStepPreview[];
+  blockers: ResponseIssue[];
+  allowed: boolean;
+}
+
+export interface PlaybookRunStep {
+  order: number;
+  action_id: string;
+  action_name: string;
+  on_failure: string;
+  status: string;
+  execution_id: string | null;
+  result_summary: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface PlaybookRun {
+  run_id: string;
+  playbook_id: string | null;
+  playbook_key: string;
+  playbook_name: string;
+  playbook_version: number;
+  status: string;
+  current_step: number;
+  risk_level: string;
+  target_id: string;
+  target_label: string;
+  incident_id: string | null;
+  detection_id: string | null;
+  actor: string;
+  reason: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  created_at: string;
+  finished_at: string | null;
+  version: number;
+  steps: PlaybookRunStep[];
+  deduplicated: boolean;
+}
+
+export interface PlaybookRunList {
+  items: PlaybookRun[];
+  total: number;
 }

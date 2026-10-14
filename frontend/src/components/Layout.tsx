@@ -31,6 +31,9 @@ export function Layout() {
           <Link to="/detections">Detecciones</Link>
           {auth.can("incidents:read") && <Link to="/incidents">Incidentes</Link>}
           <Link to="/alerts">Alertas</Link>
+          {/* Solo navegación: las páginas y la API exigen response:read igualmente. */}
+          {auth.can("response:read") && <Link to="/response">Response</Link>}
+          {auth.can("response:read") && <Link to="/playbooks">Playbooks</Link>}
           {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
           {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
           {/* Solo navegación: la página y la API exigen users:manage igualmente. */}

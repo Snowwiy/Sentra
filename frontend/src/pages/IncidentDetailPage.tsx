@@ -17,6 +17,7 @@ import {
   RiskContributionsTable,
   TimelineTab,
 } from "../components/incidents/IncidentTabs";
+import { InvestigateButton } from "../components/response/InvestigateButton";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { formatEpss } from "../lib/threatIntel";
@@ -426,6 +427,14 @@ export function IncidentDetailPage() {
       )}
 
       <IncidentActions incident={incident} run={run} busy={busy} />
+      <div className="actions">
+        <InvestigateButton
+          incidentId={incident.incident_id}
+          targets={incident.asset_refs
+            .filter((a) => a.exists)
+            .map((a) => ({ assetId: a.asset_id, label: a.primary_ip ? `${a.name} · ${a.primary_ip}` : a.name }))}
+        />
+      </div>
 
       <nav className="tabs" role="tablist" aria-label="Secciones del incidente">
         {tabs.map(({ key, label }) => (

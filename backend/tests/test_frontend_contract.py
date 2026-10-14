@@ -245,6 +245,21 @@ INTERFACES = {
     "EpssIntel": "EpssIntel",
     "FindingThreatIntel": "FindingThreatIntel",
     "IncidentThreatMatchRef": "IncidentThreatMatchRef",
+    # Fase 5D: Response Engine y Playbooks.
+    "ResponseIssue": "IssueOut",
+    "ResponseAction": "ActionOut",
+    "ResponseActionList": "ActionList",
+    "ResponsePreview": "PreviewOut",
+    "ResponseExecution": "ExecutionOut",
+    "ResponseExecutionList": "ExecutionList",
+    "PlaybookStep": "PlaybookStepOut",
+    "Playbook": "PlaybookOut",
+    "PlaybookList": "PlaybookList",
+    "PlaybookStepPreview": "PlaybookStepPreview",
+    "PlaybookPreview": "PlaybookPreviewOut",
+    "PlaybookRunStep": "PlaybookRunStepOut",
+    "PlaybookRun": "PlaybookRunOut",
+    "PlaybookRunList": "PlaybookRunList",
 }
 ENUMS = [
     "AssetStatus",

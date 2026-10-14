@@ -51,6 +51,13 @@ from app.models.incident import (
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
 from app.models.rate_limit import RateLimitHit
+from app.models.response import (
+    AgentCommand,
+    Playbook,
+    PlaybookRun,
+    PlaybookVersion,
+    ResponseExecution,
+)
 from app.models.risk import (
     AssetRisk,
     RiskConfidence,
@@ -83,6 +90,7 @@ __all__ = [
     "AILocalModel",
     "AILocalSettings",
     "AIModelBenchmark",
+    "AgentCommand",
     "AgentEnrollmentToken",
     "Alert",
     "AlertRule",
@@ -137,8 +145,12 @@ __all__ = [
     "LineageEndReason",
     "MonitoringMethod",
     "NetworkZone",
+    "Playbook",
+    "PlaybookRun",
+    "PlaybookVersion",
     "PortStateValue",
     "RateLimitHit",
+    "ResponseExecution",
     "RiskConfidence",
     "RiskContributionRecord",
     "RiskLevel",

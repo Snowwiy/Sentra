@@ -68,6 +68,16 @@ const ASSET_CONTEXT_MESSAGES: Record<string, string> = {
   asset_tag_limit: "Se ha alcanzado el máximo de etiquetas distintas. Reutiliza una etiqueta existente.",
 };
 
+// Response Engine y Playbooks (Fase 5D). response_conflict: versión obsoleta o clave de
+// idempotencia reutilizada; la UI recarga antes de reintentar (nunca se sobrescribe en silencio).
+const RESPONSE_MESSAGES: Record<string, string> = {
+  response_conflict: "Otro operador ha modificado esta ejecución o playbook. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  response_invalid_state: "La ejecución ya ha terminado y no se puede cancelar.",
+  response_disabled: "Response está desactivado en este servidor.",
+  response_blocked: "La política de respuesta bloquea esta acción.",
+  confirmation_required: "Esta acción cambia datos: confírmala explícitamente.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -97,6 +107,10 @@ function translate(code: string, message: string): string {
   if (AI_MESSAGES[code]) return AI_MESSAGES[code];
   if (INCIDENT_MESSAGES[code]) return INCIDENT_MESSAGES[code];
   if (ASSET_CONTEXT_MESSAGES[code]) return ASSET_CONTEXT_MESSAGES[code];
+  if (RESPONSE_MESSAGES[code]) return RESPONSE_MESSAGES[code];
+  // Parámetros o definición de playbook inválidos: el detalle (inglés) dice qué corregir.
+  if (code === "response_invalid_parameters") return `Parámetros no válidos: ${message}`;
+  if (code.startsWith("playbook_")) return `Playbook no válido: ${message}`;
   // El motivo (inglés) dice qué referencia falla; se conserva tras un prefijo en español.
   if (code === "incident_invalid_reference") return `Referencia no válida: ${message}`;
   if (AI_DETAIL_PREFIXES[code]) return `${AI_DETAIL_PREFIXES[code]}: ${message}`;

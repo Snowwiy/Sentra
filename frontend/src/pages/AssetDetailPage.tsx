@@ -1,4 +1,4 @@
-import { useCallback } from "react";
+import { lazy, Suspense, useCallback } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { aiApi, sentraApi, vulnerabilitiesApi } from "../api/sentra";
@@ -28,6 +28,11 @@ import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { assetTitle, typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 
+// Fase 5D: la sección Response va en su propio chunk (no pesa en el bundle principal).
+const AssetResponseTab = lazy(() =>
+  import("../components/response/AssetResponseTab").then((m) => ({ default: m.AssetResponseTab })),
+);
+
 const TABS = [
   { key: "overview", label: "Overview" },
   { key: "risk", label: "Riesgo" },
@@ -42,6 +47,7 @@ const TABS = [
   { key: "vulnerabilities", label: "Vulnerabilidades" },
   { key: "intel", label: "Inteligencia" },
   { key: "alerts", label: "Alerts" },
+  { key: "response", label: "Response" },
 ] as const;
 
 type Tab = (typeof TABS)[number]["key"];
@@ -51,7 +57,8 @@ type Tab = (typeof TABS)[number]["key"];
 // evaluación) pero solo con vulnerabilities:read.
 // Fase 5C: "Inteligencia" (coincidencias de IOCs) también sin agente: la IP o el nombre del
 // activo pueden coincidir con un indicador.
-const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "intel", "alerts"];
+// Fase 5D: "Response" también sin agente (hay acciones de servidor, como recalcular riesgo).
+const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "intel", "alerts", "response"];
 
 // Tabs fed by the inventory snapshot (sent every 15 min): polled only while one is visible.
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
@@ -86,7 +93,10 @@ export function AssetDetailPage() {
     !asset && error instanceof ApiError && (error.status === 404 || error.status === 422);
   const managed = asset ? asset.monitoring_method === "agent" : true;
   const tabs = (managed ? TABS : TABS.filter((t) => NETWORK_TABS.includes(t.key))).filter(
-    (t) => (t.key !== "vulnerabilities" || canVulns) && (t.key !== "intel" || auth.can("threat_intel:read")),
+    (t) =>
+      (t.key !== "vulnerabilities" || canVulns) &&
+      (t.key !== "intel" || auth.can("threat_intel:read")) &&
+      (t.key !== "response" || auth.can("response:read")),
   );
   const tab: Tab = tabs.some((t) => t.key === requested) ? requested : "overview";
 
@@ -268,6 +278,11 @@ export function AssetDetailPage() {
           </div>
         )}
         {tab === "alerts" && <AlertsView assetId={asset.asset_id} />}
+        {tab === "response" && (
+          <Suspense fallback={<LoadingState label="Cargando response…" />}>
+            <AssetResponseTab assetId={asset.asset_id} assetLabel={assetTitle(asset)} />
+          </Suspense>
+        )}
       </div>
     </div>
   );

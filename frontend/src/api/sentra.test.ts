@@ -1,14 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { sentraApi } from "./sentra";
+import { responseApi, sentraApi } from "./sentra";
 
 let requested: string[];
+let inits: RequestInit[];
 
 beforeEach(() => {
   requested = [];
+  inits = [];
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string) => {
+    vi.fn(async (url: string, init: RequestInit = {}) => {
       requested.push(url);
+      inits.push(init);
       return new Response("{}", { status: 200, headers: { "Content-Type": "application/json" } });
     }),
   );
@@ -71,5 +74,40 @@ describe("sentraApi.listAssets (Fase 4M)", () => {
   it("reads the dashboard summary from its aggregate endpoint", async () => {
     await sentraApi.dashboardSummary();
     expect(lastPath()).toBe("/api/v1/dashboard/summary");
+  });
+});
+
+describe("responseApi (Fase 5D)", () => {
+  it("maps the execution filters to the API parameter names", async () => {
+    await responseApi.executions({});
+    expect(lastPath()).toBe("/api/v1/response/executions");
+
+    await responseApi.executions({ status: "running", actionId: "collect_events", assetId: "a1", limit: 25, offset: 50 });
+    expect(lastPath()).toBe(
+      "/api/v1/response/executions?status=running&action_id=collect_events&asset_id=a1&limit=25&offset=50",
+    );
+
+    await responseApi.actions("a1");
+    expect(lastPath()).toBe("/api/v1/response/actions?asset_id=a1");
+  });
+
+  it("posts the request body as JSON and encodes ids from the URL", async () => {
+    await responseApi.execute({ action_id: "recalculate_risk", target_id: "t1", confirm: false, idempotency_key: "abcdef12" });
+    expect(lastPath()).toBe("/api/v1/response/executions");
+    expect(inits.at(-1)?.method).toBe("POST");
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({
+      action_id: "recalculate_risk",
+      target_id: "t1",
+      confirm: false,
+      idempotency_key: "abcdef12",
+    });
+
+    await responseApi.setPlaybookEnabled("../x", 3, false);
+    expect(lastPath()).toBe("/api/v1/response/playbooks/..%2Fx/disable");
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ revision: 3 });
+
+    await responseApi.cancelRun("r1", 2);
+    expect(lastPath()).toBe("/api/v1/response/runs/r1/cancel");
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ version: 2, reason: null });
   });
 });

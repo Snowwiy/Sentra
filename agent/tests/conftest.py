@@ -58,6 +58,11 @@ class FakeApiState:
     accepts_coverage: bool = True
     # Agentes cuyo activo está archivado: el registro responde 403 asset_archived.
     archived: set[str] = field(default_factory=set)
+    # Fase 5D: comandos de Response en cola por agent_id (el heartbeat avisa del número),
+    # resultados recibidos por request_id y False para simular un servidor anterior (404).
+    commands: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
+    command_results: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
+    commands_endpoint: bool = True
 
     def paths(self) -> list[str]:
         return [path for path, _ in self.requests]
@@ -138,7 +143,23 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
             ):
                 self._send(401, {"error": {"code": "unauthorized", "message": "bad token"}})
             elif path == "/agents/heartbeat":
-                self._send(200, {"asset_id": state.agents[agent_id], "status": "online"})
+                response: dict[str, Any] = {"asset_id": state.agents[agent_id], "status": "online"}
+                if state.commands.get(agent_id):
+                    response["pending_commands"] = len(state.commands.get(agent_id, []))
+                self._send(200, response)
+            elif path == "/agents/commands/poll" and state.commands_endpoint:
+                limit = body.get("max_commands", 5)
+                queue = state.commands.get(agent_id, [])
+                delivered, state.commands[agent_id] = queue[:limit], queue[limit:]
+                self._send(200, {"commands": delivered})
+            elif (
+                path.startswith("/agents/commands/")
+                and path.endswith("/result")
+                and state.commands_endpoint
+            ):
+                request_id = path.split("/")[3]
+                state.command_results.append((request_id, body))
+                self._send(200, {"accepted": True, "duplicate": False, "status": body["status"]})
             elif self._reject_unknown_item_fields(body):
                 return
             elif path == "/events":

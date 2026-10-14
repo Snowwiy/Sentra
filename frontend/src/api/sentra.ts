@@ -152,6 +152,18 @@ import type {
   IncidentTimeline,
   RelatedIncidentList,
   ResolutionCategory,
+  ExecutionStatus,
+  Playbook,
+  PlaybookList,
+  PlaybookPreview,
+  PlaybookRun,
+  PlaybookRunList,
+  PlaybookRunStatus,
+  PlaybookStepInput,
+  ResponseActionList,
+  ResponseExecution,
+  ResponseExecutionList,
+  ResponsePreview,
 } from "./types";
 
 export interface AlertQuery {
@@ -1121,4 +1133,118 @@ export const threatIntelApi = {
       skip_invalid: skipInvalid,
     }),
   reevaluate: () => apiPost<{ indicators_queued: number }>("/threat-intel/reevaluate", {}),
+};
+
+// --- Fase 5D: Response Engine y Playbooks ---------------------------------------------------------
+
+/**
+ * Petición de ejecución: solo un `action_id` del catálogo y sus parámetros tipados. No existe
+ * ningún campo de comando, script o ruta (el backend tampoco lo aceptaría).
+ */
+export interface ExecutionInput {
+  action_id: string;
+  target_type?: "asset" | "incident";
+  target_id: string;
+  parameters?: Record<string, unknown>;
+  incident_id?: string | null;
+  detection_id?: string | null;
+  confirm?: boolean;
+  reason?: string | null;
+  /** Una por diálogo: repetir el envío devuelve la misma ejecución en vez de duplicarla. */
+  idempotency_key?: string | null;
+}
+
+export interface PlaybookRunInput {
+  target_id: string;
+  incident_id?: string | null;
+  detection_id?: string | null;
+  confirm?: boolean;
+  reason?: string | null;
+  idempotency_key?: string | null;
+}
+
+export interface PlaybookInput {
+  name: string;
+  description?: string;
+  steps: PlaybookStepInput[];
+}
+
+export interface ExecutionQuery {
+  status?: ExecutionStatus;
+  actionId?: string;
+  assetId?: string;
+  incidentId?: string;
+  runId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface RunQuery {
+  status?: PlaybookRunStatus;
+  assetId?: string;
+  incidentId?: string;
+  playbookId?: string;
+  limit?: number;
+  offset?: number;
+}
+
+const execution = (executionId: string) => `/response/executions/${encodeURIComponent(executionId)}`;
+const playbook = (playbookId: string) => `/response/playbooks/${encodeURIComponent(playbookId)}`;
+const playbookRun = (runId: string) => `/response/runs/${encodeURIComponent(runId)}`;
+
+/**
+ * Response Engine (Fase 5D). Los permisos se comprueban en el servidor en cada petición
+ * (response:read/execute/manage más los de dominio de cada acción): ocultar un botón aquí es
+ * solo UX. Cancelar y editar playbooks usan la `version`/`revision` leída (409 si cambió).
+ */
+export const responseApi = {
+  actions: (assetId?: string, signal?: AbortSignal) =>
+    apiGet<ResponseActionList>(`/response/actions${queryString({ asset_id: assetId })}`, { signal }),
+  preview: (input: ExecutionInput) => apiPost<ResponsePreview>("/response/preview", input),
+  execute: (input: ExecutionInput) => apiPost<ResponseExecution>("/response/executions", input),
+  executions: (query: ExecutionQuery = {}, signal?: AbortSignal) =>
+    apiGet<ResponseExecutionList>(
+      `/response/executions${queryString({
+        status: query.status,
+        action_id: query.actionId,
+        asset_id: query.assetId,
+        incident_id: query.incidentId,
+        run_id: query.runId,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  execution: (executionId: string, signal?: AbortSignal) =>
+    apiGet<ResponseExecution>(execution(executionId), { signal }),
+  cancelExecution: (executionId: string, version: number, reason?: string) =>
+    apiPost<ResponseExecution>(`${execution(executionId)}/cancel`, { version, reason: reason?.trim() || null }),
+  playbooks: (assetId?: string, signal?: AbortSignal) =>
+    apiGet<PlaybookList>(`/response/playbooks${queryString({ asset_id: assetId })}`, { signal }),
+  playbook: (playbookId: string, signal?: AbortSignal) => apiGet<Playbook>(playbook(playbookId), { signal }),
+  createPlaybook: (input: PlaybookInput) => apiPost<Playbook>("/response/playbooks", input),
+  /** Crea una versión nueva; las ejecuciones pasadas conservan la suya. */
+  updatePlaybook: (playbookId: string, revision: number, input: PlaybookInput) =>
+    apiPatch<Playbook>(playbook(playbookId), { revision, ...input }),
+  setPlaybookEnabled: (playbookId: string, revision: number, enabled: boolean) =>
+    apiPost<Playbook>(`${playbook(playbookId)}/${enabled ? "enable" : "disable"}`, { revision }),
+  previewPlaybook: (playbookId: string, input: PlaybookRunInput) =>
+    apiPost<PlaybookPreview>(`${playbook(playbookId)}/preview`, input),
+  executePlaybook: (playbookId: string, input: PlaybookRunInput) =>
+    apiPost<PlaybookRun>(`${playbook(playbookId)}/execute`, input),
+  runs: (query: RunQuery = {}, signal?: AbortSignal) =>
+    apiGet<PlaybookRunList>(
+      `/response/runs${queryString({
+        status: query.status,
+        asset_id: query.assetId,
+        incident_id: query.incidentId,
+        playbook_id: query.playbookId,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  run: (runId: string, signal?: AbortSignal) => apiGet<PlaybookRun>(playbookRun(runId), { signal }),
+  cancelRun: (runId: string, version: number, reason?: string) =>
+    apiPost<PlaybookRun>(`${playbookRun(runId)}/cancel`, { version, reason: reason?.trim() || null }),
 };

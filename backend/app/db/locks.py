@@ -33,6 +33,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "threat-intel": _BASE + 9,
     # Fase 5C.2: limpieza automática de descubiertos (solo con ASSET_AUTO_CLEANUP=true).
     "asset-cleanup": _BASE + 10,
+    # Fase 5D: caducidad de comandos de agente, plazos de Response y avance de playbooks.
+    "response-engine": _BASE + 11,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.
