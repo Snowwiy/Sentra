@@ -684,7 +684,7 @@ class ResultApplier:
         # puerto cerrado). Un scan cancelado, con timeout o fallido no sondeó todo, así que
         # no ver un host no prueba que se haya ido.
         if result.complete:
-            self._mark_missing(network, seen, now)
+            self._mark_missing(network, seen, now, result.unprobed)
 
         if result.timed_out:
             job.status = DiscoveryJobStatus.CANCELLED
@@ -937,7 +937,20 @@ class ResultApplier:
                 {"last_agent_contact": asset.last_seen_at.isoformat(), "address": asset.primary_ip},
             )
 
-    def _mark_missing(self, network: IPNetwork, seen: set[int], now: datetime) -> None:
+    def _mark_missing(
+        self,
+        network: IPNetwork,
+        seen: set[int],
+        now: datetime,
+        unprobed: frozenset[str] = frozenset(),
+    ) -> None:
+        """Cuenta un scan perdido a los activos de esta red que no se vieron.
+
+        Solo se llama con scans completos y exitosos (ni fallidos, ni cancelados, ni con
+        timeout). Además se salta lo que este scan no cubrió de verdad: direcciones fuera de
+        la red o excluidas, y direcciones cuya sonda falló con error (`unprobed`). network_misses
+        es así la prueba de ausencia que usa la política de ciclo de vida (Fase 5C.2).
+        """
         scope = self._config.scope
         # Filtered in Python: `seen` can hold tens of thousands of ids (too many SQL params).
         candidates = self._session.scalars(
@@ -958,6 +971,8 @@ class ResultApplier:
                 continue
             # Not probed this time (now excluded, or the network shrank): no conclusion.
             if address not in network or scope.is_excluded(address):
+                continue
+            if asset.primary_ip in unprobed:
                 continue
             asset.network_misses += 1
             if (

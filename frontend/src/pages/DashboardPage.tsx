@@ -6,6 +6,7 @@ import type {
   AssetEnvironment,
   AssetRole,
   AssetStatus,
+  LifecycleFilter,
   MonitoringMethod,
   NetworkZone,
 } from "../api/types";
@@ -18,7 +19,7 @@ import { MetricBar } from "../components/MetricBar";
 import { CriticalityBadge, RiskCell } from "../components/risk/RiskBadges";
 import { Pager } from "../components/ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
-import { StatusBadge } from "../components/StatusBadge";
+import { AssetStateBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { typeWithConfidence } from "../lib/identity";
@@ -55,6 +56,8 @@ interface ContextFilters {
   networkZone: NetworkZone | "";
   internetExposed: "true" | "false" | "unknown" | "";
   method: MonitoringMethod | "";
+  /** Fase 5C.2: solo inactivos (stale) o candidatos a limpieza. */
+  lifecycle: LifecycleFilter | "";
   department: string;
   tag: string;
   sort: "name" | "criticality";
@@ -67,6 +70,7 @@ const NO_FILTERS: ContextFilters = {
   networkZone: "",
   internetExposed: "",
   method: "",
+  lifecycle: "",
   department: "",
   tag: "",
   sort: "name",
@@ -80,6 +84,7 @@ function toQuery(f: ContextFilters): AssetQuery {
     networkZone: f.networkZone || undefined,
     internetExposed: f.internetExposed || undefined,
     method: f.method || undefined,
+    lifecycle: f.lifecycle || undefined,
     department: f.department.trim() || undefined,
     tag: f.tag.trim() || undefined,
     sort: f.sort === "name" ? undefined : f.sort,
@@ -171,6 +176,13 @@ export function ContextFilterBar({
           options={["discovered", "agentless", "agent"]}
           labels={{ discovered: "Descubierto", agentless: "Monitorizado", agent: "Gestionado" }}
           onChange={(v) => set("method", v)}
+        />
+        <FilterSelect
+          label="Ciclo de vida"
+          value={filters.lifecycle}
+          options={["stale", "cleanup_candidate"]}
+          labels={{ stale: "Stale (inactivos)", cleanup_candidate: "Candidatos a limpieza" }}
+          onChange={(v) => set("lifecycle", v)}
         />
         <input
           className="input"
@@ -412,14 +424,10 @@ export function DashboardPage() {
                     >
                       <td>
                         <AssetName asset={asset} showIp={false} />
-                        {asset.archived_at && (
-                          <span className="badge badge--muted" title={asset.archive_reason ?? undefined}>
-                            Archivado
-                          </span>
-                        )}
                       </td>
                       <td>
-                        <StatusBadge status={asset.status} />
+                        {/* Fase 5C.2: Stale / Candidato a limpieza / Archivado ganan a Online/Offline. */}
+                        <AssetStateBadge asset={asset} />
                       </td>
                       <td>
                         <MethodBadge method={asset.monitoring_method} />

@@ -48,6 +48,8 @@ const RulesPage = lazy(() => import("./pages/RulesPage").then((m) => ({ default:
 const RuleDetailPage = lazy(() => import("./pages/RuleDetailPage").then((m) => ({ default: m.RuleDetailPage })));
 const RuleEditorPage = lazy(() => import("./pages/RuleEditorPage").then((m) => ({ default: m.RuleEditorPage })));
 const rulesFallback = <LoadingState label="Cargando reglas…" />;
+// Fase 5C.2: administración del ciclo de vida (solo admin) en su propio chunk.
+const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
   return (
@@ -221,6 +223,16 @@ export function AppRoutes() {
             element={
               <RequirePermission permission="users:manage">
                 <UsersPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="admin/lifecycle"
+            element={
+              <RequirePermission permission="assets:manage">
+                <Suspense fallback={incidentsFallback}>
+                  <LifecyclePage />
+                </Suspense>
               </RequirePermission>
             }
           />

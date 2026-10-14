@@ -52,11 +52,18 @@ def record_contact(session: Session, asset: Asset, now: datetime) -> None:
     reporting at that very moment. Every agent call resolves the offline alert, not only
     heartbeats: the asset is shown online as soon as any of them arrives.
     """
-    session.execute(
+    result = session.execute(
         update(Asset)
-        .where(Asset.id == asset.id)
+        # Fase 5C.2: también por agent_id. Si una reconciliación movió este agente a otro
+        # activo mientras esta petición esperaba el bloqueo de la fila, PostgreSQL reevalúa
+        # el WHERE sobre la fila ya actualizada y no la toca: la petición se deshace entera
+        # (409, el agente reintenta) y sus datos llegan al activo correcto en el reintento,
+        # en vez de quedar en el duplicado archivado.
+        .where(Asset.id == asset.id, Asset.agent_id == asset.agent_id)
         .values(last_seen_at=func.greatest(Asset.last_seen_at, now), status=AssetStatus.ONLINE)
     )
+    if result.rowcount == 0:  # type: ignore[attr-defined]
+        raise ConflictError("The agent was reassigned to another asset, retry")
     resolve_offline_alert(session, asset.id, now)
 
 

@@ -27,6 +27,7 @@ from app.services.background import (
     PeriodicJob,
     discovery_job,
     purge_old_data,
+    run_asset_cleanup,
     run_detection_engine,
     run_risk_engine,
     run_threat_intel,
@@ -96,6 +97,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             jobs.append(
                 PeriodicJob(
                     "threat-intel", settings.threat_intel_eval_interval_seconds, run_threat_intel
+                )
+            )
+        # Fase 5C.2: limpieza automática de descubiertos elegibles. Opt-in explícito.
+        if settings.asset_auto_cleanup:
+            jobs.append(
+                PeriodicJob(
+                    "asset-cleanup",
+                    settings.asset_cleanup_interval_minutes * 60,
+                    run_asset_cleanup,
                 )
             )
         # Only when a retention period is configured: by default nothing is ever deleted.

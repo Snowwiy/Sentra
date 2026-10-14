@@ -26,6 +26,8 @@ from app.models.discovery import DiscoveryTrigger
 from app.risk.config import RiskConfig
 from app.risk.engine import RiskEngine
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.asset_lifecycle_policy import LifecyclePolicy
+from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_service import RetentionPolicy, RetentionService
 from app.threat_intel.config import ThreatIntelConfig
@@ -237,6 +239,30 @@ def purge_old_data() -> None:
                 "risk_snapshots": result.risk_snapshots,
             },
         )
+
+
+def run_asset_cleanup() -> None:
+    """Fase 5C.2: borra, en un lote acotado, descubiertos que cumplen TODOS los gates.
+
+    Solo existe con ASSET_AUTO_CLEANUP=true (apagado por defecto). Cada activo se revalida
+    con su fila bloqueada como en un borrado manual y todo queda auditado como "system".
+    Nunca toca activos gestionados ni monitorizados y nunca archiva.
+    """
+    settings = get_settings()
+    with get_sessionmaker()() as session:
+        service = AssetLifecycleService(
+            session,
+            timedelta(seconds=settings.heartbeat_timeout_seconds),
+            LifecyclePolicy.from_settings(settings),
+        )
+        result = service.auto_cleanup(settings.asset_cleanup_batch_size)
+        if result is None:
+            return
+        session.commit()
+    logger.info(
+        "automatic asset cleanup",
+        extra={"deleted": result.succeeded, "skipped": result.skipped},
+    )
 
 
 def discovery_job(stop: threading.Event) -> Callable[[], None]:

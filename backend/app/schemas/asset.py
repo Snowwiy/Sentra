@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from app.discovery.device_types import ClassificationConfidence
@@ -91,6 +92,15 @@ class AssetRead(ResponseModel):
     # auditd... o canales de Windows) y cuándo llegó; null si el agente no lo informa.
     event_coverage: dict[str, str] | None = None
     event_coverage_at: datetime | None = None
+    # Fase 5C.2: ciclo de vida derivado (app/services/asset_lifecycle_policy.py). Ningún
+    # estado se guarda: se calcula al leer con la política configurada.
+    lifecycle_state: Literal["active", "offline", "stale", "cleanup_candidate", "archived"] = (
+        "active"
+    )
+    lifecycle_source: Literal["discovered", "monitored", "managed"] = "discovered"
+    # Scans de discovery completos y exitosos seguidos que no lo vieron.
+    missed_discovery_scans: int = 0
+    last_activity_at: datetime | None = None
 
 
 class AssetList(ResponseModel):

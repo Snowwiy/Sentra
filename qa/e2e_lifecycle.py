@@ -1,4 +1,4 @@
-"""Fase 5C.1: ciclo de vida de activos y eventos Linux contra una API Sentra EN MARCHA.
+"""Fases 5C.1 y 5C.2: ciclo de vida de activos y eventos Linux contra una API EN MARCHA.
 
 Mismo entorno que qa/e2e_api.py (instancia QA, nunca producción):
 
@@ -11,21 +11,29 @@ Mismo entorno que qa/e2e_api.py (instancia QA, nunca producción):
 Escenarios (hostnames e IPs con un sufijo aleatorio para poder repetirlo):
 
 A. reinstalación: agente antiguo revocado y agente nuevo del mismo equipo -> posible duplicado
-   de confianza media -> reconciliar -> el agente nuevo informa en el activo histórico;
+   de confianza BAJA (hostname + IP, 5C.2) -> reconciliar aceptando la evidencia débil -> el
+   agente nuevo informa en el activo histórico;
 B. archivar: exige revocar antes, oculta el activo (lista y resumen), restaurar no reactiva la
    credencial, versión obsoleta = 409, un agente de un activo archivado no se enrola;
 C. borrar: un activo gestionado nunca se borra (409 con motivos) y queda auditado;
 D. permisos: viewer solo lee, analyst lee duplicados pero no archiva ni borra;
 E. Linux: identidad de máquina (alta confianza, nunca expuesta), cobertura sin permiso,
    eventos del journal sin Event ID, filtros y reglas LIN-AUTH-001 / LIN-AUTH-002 (necesita el
-   job del motor activo; conviene DETECTION_EVAL_INTERVAL_SECONDS=2).
+   job del motor activo; conviene DETECTION_EVAL_INTERVAL_SECONDS=2);
+F. 5C.2: reinstalación con identidad de máquina nueva y misma IP (caso DESKTOP-03IJGBE /
+   ravenslg con nombres SINTÉTICOS): conflicto de identidad, preview de impacto, 409 sin
+   confirmación, reconciliación confirmada con disposición explícita, el agente viejo deja de
+   autenticar, auditoría agent_reassigned, dos reconciliaciones simultáneas (solo una gana),
+   preview y ejecución de limpieza (un gestionado nunca se borra) y permisos.
 
-El borrado de un activo descubierto sin historial lo cubre backend/tests (aquí haría falta
-un discovery real).
+El stale y borrado de descubiertos (scans completos perdidos + tiempo) lo cubre backend/tests:
+aquí haría falta un discovery real y esperar días.
+NUNCA ejecuta la reconciliación real DESKTOP-03IJGBE <- ravenslg: esa es QA manual.
 """
 
 import random
 import sys
+import threading
 import uuid
 from typing import Any
 
@@ -106,13 +114,14 @@ def scenario_reinstall() -> None:
     if match is None:
         return
     check(
-        "medium confidence by hostname + IP, reconcilable",
-        match["confidence"] == "medium"
-        and set(match["reasons"]) == {"same_hostname", "same_ip"}
-        and match["reconcilable"],
+        "low confidence by hostname + IP, reconcilable only with acknowledgement",
+        match["confidence"] == "low"
+        and {"same_hostname", "same_ip"} <= set(match["reasons"])
+        and match["reconcilable"]
+        and match["requires_acknowledgement"],
         match,
     )
-    pairs = call("GET", "/assets/duplicates").body.get("items", [])
+    pairs = call("GET", "/assets/duplicates?min_confidence=low").body.get("items", [])
     check(
         "fleet duplicate list includes the pair",
         any(
@@ -133,6 +142,7 @@ def scenario_reinstall() -> None:
             "target_asset_id": old_id,
             "version": asset(new_id)["lifecycle_version"],
             "target_version": asset(old_id)["lifecycle_version"],
+            "acknowledge_weak_evidence": True,
         },
     )
     check("admin reconciles new agent into historical asset", r.status == 200, (r.status, r.body))
@@ -307,6 +317,120 @@ def scenario_linux() -> None:
     del old_agent
 
 
+def reconcile_body(source: str, target: str, ack: bool) -> dict[str, Any]:
+    return {
+        "target_asset_id": target,
+        "version": asset(source)["lifecycle_version"],
+        "target_version": asset(target)["lifecycle_version"],
+        "acknowledge_weak_evidence": ack,
+    }
+
+
+def scenario_5c2(roles: dict[str, dict[str, str]]) -> None:
+    ip = f"{NET}.201"
+    old_agent, old_token, old_id = register(
+        f"QA-DESKTOP-{TAG}", ip, machine_id_hash=uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    r = call("POST", "/agents/heartbeat", {"agent_id": old_agent}, bearer(old_token))
+    check("historical agent reports", r.status == 200, (r.status, r.body))
+    # Sin revocar: la credencial del histórico sigue activa pero el equipo se reinstaló.
+    # Con HEARTBEAT_TIMEOUT_SECONDS=20 queda offline antes de reconciliar.
+    offline = wait_for(lambda: asset(old_id), lambda a: a.get("status") == "offline", 90)
+    check("historical asset goes offline", offline.get("status") == "offline", offline)
+    new_agent, new_token, new_id = register(
+        f"qa-ravenslg-{TAG}", ip, machine_id_hash=uuid.uuid4().hex + uuid.uuid4().hex
+    )
+    call("POST", "/agents/heartbeat", {"agent_id": new_agent}, bearer(new_token))
+    items = call("GET", f"/assets/{new_id}/duplicate-candidates").body.get("items", [])
+    match = next((c for c in items if c["asset"]["asset_id"] == old_id), None)
+    check(
+        "reinstall: low confidence with machine_id_mismatch conflict",
+        match is not None
+        and match["confidence"] == "low"
+        and match["conflicts"] == ["machine_id_mismatch"]
+        and match["requires_acknowledgement"],
+        match,
+    )
+    preview = call("GET", f"/assets/{new_id}/reconcile-preview?target_asset_id={old_id}")
+    check(
+        "reconcile preview shows impact and source disposition",
+        preview.status == 200
+        and preview.body["target_has_previous_agent"]
+        and preview.body["source_disposition"] == "source_archived",
+        (preview.status, preview.body),
+    )
+    refused = call("POST", f"/assets/{new_id}/reconcile", reconcile_body(new_id, old_id, False))
+    check(
+        "reconcile without acknowledgement -> 409 requires_acknowledgement",
+        refused.status == 409 and refused.body["error"]["details"][0]["requires_acknowledgement"],
+        (refused.status, refused.body),
+    )
+    self_ = call("POST", f"/assets/{new_id}/reconcile", reconcile_body(new_id, new_id, True))
+    check("source == target refused", self_.status == 409, (self_.status, self_.body))
+
+    # Dos admins a la vez con las mismas versiones: solo una reconciliación gana.
+    body = reconcile_body(new_id, old_id, True)
+    statuses: list[int] = []
+    workers = [
+        threading.Thread(
+            target=lambda: statuses.append(call("POST", f"/assets/{new_id}/reconcile", body).status)
+        )
+        for _ in range(2)
+    ]
+    for worker in workers:
+        worker.start()
+    for worker in workers:
+        worker.join()
+    check("two concurrent reconciliations: exactly one wins", sorted(statuses) == [200, 409],
+          statuses)  # fmt: skip
+    beat = call("POST", "/agents/heartbeat", {"agent_id": new_agent}, bearer(new_token))
+    check(
+        "current agent keeps its credential and reports into the historical asset",
+        beat.status == 200 and beat.body.get("asset_id") == old_id,
+        (beat.status, beat.body),
+    )
+    stale = call("POST", "/agents/heartbeat", {"agent_id": old_agent}, bearer(old_token))
+    check("replaced agent no longer authenticates", stale.status == 401, stale.status)
+    source = asset(new_id)
+    check("source archived, history kept", source.get("archived_at") is not None, source)
+    audit = call("GET", "/audit?action=agent_reassigned&limit=200")
+    check("agent_reassigned audited", audited(audit, new_agent), audit.body)
+
+    preview = call("GET", "/assets/lifecycle/cleanup-preview?limit=10")
+    check(
+        "cleanup preview available to admin",
+        preview.status == 200 and "policy" in preview.body and "counts" in preview.body,
+        (preview.status, preview.body),
+    )
+    managed = call(
+        "POST",
+        "/assets/lifecycle/cleanup",
+        {"action": "hard_delete", "items": [{"asset_id": new_id, "version": source.get(
+            "lifecycle_version", 0)}]},
+    )  # fmt: skip
+    check(
+        "cleanup never hard-deletes a managed asset",
+        managed.status == 200
+        and managed.body["results"][0]["outcome"] == "skipped"
+        and "managed_history" in managed.body["results"][0]["reasons"],
+        (managed.status, managed.body),
+    )
+    check("asset still there", asset(new_id).get("asset_id") == new_id)
+    for role, session in roles.items():
+        r = call("GET", "/assets/lifecycle/cleanup-preview", session=session)
+        check(f"{role} cleanup preview -> 403", r.status == 403, r.status)
+        r = call(
+            "POST",
+            "/assets/lifecycle/cleanup",
+            {"action": "hard_delete", "items": [{"asset_id": new_id, "version": 0}]},
+            session=session,
+        )
+        check(f"{role} cleanup execute -> 403", r.status == 403, r.status)
+        r = call("GET", f"/assets/{new_id}/reconcile-preview?target_asset_id={old_id}",
+                 session=session)  # fmt: skip
+        check(f"{role} reconcile preview -> 403", r.status == 403, r.status)
+
+
 def main() -> int:
     if not qa.KEY or not qa.ADMIN_USER or not qa.ADMIN_PASSWORD:
         print(
@@ -332,6 +456,8 @@ def main() -> int:
         scenario_rbac(roles)
         print("--- E. Linux")
         scenario_linux()
+        print("--- F. 5C.2 reinstalación, limpieza y concurrencia")
+        scenario_5c2(roles)
     except Exception as exc:  # un fallo inesperado es un FAIL, no un traceback
         check("scenario crashed", False, repr(exc))
     failed = [r for r in qa.RESULTS if not r[1]]

@@ -1,76 +1,41 @@
 import { useCallback, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ApiError } from "../../api/client";
 import { lifecycleApi } from "../../api/sentra";
-import type {
-  Asset,
-  AssetDeleteCheck,
-  DeleteBlockingReason,
-  DuplicateCandidate,
-  DuplicateConfidence,
-  DuplicatePair,
-  DuplicateReason,
-  ReconcileBlocker,
-} from "../../api/types";
+import type { Asset, AssetDeleteCheck, DuplicateCandidate, DuplicateConfidence, DuplicatePair } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { config } from "../../config";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
+import {
+  CONFIDENCE_CLASSES,
+  CONFIDENCE_LABELS,
+  CONFLICT_LABELS,
+  DELETE_CONFIRMATION,
+  DELETE_REFUSED,
+  IRREVERSIBLE_WARNING,
+  NOT_YET_DELETABLE,
+  REENROLL_HINT,
+  SOURCE_LABELS,
+  blockedByHistory,
+  blockerLabel,
+  lifecycleError,
+  reasonLabel,
+  reasonsText,
+  warningLabel,
+} from "../../lib/lifecycle";
 import { usePolling } from "../../lib/usePolling";
 import { CredentialBadge } from "../agents/AgentBadges";
 import { ConfirmDialog, Modal } from "../Modal";
 import { MethodBadge } from "../NetworkBadges";
 import { ErrorState, LoadingState } from "../StateViews";
+import { LifecycleBadge } from "../StatusBadge";
+import { EvidenceList, ReconcileWizard } from "./ReconcileWizard";
 
-// Textos exactos de la especificación (Fase 5C.1).
-export const DELETE_CONFIRMATION =
-  "Este activo descubierto no tiene historial gestionado y será eliminado permanentemente.";
-export const DELETE_REFUSED = "No se puede eliminar porque contiene historial.";
-export const REENROLL_HINT = "Este agente parece corresponder a un activo existente.";
+// Los textos viven en lib/lifecycle; se reexportan para quien ya los importaba de aquí.
+export { DELETE_CONFIRMATION, DELETE_REFUSED, REENROLL_HINT, lifecycleError };
 
 // El diálogo carga la comprobación al abrirse; el servidor la repite al confirmar, así que
 // no hace falta refrescarla a menudo mientras está abierto.
 const CHECK_REFRESH_MS = 10 * 60_000;
-
-export const DUPLICATE_REASON_LABELS: Record<DuplicateReason, string> = {
-  same_machine_id: "misma identidad de máquina",
-  same_hostname: "mismo hostname",
-  same_ip: "misma IP",
-  same_mac: "misma MAC",
-};
-
-export const CONFIDENCE_LABELS: Record<DuplicateConfidence, string> = {
-  high: "Confianza alta",
-  medium: "Confianza media",
-  low: "Confianza baja",
-};
-
-const CONFIDENCE_CLASSES: Record<DuplicateConfidence, string> = {
-  high: "badge--crit",
-  medium: "badge--warn",
-  low: "badge--muted",
-};
-
-const BLOCKING_LABELS: Record<DeleteBlockingReason, string> = {
-  managed_history: "tuvo un agente (historial gestionado)",
-  agent_history: "telemetría, eventos o inventario de agente",
-  detections: "detecciones de impacto medio o superior",
-  incidents: "forma parte de incidentes",
-  vulnerabilities: "vulnerabilidades evaluadas",
-  threat_intel: "coincidencias de inteligencia de amenazas",
-  audit_dependency: "contexto editado o análisis de IA",
-  other: "alertas sin resolver",
-};
-
-const RECONCILE_BLOCKER_LABELS: Record<ReconcileBlocker, string> = {
-  same_asset: "es el mismo activo",
-  source_without_agent: "este activo no tiene agente",
-  source_archived: "este activo está archivado",
-  target_never_managed: "el candidato nunca tuvo agente",
-  target_agent_online: "el agente del candidato sigue activo y en línea",
-  platform_mismatch: "sistemas operativos distintos",
-  machine_id_mismatch: "identidades de máquina distintas",
-  insufficient_evidence: "evidencia insuficiente (solo hostname o solo IP)",
-};
 
 const REMOVES_LABELS: Record<string, string> = {
   ports: "puertos",
@@ -79,34 +44,6 @@ const REMOVES_LABELS: Record<string, string> = {
   alerts: "alertas resueltas",
   risk_snapshots: "instantáneas de riesgo",
 };
-
-/** Mensaje en español para los 409 del ciclo de vida (la API los da en inglés). */
-export function lifecycleError(error: unknown): Error {
-  if (error instanceof ApiError) {
-    switch (error.code) {
-      case "asset_lifecycle_conflict":
-        return new Error("El activo cambió mientras tanto. Recarga la página y vuelve a intentarlo.");
-      case "asset_state_conflict":
-        return new Error(
-          "No se puede en su estado actual (¿agente con credencial activa o ya archivado?). Revoca el agente en Agentes antes de archivar.",
-        );
-      case "asset_not_deletable":
-        return new Error(DELETE_REFUSED);
-      case "asset_reconcile_refused":
-        return new Error("El servidor no ve evidencia suficiente para reconciliar estos activos.");
-    }
-    return error;
-  }
-  return error instanceof Error ? error : new Error(String(error));
-}
-
-function reasonsText(reasons: DuplicateReason[]): string {
-  return reasons.map((r) => DUPLICATE_REASON_LABELS[r]).join(", ");
-}
-
-export function ConfidenceBadge({ confidence }: { confidence: DuplicateConfidence }) {
-  return <span className={`badge ${CONFIDENCE_CLASSES[confidence]}`}>{CONFIDENCE_LABELS[confidence]}</span>;
-}
 
 /** Banner de activo archivado, con restaurar para admin. */
 function ArchivedBanner({ asset, canManage, onChanged }: { asset: Asset; canManage: boolean; onChanged: () => void }) {
@@ -194,6 +131,26 @@ function ArchiveDialog({ asset, onClose, onDone }: { asset: Asset; onClose: () =
   );
 }
 
+export function ConfidenceBadge({ confidence }: { confidence: DuplicateConfidence }) {
+  return <span className={`badge ${CONFIDENCE_CLASSES[confidence]}`}>{CONFIDENCE_LABELS[confidence]}</span>;
+}
+
+/** Fase 5C.2: estado de ciclo de vida, escaneos perdidos y última actividad (todos los roles). */
+function LifecycleSummary({ asset }: { asset: Asset }) {
+  // Un servidor anterior a 5C.2 no envía el estado: no se muestra nada.
+  if (!asset.lifecycle_state) return null;
+  return (
+    <p className="muted small" aria-label="Ciclo de vida">
+      Ciclo de vida: <LifecycleBadge state={asset.lifecycle_state} />
+      {asset.lifecycle_source && ` · ${SOURCE_LABELS[asset.lifecycle_source]}`} · última actividad{" "}
+      <span title={formatDateTime(asset.last_activity_at)}>{formatRelative(asset.last_activity_at)}</span> ·{" "}
+      {asset.missed_discovery_scans === 1
+        ? "1 escaneo completo sin verlo"
+        : `${asset.missed_discovery_scans ?? 0} escaneos completos sin verlo`}
+    </p>
+  );
+}
+
 function DeleteDialog({
   asset,
   onClose,
@@ -222,9 +179,9 @@ function DeleteDialog({
   }
   const data: AssetDeleteCheck = check.data;
   const identity = (
-    <dl className="fields fields--inline">
+    <dl className="fields fields--inline" aria-label="Activo a eliminar">
       <div className="field">
-        <dt>Hostname</dt>
+        <dt>Nombre</dt>
         <dd>{data.hostname ?? data.display_name}</dd>
       </div>
       <div className="field">
@@ -236,8 +193,32 @@ function DeleteDialog({
         <dd className="mono">{data.mac_address ?? "—"}</dd>
       </div>
       <div className="field">
-        <dt>Visto por última vez</dt>
-        <dd title={formatDateTime(data.last_seen_at)}>{formatRelative(data.last_seen_at)}</dd>
+        <dt>Asset ID</dt>
+        <dd className="mono small">{data.asset_id}</dd>
+      </div>
+      {data.lifecycle_state && (
+        <div className="field">
+          <dt>Ciclo de vida</dt>
+          <dd>
+            <LifecycleBadge state={data.lifecycle_state} />
+          </dd>
+        </div>
+      )}
+      {data.missed_discovery_scans !== undefined && (
+        <div className="field">
+          <dt>Escaneos perdidos</dt>
+          <dd>{data.missed_discovery_scans}</dd>
+        </div>
+      )}
+      <div className="field">
+        <dt>Última actividad</dt>
+        <dd title={formatDateTime(data.last_activity_at ?? data.last_seen_at)}>
+          {formatRelative(data.last_activity_at ?? data.last_seen_at)}
+        </dd>
+      </div>
+      <div className="field">
+        <dt>Elegible para eliminación definitiva</dt>
+        <dd className="strong">{data.deletable ? "Sí" : "No"}</dd>
       </div>
     </dl>
   );
@@ -246,12 +227,12 @@ function DeleteDialog({
       <Modal title="Eliminar activo" onClose={onClose}>
         <div className="stack">
           <p className="banner banner--warn" role="alert">
-            {DELETE_REFUSED}
+            {blockedByHistory(data.blocking_reasons) ? DELETE_REFUSED : NOT_YET_DELETABLE}
           </p>
           {identity}
-          <ul className="small">
+          <ul className="small" aria-label="Motivos">
             {data.blocking_reasons.map((reason) => (
-              <li key={reason}>{BLOCKING_LABELS[reason]}</li>
+              <li key={reason}>{reasonLabel(reason)}</li>
             ))}
           </ul>
           <div className="modal__actions">
@@ -294,69 +275,35 @@ function DeleteDialog({
           {removes.map(([name, n]) => `${n} ${REMOVES_LABELS[name] ?? name}`).join(", ")}.
         </p>
       )}
+      <p className="banner banner--warn">{IRREVERSIBLE_WARNING}</p>
     </ConfirmDialog>
   );
 }
 
-function ReconcileDialog({
+function DuplicateCandidates({
   asset,
-  candidate,
-  onClose,
-  onDone,
+  canReconcile,
+  onReconcile,
 }: {
   asset: Asset;
-  candidate: DuplicateCandidate;
-  onClose: () => void;
-  onDone: (targetId: string) => void;
+  canReconcile: boolean;
+  onReconcile: (targetId: string) => void;
 }) {
-  return (
-    <ConfirmDialog
-      title="Reconciliar con activo existente"
-      confirmLabel="Reconciliar"
-      onClose={onClose}
-      onConfirm={async () => {
-        try {
-          await lifecycleApi.reconcile(
-            asset.asset_id,
-            candidate.asset.asset_id,
-            asset.lifecycle_version,
-            candidate.asset.version,
-          );
-        } catch (error) {
-          throw lifecycleError(error);
-        }
-        onDone(candidate.asset.asset_id);
-      }}
-    >
-      <p>
-        El agente de este activo pasa a informar en <strong>{candidate.asset.display_name}</strong>, que conserva su
-        historial (detecciones, riesgo, vulnerabilidades, incidentes). Este activo queda sin agente y archivado con lo
-        poco que el agente llegó a enviar.
-      </p>
-      <p className="muted small">
-        Evidencia: {reasonsText(candidate.reasons)} · {CONFIDENCE_LABELS[candidate.confidence]}. El servidor vuelve a
-        validarla; ninguna credencial sale del servidor.
-      </p>
-    </ConfirmDialog>
-  );
-}
-
-function DuplicateCandidates({ asset, canReconcile }: { asset: Asset; canReconcile: boolean }) {
-  const navigate = useNavigate();
   const fetchCandidates = useCallback(
     (signal: AbortSignal) => lifecycleApi.candidates(asset.asset_id, signal),
     [asset.asset_id],
   );
   const candidates = usePolling(fetchCandidates, Math.max(config.refreshIntervalMs, 60_000));
-  const [reconciling, setReconciling] = useState<DuplicateCandidate>();
   const items = candidates.data?.items ?? [];
   if (items.length === 0) return null;
-  const likely = items.some((c) => c.confidence !== "low") && asset.monitoring_method === "agent";
+  // Solo se sugiere el re-enrolado con evidencia media o alta y sin identidades contradictorias.
+  const likely =
+    items.some((c) => c.confidence !== "low" && (c.conflicts ?? []).length === 0) && asset.monitoring_method === "agent";
   return (
     <section className="panel" aria-label="Posibles duplicados">
       <div className="panel__toolbar">
         <h2>Posible duplicado</h2>
-        <span className="muted small">Solo sugerencias: un administrador decide</span>
+        <span className="muted small">Sin confirmar: solo sugerencias, un administrador decide</span>
       </div>
       {likely && <p className="banner banner--warn">{REENROLL_HINT}</p>}
       <div className="table-wrap">
@@ -367,90 +314,116 @@ function DuplicateCandidates({ asset, canReconcile }: { asset: Asset; canReconci
               <th>IP</th>
               <th>Método</th>
               <th>Credencial</th>
-              <th>Razones</th>
+              <th>Evidencia</th>
               <th>Confianza</th>
               <th>Último contacto</th>
               <th aria-label="Acciones" />
             </tr>
           </thead>
           <tbody>
-            {items.map((candidate) => (
-              <tr key={candidate.asset.asset_id}>
-                <td>
-                  <Link to={`/assets/${candidate.asset.asset_id}`} className="strong">
-                    {candidate.asset.display_name}
-                  </Link>{" "}
-                  {candidate.asset.agent_version && <span className="muted small">v{candidate.asset.agent_version}</span>}{" "}
-                  {candidate.asset.archived && <span className="badge badge--muted">Archivado</span>}
-                </td>
-                <td className="mono">{candidate.asset.primary_ip}</td>
-                <td>
-                  <MethodBadge method={candidate.asset.monitoring_method} />
-                </td>
-                <td>
-                  {candidate.asset.credential_status ? (
-                    <CredentialBadge status={candidate.asset.credential_status} />
-                  ) : (
-                    <span className="muted">—</span>
-                  )}
-                </td>
-                <td className="small">{reasonsText(candidate.reasons)}</td>
-                <td>
-                  <ConfidenceBadge confidence={candidate.confidence} />
-                </td>
-                <td title={formatDateTime(candidate.asset.last_seen_at)}>{formatRelative(candidate.asset.last_seen_at)}</td>
-                <td>
-                  {canReconcile && candidate.reconcilable ? (
-                    <button type="button" className="button button--small" onClick={() => setReconciling(candidate)}>
-                      Reconciliar con activo existente
-                    </button>
-                  ) : (
-                    candidate.reconcile_blockers.length > 0 && (
-                      <span
-                        className="muted small"
-                        title={candidate.reconcile_blockers.map((b) => RECONCILE_BLOCKER_LABELS[b]).join("; ")}
-                      >
-                        No reconciliable
+            {items.map((candidate: DuplicateCandidate) => {
+              const conflicts = candidate.conflicts ?? [];
+              const warnings = candidate.reconcile_warnings ?? [];
+              return (
+                <tr key={candidate.asset.asset_id}>
+                  <td>
+                    <Link to={`/assets/${candidate.asset.asset_id}`} className="strong">
+                      {candidate.asset.display_name}
+                    </Link>{" "}
+                    {candidate.asset.agent_version && <span className="muted small">v{candidate.asset.agent_version}</span>}{" "}
+                    {candidate.asset.archived && <span className="badge badge--muted">Archivado</span>}
+                  </td>
+                  <td className="mono">{candidate.asset.primary_ip}</td>
+                  <td>
+                    <MethodBadge method={candidate.asset.monitoring_method} />
+                  </td>
+                  <td>
+                    {candidate.asset.credential_status ? (
+                      <CredentialBadge status={candidate.asset.credential_status} />
+                    ) : (
+                      <span className="muted">—</span>
+                    )}
+                  </td>
+                  <td>
+                    {candidate.evidence && candidate.evidence.length > 0 ? (
+                      <EvidenceList evidence={candidate.evidence} />
+                    ) : (
+                      <span className="small">{reasonsText(candidate.reasons)}</span>
+                    )}
+                    {conflicts.length > 0 && (
+                      <span className="badge badge--warn" title="Identidades contradictorias">
+                        Conflicto: {conflicts.map((c) => CONFLICT_LABELS[c] ?? c).join(", ")}
                       </span>
-                    )
-                  )}
-                </td>
-              </tr>
-            ))}
+                    )}
+                  </td>
+                  <td>
+                    <ConfidenceBadge confidence={candidate.confidence} />
+                  </td>
+                  <td title={formatDateTime(candidate.asset.last_seen_at)}>{formatRelative(candidate.asset.last_seen_at)}</td>
+                  <td>
+                    {canReconcile && candidate.reconcilable ? (
+                      <>
+                        <button
+                          type="button"
+                          className="button button--small"
+                          onClick={() => onReconcile(candidate.asset.asset_id)}
+                        >
+                          Reconciliar con activo existente
+                        </button>
+                        {candidate.requires_acknowledgement && (
+                          <div className="muted small" title={warnings.map(warningLabel).join("; ")}>
+                            Requiere confirmar evidencia débil
+                          </div>
+                        )}
+                      </>
+                    ) : (
+                      candidate.reconcile_blockers.length > 0 && (
+                        <span className="muted small" title={candidate.reconcile_blockers.map(blockerLabel).join("; ")}>
+                          No reconciliable
+                        </span>
+                      )
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
-      {reconciling && (
-        <ReconcileDialog
-          asset={asset}
-          candidate={reconciling}
-          onClose={() => setReconciling(undefined)}
-          onDone={(target) => navigate(`/assets/${target}`)}
-        />
-      )}
     </section>
   );
 }
 
-/** Ciclo de vida en el detalle del activo: estado archivado, acciones admin y duplicados. */
+/** Ciclo de vida en el detalle del activo: estado, acciones admin, duplicados y reconciliación. */
 export function LifecyclePanel({ asset, onChanged }: { asset: Asset; onChanged: () => void }) {
   const auth = useAuth();
+  const navigate = useNavigate();
   const canManage = auth.can("assets:manage");
   const canReconcile = canManage && auth.can("agents:manage");
   const canSeeDuplicates = auth.can("assets:duplicates_read");
   const [dialog, setDialog] = useState<"archive" | "delete">();
+  // undefined = cerrado; "" = abierto sin destino preseleccionado.
+  const [reconcileTarget, setReconcileTarget] = useState<string>();
   const archived = asset.archived_at !== null;
   return (
     <div className="stack">
       {archived && <ArchivedBanner asset={asset} canManage={canManage} onChanged={onChanged} />}
+      <LifecycleSummary asset={asset} />
       {canManage && (
         <div className="panel__toolbar">
           <span className="muted small">
             {asset.managed_history
               ? "Activo gestionado: no se elimina, se archiva conservando su historial."
-              : "Activo descubierto: puede eliminarse solo si no tiene historial."}
+              : "Activo descubierto: puede eliminarse solo si no tiene historial y es candidato a limpieza."}
           </span>
           <span>
+            {canReconcile && !archived && asset.monitoring_method === "agent" && (
+              <>
+                <button type="button" className="button button--small" onClick={() => setReconcileTarget("")}>
+                  Reconciliar manualmente…
+                </button>{" "}
+              </>
+            )}
             {!archived && (
               <button type="button" className="button button--small" onClick={() => setDialog("archive")}>
                 Archivar
@@ -464,12 +437,25 @@ export function LifecyclePanel({ asset, onChanged }: { asset: Asset; onChanged: 
           </span>
         </div>
       )}
-      {canSeeDuplicates && !archived && <DuplicateCandidates asset={asset} canReconcile={canReconcile} />}
+      {canSeeDuplicates && !archived && (
+        <DuplicateCandidates asset={asset} canReconcile={canReconcile} onReconcile={setReconcileTarget} />
+      )}
       {dialog === "archive" && (
         <ArchiveDialog asset={asset} onClose={() => setDialog(undefined)} onDone={onChanged} />
       )}
       {dialog === "delete" && (
         <DeleteDialog asset={asset} onClose={() => setDialog(undefined)} onArchive={() => setDialog("archive")} />
+      )}
+      {canReconcile && reconcileTarget !== undefined && (
+        <ReconcileWizard
+          source={asset}
+          initialTargetId={reconcileTarget || undefined}
+          onClose={() => {
+            setReconcileTarget(undefined);
+            onChanged();
+          }}
+          onDone={(target) => navigate(`/assets/${target}`)}
+        />
       )}
     </div>
   );
@@ -487,7 +473,7 @@ export function DuplicatePairsPanel() {
     <section className="panel" aria-label="Posibles duplicados">
       <div className="panel__toolbar">
         <h2>Posibles duplicados</h2>
-        <span className="muted small">{REENROLL_HINT} Revísalo en el activo nuevo.</span>
+        <span className="muted small">{REENROLL_HINT} Sin confirmar: revísalo en el activo nuevo.</span>
       </div>
       <ul className="stack small">
         {items.map((pair) => (
@@ -495,7 +481,7 @@ export function DuplicatePairsPanel() {
             <Link to={`/assets/${pair.asset.asset_id}`} className="strong">
               {pair.asset.display_name}
             </Link>
-            {pair.asset.agent_version && ` (v${pair.asset.agent_version})`} parece el mismo equipo que{" "}
+            {pair.asset.agent_version && ` (v${pair.asset.agent_version})`} podría ser el mismo equipo que{" "}
             <Link to={`/assets/${pair.candidate.asset_id}`}>{pair.candidate.display_name}</Link>
             {pair.candidate.agent_version && ` (v${pair.candidate.agent_version})`}
             {pair.candidate.credential_status && (
@@ -505,6 +491,14 @@ export function DuplicatePairsPanel() {
               </>
             )}{" "}
             · {reasonsText(pair.reasons)} <ConfidenceBadge confidence={pair.confidence} />
+            {(pair.conflicts ?? []).length > 0 && (
+              <>
+                {" "}
+                <span className="badge badge--warn">
+                  Conflicto: {pair.conflicts.map((c) => CONFLICT_LABELS[c] ?? c).join(", ")}
+                </span>
+              </>
+            )}
           </li>
         ))}
       </ul>

@@ -82,6 +82,10 @@ class ScanResult:
     # Direcciones cuya fase de liveness terminó. Igual a hosts_scanned en un scan completo;
     # menor en uno cancelado, y es lo que se informa como "hosts evaluados".
     hosts_checked: int | None = None
+    # Fase 5C.2: direcciones que no respondieron y cuya sonda de liveness (ping o TCP) falló
+    # con un error (no "sin respuesta"): no se sondearon de verdad, así que no verlas no
+    # prueba que no estén. Discovery no les cuenta un scan perdido.
+    unprobed: frozenset[str] = frozenset()
 
     @property
     def complete(self) -> bool:
@@ -190,6 +194,8 @@ class NetworkScanner:
         self._ssdp: dict[str, SsdpResponse] = {}
         self._cancel: CancelSignal = cancel or threading.Event()
         self._errors: list[str] = []
+        # Direcciones con una sonda de liveness fallida por error (ver ScanResult.unprobed).
+        self._probe_failed: set[str] = set()
         self._probes = 0
         self._timed_out = False
         # Contadores de progreso. Los escribe solo el event loop del scan y los lee el hilo
@@ -257,6 +263,7 @@ class NetworkScanner:
             cancelled=self._cancel.is_set(),
             timed_out=self._timed_out,
             hosts_checked=self._checked,
+            unprobed=frozenset(a for a in self._probe_failed if not found[a].alive),
         )
 
     # --- phases ---------------------------------------------------------------------------
@@ -317,6 +324,7 @@ class NetworkScanner:
             raise
         except Exception as exc:
             self._error(f"{address}:{port}: {exc!r}")
+            self._probe_failed.add(str(address))
             return
         obs.ports[port] = state
         if state in (PortState.OPEN, PortState.CLOSED):
@@ -331,6 +339,7 @@ class NetworkScanner:
             raise
         except Exception as exc:
             self._error(f"{address} ping: {exc!r}")
+            self._probe_failed.add(str(address))
             return
         if replied:
             obs.alive = True

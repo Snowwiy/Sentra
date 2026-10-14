@@ -22,7 +22,7 @@ import { countBySoftware, VulnerabilitiesTab } from "../components/asset/Vulnera
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { MatchesTable } from "../components/threatintel/MatchesTable";
 import { MethodBadge } from "../components/NetworkBadges";
-import { StatusBadge } from "../components/StatusBadge";
+import { AssetStateBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { assetTitle, typeWithConfidence } from "../lib/identity";
@@ -205,14 +205,8 @@ export function AssetDetailPage() {
       <div className="page__header">
         <div>
           <h1 className="detail__title">
-            {assetTitle(asset)} <StatusBadge status={asset.status} />{" "}
+            {assetTitle(asset)} <AssetStateBadge asset={asset} />{" "}
             <MethodBadge method={asset.monitoring_method} />
-            {asset.archived_at && (
-              <>
-                {" "}
-                <span className="badge badge--muted">Archivado</span>
-              </>
-            )}
           </h1>
           <p className="muted small">
             <span className="mono">{asset.primary_ip}</span> · {typeWithConfidence(asset)}

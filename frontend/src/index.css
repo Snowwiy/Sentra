@@ -368,6 +368,24 @@ h2 {
   background: rgb(100 116 139 / 0.1);
 }
 
+/* Fase 5C.2: ciclo de vida (stale, candidato a limpieza, archivado). */
+.status--stale {
+  color: var(--warn);
+  background: rgb(245 158 11 / 0.08);
+}
+
+.status--cleanup {
+  color: var(--warn);
+  background: rgb(245 158 11 / 0.16);
+  border-style: dashed;
+}
+
+.status--archived {
+  color: var(--idle);
+  background: rgb(100 116 139 / 0.1);
+  opacity: 0.85;
+}
+
 /* Metric bar */
 
 .metric {

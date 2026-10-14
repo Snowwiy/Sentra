@@ -8,7 +8,7 @@ D. permisos por rol y concurrencia optimista.
 """
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from itertools import count
 from typing import Any
 
@@ -87,6 +87,21 @@ def _discovered(db: Session, **fields: Any) -> Asset:
     return asset
 
 
+def _stale_discovered(db: Session, **fields: Any) -> Asset:
+    """Fase 5C.2: descubierto que ya cumple la política de inactividad y la de purga
+    (3 scans completos perdidos, sin verse desde hace 20 días): el único borrable."""
+    seen = datetime.now(UTC) - timedelta(days=20)
+    values: dict[str, Any] = {
+        "network_status": AssetStatus.OFFLINE,
+        "network_misses": 3,
+        "last_network_seen_at": seen,
+        "first_seen_at": seen,
+        "discovered_at": seen,
+        **fields,
+    }
+    return _discovered(db, **values)
+
+
 def _audits(db: Session, action: str) -> list[AuditEvent]:
     db.expire_all()
     return list(db.scalars(select(AuditEvent).where(AuditEvent.action == action)))
@@ -121,16 +136,22 @@ def test_reinstalled_agent_is_suggested_as_duplicate_of_the_revoked_asset(
     items = response.json()["items"]
     assert [c["asset"]["asset_id"] for c in items] == [old["asset_id"]]
     candidate = items[0]
-    assert candidate["confidence"] == "medium"
-    assert set(candidate["reasons"]) == {"same_hostname", "same_ip"}
+    # Fase 5C.2: hostname + IP son señales débiles (DHCP, nombres reutilizados): confianza
+    # baja, reconciliable solo aceptando la evidencia débil de forma explícita.
+    assert candidate["confidence"] == "low"
+    assert set(candidate["reasons"]) == {"same_hostname", "same_ip", "same_os"}
+    assert {e["strength"] for e in candidate["evidence"]} == {"weak"}
     assert candidate["reconcilable"] is True
+    assert candidate["requires_acknowledgement"] is True
+    assert candidate["reconcile_warnings"] == ["insufficient_evidence"]
     assert candidate["asset"]["credential_status"] == "revoked"
 
-    pairs = client.get(f"{ASSETS}/duplicates").json()["items"]
+    # Por defecto el listado global solo muestra media/alta; con low aparece el par.
+    assert client.get(f"{ASSETS}/duplicates").json()["items"] == []
+    pairs = client.get(f"{ASSETS}/duplicates", params={"min_confidence": "low"}).json()["items"]
     assert len(pairs) == 1 and pairs[0]["asset"]["asset_id"] == new["asset_id"]
-    # El enrolamiento dejó constancia (solo IDs y razones, sin telemetría).
-    detected = _audits(db, "asset_duplicate_detected")
-    assert len(detected) == 1 and detected[0].actor == "system"
+    # Solo media/alta se audita al enrolar: hostname + IP ya no basta.
+    assert _audits(db, "asset_duplicate_detected") == []
 
 
 def test_reconcile_moves_the_new_agent_to_the_historical_asset(
@@ -146,11 +167,14 @@ def test_reconcile_moves_the_new_agent_to_the_historical_asset(
             "target_asset_id": old["asset_id"],
             "version": versions["new"],
             "target_version": versions["old"],
+            "acknowledge_weak_evidence": True,
         },
     )
     assert response.status_code == 200, response.text
     body = response.json()
     assert body["asset"]["asset_id"] == old["asset_id"]
+    assert body["source_disposition"] == "source_archived"
+    assert body["acknowledged_warnings"] == ["insufficient_evidence"]
     assert body["archived_duplicate_id"] == new["asset_id"]
     assert body["asset"]["agent_version"] == "0.2.0"
 
@@ -162,7 +186,7 @@ def test_reconcile_moves_the_new_agent_to_the_historical_asset(
     assert new["asset_id"] not in _ids(client) and old["asset_id"] in _ids(client)
     audit = _audits(db, "agent_asset_reconciled")
     assert len(audit) == 1 and audit[0].target_id == old["asset_id"]
-    assert audit[0].details is not None and audit[0].details["confidence"] == "medium"
+    assert audit[0].details is not None and audit[0].details["confidence"] == "low"
 
 
 def test_reconcile_needs_evidence_and_never_trusts_ip_only(client: TestClient, db: Session) -> None:
@@ -171,7 +195,7 @@ def test_reconcile_needs_evidence_and_never_trusts_ip_only(client: TestClient, d
     new = _register(client, hostname="PC-B", primary_ip="192.168.1.50")
     candidates = client.get(f"{ASSETS}/{new['asset_id']}/duplicate-candidates").json()["items"]
     assert candidates[0]["confidence"] == "low"
-    assert "insufficient_evidence" in candidates[0]["reconcile_blockers"]
+    assert "insufficient_evidence" in candidates[0]["reconcile_warnings"]
 
     response = client.post(
         f"{ASSETS}/{new['asset_id']}/reconcile",
@@ -182,6 +206,7 @@ def test_reconcile_needs_evidence_and_never_trusts_ip_only(client: TestClient, d
         },
     )
     assert response.status_code == 409 and _error(response) == "asset_reconcile_refused"
+    assert response.json()["error"]["details"][0]["requires_acknowledgement"] is True
     assert _audits(db, "agent_asset_reconciled")[0].result == "failure"
 
 
@@ -203,19 +228,25 @@ def test_reconcile_refuses_a_target_whose_agent_is_alive(client: TestClient) -> 
     assert "target_agent_online" in response.json()["error"]["details"][0]["blockers"]
 
 
-def test_machine_identity_gives_high_confidence_and_mismatch_excludes(
+def test_machine_identity_gives_high_confidence_and_mismatch_is_a_conflict(
     client: TestClient,
 ) -> None:
     old = _register(client, hostname="NUEVO-NOMBRE", primary_ip="10.1.1.1", machine_id_hash=MACHINE)
     _revoke(client, old["asset_id"])
     new = _register(client, hostname="OTRO", primary_ip="10.1.1.2", machine_id_hash=MACHINE)
     items = client.get(f"{ASSETS}/{new['asset_id']}/duplicate-candidates").json()["items"]
-    assert items[0]["confidence"] == "high" and items[0]["reasons"] == ["same_machine_id"]
+    assert items[0]["confidence"] == "high"
+    assert items[0]["reasons"] == ["same_machine_id", "same_os"]
+    assert items[0]["evidence"][0] == {"code": "same_machine_id", "strength": "strong"}
 
     twin = _register(client, hostname="OTRO", primary_ip="10.1.1.2", machine_id_hash="b" * 64)
     twins = client.get(f"{ASSETS}/{twin['asset_id']}/duplicate-candidates").json()["items"]
-    # Mismo nombre e IP pero otra máquina: no se sugiere como duplicado de `new`.
-    assert new["asset_id"] not in {c["asset"]["asset_id"] for c in twins}
+    # Fase 5C.2: mismo nombre e IP pero otra identidad de máquina se muestra (para revisión
+    # manual) con confianza baja y el conflicto explícito; nunca como duplicado probable.
+    twin_of_new = next(c for c in twins if c["asset"]["asset_id"] == new["asset_id"])
+    assert twin_of_new["confidence"] == "low"
+    assert twin_of_new["conflicts"] == ["machine_id_mismatch"]
+    assert "machine_id_mismatch" in twin_of_new["reconcile_warnings"]
 
 
 def test_machine_id_is_never_exposed_raw(client: TestClient) -> None:
@@ -310,7 +341,7 @@ def test_archive_reason_is_required(client: TestClient) -> None:
 
 
 def test_discovered_asset_without_history_can_be_deleted(client: TestClient, db: Session) -> None:
-    ghost = _discovered(db, device_name="Fantasma")
+    ghost = _stale_discovered(db, device_name="Fantasma")
     ip = ghost.primary_ip
     check = client.get(f"{ASSETS}/{ghost.public_id}/delete-check")
     assert check.status_code == 200, check.text
@@ -341,7 +372,7 @@ def test_managed_asset_is_never_deleted(client: TestClient, db: Session) -> None
 
 
 def test_discovered_asset_with_relevant_detection_is_kept(client: TestClient, db: Session) -> None:
-    asset = _discovered(db)
+    asset = _stale_discovered(db)
     _detection(db, asset, severity=DetectionSeverity.HIGH)
     check = client.get(f"{ASSETS}/{asset.public_id}/delete-check").json()
     assert check["blocking_reasons"] == ["detections"]
@@ -353,7 +384,7 @@ def test_delete_rechecks_dependencies_inside_the_transaction(
     client: TestClient, db: Session
 ) -> None:
     """TOCTOU: la UI vio "borrable", pero algo apareció antes de confirmar."""
-    asset = _discovered(db)
+    asset = _stale_discovered(db)
     assert client.get(f"{ASSETS}/{asset.public_id}/delete-check").json()["deletable"] is True
     _detection(db, asset, severity=DetectionSeverity.MEDIUM)
     response = client.delete(f"{ASSETS}/{asset.public_id}", params={"version": 0})
@@ -365,7 +396,7 @@ def test_delete_rechecks_dependencies_inside_the_transaction(
 def test_low_impact_detections_go_with_the_ghost_but_are_shown(
     client: TestClient, db: Session
 ) -> None:
-    asset = _discovered(db)
+    asset = _stale_discovered(db)
     _detection(db, asset, rule_id="NET-003", severity=DetectionSeverity.LOW)
     check = client.get(f"{ASSETS}/{asset.public_id}/delete-check").json()
     assert check["deletable"] is True and check["removes"]["detections"] == 1
