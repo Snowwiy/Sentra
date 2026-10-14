@@ -59,6 +59,7 @@ The agent-based flow is unchanged: agents use the same protocol and see no diffe
 | `DISCOVERY_INTERVAL_MINUTES` | unset (manual) | Periodic runs over every allowed network (≥ 5) |
 | `DISCOVERY_JOB_TIMEOUT_MINUTES` | `30` | A run stops here; its results are kept as partial |
 | `DISCOVERY_OFFLINE_AFTER_MISSES` | `3` | Complete runs without seeing a host before it is offline |
+| `DISCOVERED_STALE_AFTER_HOURS` / `DISCOVERED_STALE_MISSED_SCANS` / `DISCOVERED_PURGE_AFTER_DAYS` | `72` / `3` / `14` | Fase 5C.2: cuándo un descubierto pasa a stale y a candidato a limpieza (ver [agent-asset-lifecycle.md](agent-asset-lifecycle.md)) |
 
 Example (`.env`):
 
@@ -359,6 +360,23 @@ after `ALERT_EVENT_QUIET_MINUTES` without new occurrences, like event-based aler
 
 Negative conclusions (port closed, host gone) are only drawn from **complete** runs: a
 cancelled or timed-out run did not probe everything.
+
+### Scans perdidos como prueba de ausencia (Fase 5C.2)
+
+`assets.network_misses` cuenta los scans **completos y exitosos** seguidos que no vieron el
+activo y que **sí cubrían su dirección**. Es la única prueba de ausencia que usa la política
+de ciclo de vida (stale, candidatos a limpieza). No suman:
+
+- un job fallido (`failed`: no se aplica ningún resultado);
+- un job cancelado, con timeout o interrumpido (resultado parcial);
+- una red distinta de la que vio el activo (`discovery_network`), una dirección fuera de la
+  red escaneada o excluida (`DISCOVERY_EXCLUDED`);
+- una dirección cuya sonda de liveness (ping o TCP) falló con un **error** del sistema
+  (p. ej. `network unreachable`) en vez de simplemente no responder: no se sondeó de verdad
+  (`ScanResult.unprobed`);
+- el paso del tiempo con el discovery parado o el servidor apagado (no hay scans).
+
+Un activo visto de nuevo vuelve a `network_misses = 0`. Los archivados no se siguen.
 
 ### Device type
 

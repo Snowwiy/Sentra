@@ -59,6 +59,10 @@ function asset(name: string, overrides: Partial<Asset> = {}): Asset {
     managed_history: false,
     event_coverage: null,
     event_coverage_at: null,
+    lifecycle_state: "active",
+    lifecycle_source: "discovered",
+    missed_discovery_scans: 0,
+    last_activity_at: null,
     ...overrides,
   };
 }
@@ -212,5 +216,31 @@ describe("DashboardPage · paginación en servidor (Fase 4M)", () => {
     fireEvent.change(screen.getByLabelText("Buscar activos"), { target: { value: "srv" } });
     await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("q")).toBe("srv"));
     expect(screen.getByText(/página 1 de 3/)).toBeInTheDocument();
+  });
+});
+
+describe("DashboardPage · ciclo de vida (Fase 5C.2)", () => {
+  it("muestra Stale, Candidato a limpieza y Archivado en la columna de estado", async () => {
+    items = [
+      asset("viejo", { status: "offline", lifecycle_state: "stale" }),
+      asset("purgable", { status: "offline", lifecycle_state: "cleanup_candidate" }),
+      asset("retirado", { lifecycle_state: "archived", archived_at: iso(), archive_reason: "Retirado" }),
+      asset("vivo"),
+    ];
+    renderPage();
+    const rowOf = async (name: string) => (await screen.findByText(name)).closest("tr") as HTMLElement;
+    expect(within(await rowOf("viejo")).getByText("Stale")).toBeInTheDocument();
+    expect(within(await rowOf("purgable")).getByText("Candidato a limpieza")).toBeInTheDocument();
+    expect(within(await rowOf("retirado")).getByText("Archivado")).toHaveAttribute("title", "Retirado");
+    expect(within(await rowOf("vivo")).getByText("Online")).toBeInTheDocument();
+  });
+
+  it("el filtro de ciclo de vida se envía al servidor", async () => {
+    renderPage();
+    await screen.findByText("b-db");
+    fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "cleanup_candidate" } });
+    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("cleanup_candidate"));
+    fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "stale" } });
+    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("stale"));
   });
 });

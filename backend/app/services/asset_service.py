@@ -32,6 +32,7 @@ from app.repositories.telemetry_repository import TelemetryRepository
 from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence
 from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
+from app.services.asset_lifecycle_policy import LifecyclePolicy, evaluate, stale_condition
 from app.services.identification import network_adapter_vendor
 
 AssetSort = Literal[
@@ -91,6 +92,9 @@ class AssetFilter:
     tag: str | None = None
     # Fase 5C.1: "exclude" (por defecto: lo actual), "include" (Mostrar archivados) u "only".
     archived: str = "exclude"
+    # Fase 5C.2: "stale" (stale o candidato a limpieza) o "cleanup_candidate". La condición
+    # SQL la pone AssetService porque depende de la política y de la hora.
+    lifecycle: str | None = None
 
     def refine(
         self, stmt: Select[Asset], status_expr: ColumnElement[Any], *, with_status: bool = True
@@ -220,11 +224,19 @@ def evidence_items(raw: Any) -> list[ClassificationEvidence]:
 
 
 class AssetService:
-    def __init__(self, session: Session, heartbeat_timeout: timedelta) -> None:
+    def __init__(
+        self,
+        session: Session,
+        heartbeat_timeout: timedelta,
+        lifecycle: LifecyclePolicy | None = None,
+    ) -> None:
         self._session = session
         self._assets = AssetRepository(session)
         self._telemetry = TelemetryRepository(session)
         self._timeout = heartbeat_timeout
+        # Fase 5C.2: sin política explícita (CLI, otros servicios) se usan los valores por
+        # defecto, que coinciden con los de config.py.
+        self._lifecycle = lifecycle or LifecyclePolicy()
 
     def list_assets(
         self,
@@ -245,10 +257,18 @@ class AssetService:
         now = datetime.now(UTC)
         status = effective_status_expr(now, self._timeout)
         order = sort_columns(sort, descending, status)
-        assets, total = self._assets.page(lambda stmt: f.refine(stmt, status), order, limit, offset)
-        by_status = self._assets.count_by(
-            lambda stmt: f.refine(stmt, status, with_status=False), status
-        )
+        extra: ColumnElement[bool] | None = None
+        if f.lifecycle is not None:
+            extra = stale_condition(
+                self._lifecycle, now, purgeable_only=f.lifecycle == "cleanup_candidate"
+            )
+
+        def refine(stmt: Select[Asset], with_status: bool = True) -> Select[Asset]:
+            stmt = f.refine(stmt, status, with_status=with_status)
+            return stmt if extra is None else stmt.where(extra)
+
+        assets, total = self._assets.page(refine, order, limit, offset)
+        by_status = self._assets.count_by(lambda stmt: refine(stmt, False), status)
         # Datos derivados solo de la página (una consulta por tipo, sin N+1).
         latest = self._telemetry.latest_by_asset(asset.id for asset in assets)
         ports = open_ports_by_asset(self._session, (asset.id for asset in assets))
@@ -293,6 +313,8 @@ class AssetService:
         role: AssetRole = AssetRole.UNKNOWN,
     ) -> AssetRead:
         agent_status = effective_status(asset, now, self._timeout) if asset.is_managed else None
+        current = effective_status(asset, now, self._timeout)
+        lifecycle = evaluate(asset, now, self._lifecycle, online=current == AssetStatus.ONLINE)
         return AssetRead(
             asset_id=asset.public_id,
             display_name=asset.display_name,
@@ -303,7 +325,7 @@ class AssetService:
             architecture=asset.architecture,
             primary_ip=asset.primary_ip,
             agent_version=asset.agent_version,
-            status=effective_status(asset, now, self._timeout),
+            status=current,
             agent_status=agent_status,
             network_status=asset.network_status,
             first_seen_at=asset.first_seen_at,
@@ -341,4 +363,8 @@ class AssetService:
             managed_history=asset.ever_managed or asset.agent_id is not None,
             event_coverage=coverage_view(asset.event_coverage),
             event_coverage_at=asset.event_coverage_at,
+            lifecycle_state=lifecycle.state.value,
+            lifecycle_source=lifecycle.source.value,
+            missed_discovery_scans=asset.network_misses or 0,
+            last_activity_at=lifecycle.last_activity_at,
         )

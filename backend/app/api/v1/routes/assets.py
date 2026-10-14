@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -21,7 +22,7 @@ from app.api.deps import (
 )
 from app.api.params import text_query
 from app.api.responses import error_responses
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import SentraError
 from app.core.permissions import Permission
 from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
@@ -48,8 +49,16 @@ from app.schemas.asset_lifecycle import (
     AssetReconcileRequest,
     AssetReconcileResult,
     AssetVersionRequest,
+    CleanupActionValue,
+    CleanupPolicyRead,
+    CleanupPreview,
+    CleanupRequest,
+    CleanupResult,
     DuplicateCandidateList,
+    DuplicateConfidence,
     DuplicatePairList,
+    LifecycleSourceValue,
+    ReconcilePreview,
 )
 from app.schemas.change import ChangeList
 from app.schemas.discovery import ExposureRead
@@ -61,6 +70,7 @@ from app.services import audit_service
 from app.services.agent_management_service import AgentManagementService
 from app.services.alert_service import AlertThresholds
 from app.services.asset_context_service import AssetContextService
+from app.services.asset_lifecycle_policy import CleanupAction, LifecycleSource
 from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.asset_service import (
     DEFAULT_PAGE_SIZE,
@@ -117,6 +127,9 @@ def list_assets(
     offset: Annotated[int, Query(ge=0, le=1_000_000)] = 0,
     # Fase 5C.1: los archivados no se muestran por defecto ("Mostrar archivados" = include).
     archived: Literal["exclude", "include", "only"] = "exclude",
+    # Fase 5C.2: "stale" (stale o candidato a limpieza) o solo "cleanup_candidate". Siempre
+    # sobre activos no archivados.
+    lifecycle: Literal["stale", "cleanup_candidate"] | None = None,
 ) -> AssetList:
     search = q.strip() if q else None
     try:
@@ -141,6 +154,7 @@ def list_assets(
             department=" ".join(department.split()) if department else None,
             tag=tag_value,
             archived=archived,
+            lifecycle=lifecycle,
         ),
         sort=sort,
         limit=limit,
@@ -156,14 +170,105 @@ def get_asset_context_options(service: ContextService) -> AssetContextOptions:
     return service.options()
 
 
+@router.get(
+    "/lifecycle/cleanup-preview",
+    response_model=CleanupPreview,
+    responses=error_responses(401, 403),
+)
+def get_cleanup_preview(
+    service: Lifecycle,
+    _: AssetManager,
+    action: CleanupActionValue | None = None,
+    source: LifecycleSourceValue | None = None,
+    limit: Annotated[int, Query(ge=1, le=200)] = 50,
+    offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+) -> CleanupPreview:
+    """Preview (dry-run) de limpieza: activos stale y la acción que les tocaría (solo admin).
+
+    No escribe nada. Usa el mismo motor que POST /assets/lifecycle/cleanup, que además
+    revalida cada activo con su fila bloqueada antes de actuar.
+    """
+    settings = get_settings()
+    now = datetime.now(UTC)
+    items, total, counts = service.cleanup_preview(
+        action=CleanupAction(action) if action else None,
+        source=LifecycleSource(source) if source else None,
+        limit=limit,
+        offset=offset,
+        now=now,
+    )
+    return CleanupPreview(
+        generated_at=now,
+        policy=_cleanup_policy(settings),
+        total=total,
+        limit=limit,
+        offset=offset,
+        counts=counts,
+        items=items,
+    )
+
+
+@router.post(
+    "/lifecycle/cleanup",
+    response_model=CleanupResult,
+    responses=error_responses(401, 403, 422),
+)
+def execute_cleanup(
+    body: CleanupRequest,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Lifecycle,
+) -> CleanupResult:
+    """Ejecuta un lote de limpieza (solo admin): borrado físico o archivado.
+
+    Cada activo se revalida en el servidor (fila bloqueada, mismo motor que el preview) y
+    se omite con motivo si ya no cumple. Nunca borra un activo que tuvo agente.
+    """
+    settings = get_settings()
+    if len(body.items) > settings.asset_cleanup_batch_size:
+        raise RequestValidationError(
+            [
+                {
+                    "loc": ("body", "items"),
+                    "msg": f"At most {settings.asset_cleanup_batch_size} assets per batch",
+                    "type": "too_long",
+                }
+            ]
+        )
+    if body.action == "archive" and not body.reason:
+        raise RequestValidationError(
+            [{"loc": ("body", "reason"), "msg": "A reason is required", "type": "missing"}]
+        )
+    result = service.execute_cleanup(body.action, body.items, actor(ctx), body.reason)
+    session.commit()
+    return result
+
+
+def _cleanup_policy(settings: Settings) -> CleanupPolicyRead:
+    return CleanupPolicyRead(
+        discovered_stale_after_hours=settings.discovered_stale_after_hours,
+        discovered_stale_missed_scans=settings.discovered_stale_missed_scans,
+        discovered_purge_after_days=settings.discovered_purge_after_days,
+        managed_stale_after_days=settings.managed_stale_after_days,
+        auto_cleanup=settings.asset_auto_cleanup,
+        batch_size=settings.asset_cleanup_batch_size,
+    )
+
+
 @router.get("/duplicates", response_model=DuplicatePairList, responses=error_responses(403))
-def list_duplicate_pairs(service: Lifecycle, _: DuplicateReader) -> DuplicatePairList:
+def list_duplicate_pairs(
+    service: Lifecycle,
+    _: DuplicateReader,
+    # Fase 5C.2: por defecto solo media y alta; "low" muestra también reinstalaciones con
+    # IP fija (misma IP, ambos gestionados) para revisión manual.
+    min_confidence: DuplicateConfidence = "medium",
+) -> DuplicatePairList:
     """Pares de posibles duplicados (confianza media o alta). Solo sugiere: nunca une nada.
 
     Analyst y admin (assets:duplicates_read). Nunca devuelve la identidad de máquina, solo
     si coincide.
     """
-    return service.duplicate_pairs()
+    return service.duplicate_pairs(min_confidence)
 
 
 @router.get("/{asset_id}", response_model=AssetRead, responses=error_responses(404))
@@ -529,6 +634,25 @@ def delete_asset(
     session.commit()
 
 
+@router.get(
+    "/{asset_id}/reconcile-preview",
+    response_model=ReconcilePreview,
+    responses=error_responses(401, 403, 404),
+)
+def get_reconcile_preview(
+    asset_id: UUID,
+    target_asset_id: UUID,
+    _: AgentManager,
+    __: AssetManager,
+    service: Lifecycle,
+) -> ReconcilePreview:
+    """Evidencia e impacto de reconciliar este activo (agente nuevo) con `target_asset_id`.
+
+    Solo lee. La ejecución (POST /reconcile) vuelve a evaluarlo todo con las filas bloqueadas.
+    """
+    return service.reconcile_preview(asset_id, target_asset_id)
+
+
 @router.post(
     "/{asset_id}/reconcile",
     response_model=AssetReconcileResult,
@@ -545,20 +669,29 @@ def reconcile_asset(
 ) -> AssetReconcileResult:
     """Asocia el agente de este activo (nuevo) a un activo histórico de la misma máquina.
 
-    Solo admin (agents:manage y assets:manage) y solo si el servidor valida la evidencia
-    (misma identidad de máquina, o mismo hostname con MAC/IP); si no, 409
-    asset_reconcile_refused con los motivos. Este activo queda sin agente y archivado.
+    Solo admin (agents:manage y assets:manage). El servidor valida la evidencia: con
+    bloqueos duros responde 409 asset_reconcile_refused; con evidencia débil o contradictoria
+    (p. ej. reinstalación de Windows con MachineGuid nuevo) exige acknowledge_weak_evidence.
+    Este activo queda sin agente y archivado (source_disposition explícita en la respuesta).
     """
     action = "agent_asset_reconciled"
     try:
-        target, source, result = service.reconcile(
-            asset_id, body.target_asset_id, body.version, body.target_version
+        outcome = service.reconcile(
+            asset_id,
+            body.target_asset_id,
+            body.version,
+            body.target_version,
+            acknowledge_weak_evidence=body.acknowledge_weak_evidence,
+            actor=actor(ctx),
         )
     except SentraError as exc:
         _lifecycle_failed(
             session, ctx, action, asset_id, exc, {"target": str(body.target_asset_id)}
         )
         raise
+    target = outcome.target
+    result = outcome.assessment
+    common = {"reconciliation_id": str(outcome.reconciliation_id)}
     audit_service.record(
         session,
         actor(ctx),
@@ -566,17 +699,54 @@ def reconcile_asset(
         target_type="asset",
         target_id=target.public_id,
         details={
-            "agent_id": str(target.agent_id),
-            "from_asset": str(source.public_id),
+            **common,
+            "agent_id": str(outcome.agent_id),
+            "from_asset": str(outcome.source_public_id),
+            "previous_target_agent_id": (
+                str(outcome.previous_agent_id) if outcome.previous_agent_id else None
+            ),
             "confidence": result.confidence,
             "reasons": result.reasons,
+            "acknowledged_warnings": outcome.acknowledged,
+            "source_disposition": outcome.disposition,
+            "source_disposition_reasons": outcome.disposition_reasons,
         },
+        commit=False,
+    )
+    audit_service.record(
+        session,
+        actor(ctx),
+        "agent_reassigned",
+        target_type="agent",
+        target_id=outcome.agent_id,
+        details={
+            **common,
+            "from_asset": str(outcome.source_public_id),
+            "to_asset": str(target.public_id),
+        },
+        commit=False,
+    )
+    audit_service.record(
+        session,
+        actor(ctx),
+        "asset_deleted" if outcome.disposition == "source_deleted" else "asset_archived",
+        target_type="asset",
+        target_id=outcome.source_public_id,
+        details={**common, "reconciled_into": str(target.public_id)},
         commit=False,
     )
     session.commit()
     return AssetReconcileResult(
         asset=assets.get_asset(target.public_id),
-        archived_duplicate_id=source.public_id,
+        archived_duplicate_id=outcome.source_public_id,
         confidence=result.confidence,
         reasons=result.reasons,
+        source_asset_id=outcome.source_public_id,
+        target_asset_id=target.public_id,
+        agent_id=outcome.agent_id,
+        previous_target_agent_id=outcome.previous_agent_id,
+        source_disposition=outcome.disposition,
+        source_disposition_reasons=outcome.disposition_reasons,
+        evidence=result.evidence,
+        acknowledged_warnings=outcome.acknowledged,
     )

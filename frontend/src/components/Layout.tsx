@@ -35,6 +35,7 @@ export function Layout() {
           {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
           {/* Solo navegación: la página y la API exigen users:manage igualmente. */}
           {auth.can("users:manage") && <Link to="/admin/users">Usuarios</Link>}
+          {auth.can("assets:manage") && <Link to="/admin/lifecycle">Ciclo de vida</Link>}
         </nav>
         <HealthIndicator />
         {auth.user && (

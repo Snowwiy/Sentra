@@ -12,6 +12,7 @@ from app.models.asset_context import (
     DataSensitivity,
     NetworkZone,
 )
+from app.models.asset_lineage import AssetAgentLineage, LineageEndReason
 from app.models.audit import AuditEvent
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
 from app.models.detection import (
@@ -88,6 +89,7 @@ __all__ = [
     "AlertSeverity",
     "AlertStatus",
     "Asset",
+    "AssetAgentLineage",
     "AssetBusinessContext",
     "AssetChange",
     "AssetContextChange",
@@ -132,6 +134,7 @@ __all__ = [
     "IncidentNote",
     "IncidentThreatMatch",
     "IncidentVulnerability",
+    "LineageEndReason",
     "MonitoringMethod",
     "NetworkZone",
     "PortStateValue",

@@ -90,6 +90,13 @@ export interface Asset {
   /** Estado de las fuentes de eventos (journal, sshd, sudo, auditd...); null si no se informa. */
   event_coverage: Record<string, EventCoverageState> | null;
   event_coverage_at: IsoDateTime | null;
+  /** Fase 5C.2: estado de ciclo de vida calculado por el servidor (archived gana a todo). */
+  lifecycle_state: LifecycleState;
+  lifecycle_source: LifecycleSource;
+  /** Escaneos completos y exitosos seguidos sin ver el activo. */
+  missed_discovery_scans: number;
+  /** max(last_seen_at, last_network_seen_at) o discovered_at. */
+  last_activity_at: IsoDateTime | null;
 }
 
 // --- Ciclo de vida de activos (Fase 5C.1) -----------------------------------------------------
@@ -97,6 +104,14 @@ export interface Asset {
 export type EventCoverageState = "active" | "unavailable" | "no_permission" | "error" | "disabled";
 
 export type ArchivedFilter = "exclude" | "include" | "only";
+
+/** Fase 5C.2: active = visto hace poco; offline = no visto pero aún no stale; stale = superó el
+ * umbral de inactividad; cleanup_candidate = stale y pasada la ventana de purga (solo
+ * descubiertos); archived = archivado. */
+export type LifecycleState = "active" | "offline" | "stale" | "cleanup_candidate" | "archived";
+export type LifecycleSource = "discovered" | "monitored" | "managed";
+/** Filtro `lifecycle=` del listado (stale incluye también cleanup_candidate). */
+export type LifecycleFilter = "stale" | "cleanup_candidate";
 
 export type DeleteBlockingReason =
   | "managed_history"
@@ -106,19 +121,39 @@ export type DeleteBlockingReason =
   | "vulnerabilities"
   | "threat_intel"
   | "audit_dependency"
-  | "other";
+  | "other"
+  | "not_stale"
+  | "purge_window_not_reached"
+  | "monitored_source";
 
-export type DuplicateReason = "same_machine_id" | "same_hostname" | "same_ip" | "same_mac";
+export type DuplicateReason =
+  | "same_machine_id"
+  | "same_hostname"
+  | "same_ip"
+  | "same_mac"
+  | "same_agent_lineage"
+  | "same_random_mac"
+  | "same_os";
 export type DuplicateConfidence = "high" | "medium" | "low";
+/** Bloqueos duros: con alguno, la reconciliación no es posible. */
 export type ReconcileBlocker =
   | "same_asset"
   | "source_without_agent"
   | "source_archived"
   | "target_never_managed"
   | "target_agent_online"
-  | "platform_mismatch"
-  | "machine_id_mismatch"
-  | "insufficient_evidence";
+  | "platform_mismatch";
+/** Avisos que un admin puede aceptar explícitamente (acknowledge_weak_evidence). */
+export type ReconcileWarning = "insufficient_evidence" | "machine_id_mismatch";
+export type DuplicateConflict = "machine_id_mismatch";
+export type EvidenceStrength = "strong" | "medium" | "weak";
+
+export interface DuplicateEvidence {
+  code: DuplicateReason;
+  strength: EvidenceStrength;
+}
+
+export type SourceDisposition = "source_archived" | "source_deleted";
 
 export interface AssetDeleteCheck {
   asset_id: string;
@@ -136,6 +171,9 @@ export interface AssetDeleteCheck {
   mac_address: string | null;
   monitoring_method: MonitoringMethod;
   last_seen_at: IsoDateTime | null;
+  lifecycle_state: LifecycleState;
+  missed_discovery_scans: number;
+  last_activity_at: IsoDateTime | null;
 }
 
 export interface DuplicateAsset {
@@ -161,6 +199,11 @@ export interface DuplicateCandidate {
   /** El activo consultado puede reconciliarse con este candidato como destino. */
   reconcilable: boolean;
   reconcile_blockers: ReconcileBlocker[];
+  evidence: DuplicateEvidence[];
+  conflicts: DuplicateConflict[];
+  reconcile_warnings: ReconcileWarning[];
+  /** Reconciliable, pero solo si un admin acepta explícitamente los avisos. */
+  requires_acknowledgement: boolean;
 }
 
 export interface DuplicateCandidateList {
@@ -177,6 +220,10 @@ export interface DuplicatePair {
   confidence: DuplicateConfidence;
   reconcilable: boolean;
   reconcile_blockers: ReconcileBlocker[];
+  evidence: DuplicateEvidence[];
+  conflicts: DuplicateConflict[];
+  reconcile_warnings: ReconcileWarning[];
+  requires_acknowledgement: boolean;
 }
 
 export interface DuplicatePairList {
@@ -188,6 +235,103 @@ export interface AssetReconcileResult {
   archived_duplicate_id: string;
   confidence: DuplicateConfidence;
   reasons: DuplicateReason[];
+  source_asset_id: string;
+  target_asset_id: string;
+  agent_id: string;
+  previous_target_agent_id: string | null;
+  source_disposition: SourceDisposition;
+  source_disposition_reasons: string[];
+  evidence: DuplicateEvidence[];
+  acknowledged_warnings: string[];
+}
+
+/** GET /assets/{source}/reconcile-preview: impacto antes de reconciliar (no cambia nada). */
+export interface ReconcilePreview {
+  source: DuplicateAsset;
+  target: DuplicateAsset;
+  confidence: DuplicateConfidence;
+  reasons: DuplicateReason[];
+  evidence: DuplicateEvidence[];
+  conflicts: string[];
+  reconcilable: boolean;
+  reconcile_blockers: string[];
+  reconcile_warnings: string[];
+  requires_acknowledgement: boolean;
+  /** Lo que se queda en el source archivado. */
+  source_history: Record<string, number>;
+  /** Historial del target que se conserva. */
+  target_history: Record<string, number>;
+  /** El agente anterior del target queda como histórico. */
+  target_has_previous_agent: boolean;
+  source_disposition: SourceDisposition;
+  source_disposition_reasons: string[];
+}
+
+// --- Limpieza por ciclo de vida (Fase 5C.2) ---------------------------------------------------
+
+export interface CleanupPolicy {
+  discovered_stale_after_hours: number;
+  discovered_stale_missed_scans: number;
+  discovered_purge_after_days: number;
+  managed_stale_after_days: number;
+  auto_cleanup: boolean;
+  batch_size: number;
+}
+
+export type CleanupAction = "keep" | "mark_stale" | "archive_candidate" | "hard_delete_eligible" | "blocked";
+
+export interface CleanupCandidate {
+  asset_id: string;
+  display_name: string;
+  hostname: string | null;
+  primary_ip: string;
+  mac_address: string | null;
+  platform: string | null;
+  monitoring_method: MonitoringMethod;
+  lifecycle_source: LifecycleSource;
+  lifecycle_state: LifecycleState;
+  status: AssetStatus;
+  last_seen_at: IsoDateTime | null;
+  last_network_seen_at: IsoDateTime | null;
+  last_activity_at: IsoDateTime | null;
+  missed_successful_scans: number;
+  stale_for_hours: number | null;
+  action: CleanupAction;
+  hard_delete_eligible: boolean;
+  /** DeleteBlockingReason más "agent_active". */
+  blocking_reasons: string[];
+  /** Recuentos por dependencia (acotados a 10000). */
+  dependencies: Record<string, number>;
+  /** lifecycle_version con la que se ejecuta la limpieza (409/skip si cambió). */
+  version: number;
+}
+
+export interface CleanupPreview {
+  generated_at: IsoDateTime;
+  policy: CleanupPolicy;
+  total: number;
+  limit: number;
+  offset: number;
+  /** Sobre todos los candidatos, no solo la página. */
+  counts: Record<CleanupAction, number>;
+  items: CleanupCandidate[];
+}
+
+export type CleanupExecuteAction = "hard_delete" | "archive";
+
+export interface CleanupItemResult {
+  asset_id: string;
+  outcome: "deleted" | "archived" | "skipped";
+  reasons: string[];
+  display_name: string | null;
+}
+
+export interface CleanupResult {
+  action: CleanupExecuteAction;
+  requested: number;
+  succeeded: number;
+  skipped: number;
+  results: CleanupItemResult[];
 }
 
 // --- Asset Context (Fase 4L) ------------------------------------------------------------------

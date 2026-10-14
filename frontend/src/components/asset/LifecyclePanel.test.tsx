@@ -5,9 +5,20 @@ import "@testing-library/jest-dom/vitest";
 import type { ReactNode } from "react";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Asset, AssetDeleteCheck, DuplicateCandidate, Role, SystemEvent } from "../../api/types";
+import type {
+  Asset,
+  AssetDeleteCheck,
+  AssetReconcileResult,
+  DuplicateAsset,
+  DuplicateCandidate,
+  ReconcilePreview,
+  Role,
+  SystemEvent,
+} from "../../api/types";
 import { WithRole } from "../../test/auth";
 import { EventsTab } from "./EventsTab";
+import { ACK_WEAK_EVIDENCE, IRREVERSIBLE_WARNING, NOT_YET_DELETABLE } from "../../lib/lifecycle";
+import { AssetStateBadge } from "../StatusBadge";
 import { DELETE_CONFIRMATION, DELETE_REFUSED, LifecyclePanel, REENROLL_HINT } from "./LifecyclePanel";
 
 function asset(overrides: Partial<Asset> = {}): Asset {
@@ -60,6 +71,10 @@ function asset(overrides: Partial<Asset> = {}): Asset {
     managed_history: false,
     event_coverage: null,
     event_coverage_at: null,
+    lifecycle_state: "active",
+    lifecycle_source: "discovered",
+    missed_discovery_scans: 0,
+    last_activity_at: null,
     ...overrides,
   };
 }
@@ -81,6 +96,9 @@ function check(overrides: Partial<AssetDeleteCheck> = {}): AssetDeleteCheck {
     mac_address: "a4:00:03:00:00:12",
     monitoring_method: "discovered",
     last_seen_at: new Date().toISOString(),
+    lifecycle_state: "cleanup_candidate",
+    missed_discovery_scans: 6,
+    last_activity_at: new Date(Date.now() - 40 * 86_400_000).toISOString(),
     ...overrides,
   };
 }
@@ -106,6 +124,53 @@ function candidate(overrides: Partial<DuplicateCandidate> = {}): DuplicateCandid
     confidence: "medium",
     reconcilable: true,
     reconcile_blockers: [],
+    evidence: [
+      { code: "same_hostname", strength: "weak" },
+      { code: "same_ip", strength: "weak" },
+    ],
+    conflicts: [],
+    reconcile_warnings: [],
+    requires_acknowledgement: false,
+    ...overrides,
+  };
+}
+
+function preview(overrides: Partial<ReconcilePreview> = {}): ReconcilePreview {
+  const source: DuplicateAsset = { ...candidate().asset, asset_id: ID, display_name: "ravenslg-nuevo", credential_status: "active", version: 1 };
+  return {
+    source,
+    target: candidate().asset,
+    confidence: "medium",
+    reasons: ["same_hostname", "same_ip"],
+    evidence: candidate().evidence,
+    conflicts: [],
+    reconcilable: true,
+    reconcile_blockers: [],
+    reconcile_warnings: [],
+    requires_acknowledgement: false,
+    source_history: { telemetry: 3 },
+    target_history: { detections: 12, incidents: 1 },
+    target_has_previous_agent: true,
+    source_disposition: "source_archived",
+    source_disposition_reasons: [],
+    ...overrides,
+  };
+}
+
+function reconcileResult(overrides: Partial<AssetReconcileResult> = {}): AssetReconcileResult {
+  return {
+    asset: asset(),
+    archived_duplicate_id: ID,
+    confidence: "medium",
+    reasons: [],
+    source_asset_id: ID,
+    target_asset_id: candidate().asset.asset_id,
+    agent_id: "agent-1",
+    previous_target_agent_id: "agent-0",
+    source_disposition: "source_archived",
+    source_disposition_reasons: [],
+    evidence: [],
+    acknowledged_warnings: [],
     ...overrides,
   };
 }
@@ -207,22 +272,47 @@ describe("LifecyclePanel", () => {
     expect(dialog).toHaveTextContent("no reactiva la credencial");
   });
 
-  it("suggests the re-enrollment duplicate and lets an admin reconcile", async () => {
+  it("suggests the re-enrollment duplicate and lets an admin reconcile through the wizard", async () => {
     let body: unknown;
+    const target = candidate().asset;
     routes[`GET /assets/${ID}/duplicate-candidates`] = () => ({ body: { asset_id: ID, items: [candidate()] } });
+    routes[`GET /assets/${ID}/reconcile-preview`] = (_init, url) => {
+      expect(url.searchParams.get("target_asset_id")).toBe(target.asset_id);
+      return { body: preview() };
+    };
     routes[`POST /assets/${ID}/reconcile`] = (init) => {
       body = JSON.parse(String(init.body));
-      return { body: { asset: asset(), archived_duplicate_id: ID, confidence: "medium", reasons: [] } };
+      return { body: reconcileResult() };
     };
     renderAs("admin", <LifecyclePanel asset={asset({ monitoring_method: "agent", managed_history: true, lifecycle_version: 1 })} onChanged={() => undefined} />);
     await screen.findByText(REENROLL_HINT);
-    expect(screen.getByText("mismo hostname, misma IP")).toBeInTheDocument();
+    // Evidencia con su fuerza; nunca como duplicado confirmado.
+    const panel = screen.getByRole("region", { name: "Posibles duplicados" });
+    expect(within(panel).getByLabelText("Evidencia")).toHaveTextContent("mismo hostname");
+    expect(within(panel).getAllByText("débil")).toHaveLength(2);
+    expect(panel).toHaveTextContent("Sin confirmar");
     fireEvent.click(screen.getByRole("button", { name: "Reconciliar con activo existente" }));
     const dialog = await screen.findByRole("dialog", { name: "Reconciliar con activo existente" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Siguiente" }));
+    // El candidato llega preseleccionado.
+    await waitFor(() => expect(within(dialog).getByRole("radio")).toBeChecked());
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ver evidencia" }));
+    await within(dialog).findByRole("region", { name: "Destino (activo existente)" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ver impacto" }));
+    const impact = within(dialog).getByRole("list", { name: "Impacto" });
+    expect(impact).toHaveTextContent("12 detecciones");
+    expect(impact).toHaveTextContent("agente anterior del destino queda como histórico");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    expect(within(dialog).queryByRole("checkbox")).toBeNull();
     fireEvent.click(within(dialog).getByRole("button", { name: "Reconciliar" }));
-    await waitFor(() =>
-      expect(body).toEqual({ target_asset_id: candidate().asset.asset_id, version: 1, target_version: 4 }),
-    );
+    await within(dialog).findByText(/Reconciliado/);
+    expect(dialog).toHaveTextContent("queda archivado");
+    expect(body).toEqual({
+      target_asset_id: target.asset_id,
+      version: 1,
+      target_version: 4,
+      acknowledge_weak_evidence: false,
+    });
   });
 
   it("gives analysts read-only duplicate suggestions and viewers nothing", async () => {
@@ -235,6 +325,157 @@ describe("LifecyclePanel", () => {
     renderAs("viewer", <LifecyclePanel asset={asset({ monitoring_method: "agent" })} onChanged={() => undefined} />);
     expect(screen.queryByRole("button", { name: "Eliminar" })).toBeNull();
     expect(calls.filter((c) => c.path.endsWith("duplicate-candidates"))).toHaveLength(1);
+  });
+});
+
+describe("LifecyclePanel (Fase 5C.2)", () => {
+  it("distinguishes Online, Offline, Stale, cleanup candidate and Archived", () => {
+    const states = [
+      [{ status: "online", lifecycle_state: "active" }, "Online", "status--online"],
+      [{ status: "offline", lifecycle_state: "offline" }, "Offline", "status--offline"],
+      [{ status: "offline", lifecycle_state: "stale" }, "Stale", "status--stale"],
+      [{ status: "offline", lifecycle_state: "cleanup_candidate" }, "Candidato a limpieza", "status--cleanup"],
+      [{ status: "online", lifecycle_state: "archived" }, "Archivado", "status--archived"],
+      // Servidor anterior a 5C.2: archived_at sigue marcando el archivado.
+      [{ status: "online", archived_at: new Date().toISOString() }, "Archivado", "status--archived"],
+    ] as const;
+    for (const [value, label, className] of states) {
+      const { unmount } = render(<AssetStateBadge asset={value} />);
+      expect(screen.getByText(label)).toHaveClass(className);
+      unmount();
+    }
+  });
+
+  it("shows lifecycle state, missed scans and last activity", () => {
+    renderAs(
+      "viewer",
+      <LifecyclePanel asset={asset({ lifecycle_state: "stale", missed_discovery_scans: 4, last_activity_at: new Date().toISOString() })} onChanged={() => undefined} />,
+    );
+    const summary = screen.getByLabelText("Ciclo de vida");
+    expect(summary).toHaveTextContent("Stale");
+    expect(summary).toHaveTextContent("4 escaneos completos sin verlo");
+    expect(summary).toHaveTextContent("Descubierto");
+    expect(summary).toHaveTextContent("última actividad");
+  });
+
+  it("hard delete confirmation shows name, IP, Asset ID, eligibility and the irreversible warning", async () => {
+    renderAs("admin", <LifecyclePanel asset={asset()} onChanged={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    await screen.findByText(DELETE_CONFIRMATION);
+    const dialog = screen.getByRole("dialog", { name: "Eliminar activo" });
+    const identity = within(dialog).getByLabelText("Activo a eliminar");
+    expect(identity).toHaveTextContent("fantasma");
+    expect(identity).toHaveTextContent("192.168.50.108");
+    expect(identity).toHaveTextContent(ID);
+    expect(identity).toHaveTextContent("Candidato a limpieza");
+    expect(identity).toHaveTextContent(/Elegible para eliminación definitivaSí/);
+    expect(dialog).toHaveTextContent(IRREVERSIBLE_WARNING);
+  });
+
+  it("explains the new lifecycle blocking reasons without claiming history", async () => {
+    routes[`GET /assets/${ID}/delete-check`] = () => ({
+      body: check({ deletable: false, blocking_reasons: ["purge_window_not_reached"], lifecycle_state: "stale" }),
+    });
+    renderAs("admin", <LifecyclePanel asset={asset()} onChanged={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Eliminar" }));
+    const dialog = await screen.findByRole("dialog", { name: "Eliminar activo" });
+    await within(dialog).findByText(NOT_YET_DELETABLE);
+    expect(within(dialog).queryByText(DELETE_REFUSED)).toBeNull();
+    expect(dialog).toHaveTextContent("todavía no ha pasado la ventana de purga");
+    expect(within(dialog).getByLabelText("Activo a eliminar")).toHaveTextContent(/Elegible para eliminación definitivaNo/);
+  });
+
+  it("manual reconcile by Asset ID requires the explicit weak-evidence acknowledgement", async () => {
+    const TARGET = "22222222-0000-4000-8000-000000000002";
+    let body: Record<string, unknown> | undefined;
+    routes[`GET /assets/${ID}/reconcile-preview`] = () => ({
+      body: preview({
+        target: { ...candidate().asset, asset_id: TARGET, display_name: "viejo", version: 9 },
+        confidence: "low",
+        conflicts: ["machine_id_mismatch"],
+        reconcile_warnings: ["insufficient_evidence", "machine_id_mismatch"],
+        requires_acknowledgement: true,
+        source_disposition: "source_deleted",
+        source_disposition_reasons: ["no_history"],
+      }),
+    });
+    routes[`POST /assets/${ID}/reconcile`] = (init) => {
+      body = JSON.parse(String(init.body)) as Record<string, unknown>;
+      return {
+        body: reconcileResult({
+          target_asset_id: TARGET,
+          source_disposition: "source_deleted",
+          acknowledged_warnings: ["insufficient_evidence"],
+        }),
+      };
+    };
+    renderAs("admin", <LifecyclePanel asset={asset({ monitoring_method: "agent", lifecycle_version: 1 })} onChanged={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reconciliar manualmente…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reconciliar con activo existente" });
+    expect(dialog).toHaveTextContent(ID);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Siguiente" }));
+    const input = within(dialog).getByLabelText("Asset ID del destino");
+    // Origen y destino nunca pueden ser el mismo activo.
+    fireEvent.change(input, { target: { value: ID } });
+    expect(within(dialog).getByRole("button", { name: "Ver evidencia" })).toBeDisabled();
+    expect(dialog).toHaveTextContent("no puede ser el mismo activo");
+    fireEvent.change(input, { target: { value: TARGET } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ver evidencia" }));
+    await within(dialog).findByText(/Conflicto: identidades de máquina distintas/);
+    expect(dialog).toHaveTextContent("Confianza baja");
+    expect(dialog).toHaveTextContent("no confirmado");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ver impacto" }));
+    expect(within(dialog).getByRole("list", { name: "Impacto" })).toHaveTextContent("se elimina");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    const confirm = within(dialog).getByRole("button", { name: "Reconciliar" });
+    expect(confirm).toBeDisabled();
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: ACK_WEAK_EVIDENCE }));
+    fireEvent.click(confirm);
+    await within(dialog).findByText(/Reconciliado/);
+    expect(body).toEqual({ target_asset_id: TARGET, version: 1, target_version: 9, acknowledge_weak_evidence: true });
+    expect(dialog).toHaveTextContent("se elimina");
+    expect(dialog).toHaveTextContent("Avisos aceptados");
+  });
+
+  it("asks for the acknowledgement when the server refuses weak evidence", async () => {
+    routes[`GET /assets/${ID}/reconcile-preview`] = () => ({ body: preview() });
+    let attempts = 0;
+    routes[`POST /assets/${ID}/reconcile`] = (init) => {
+      attempts += 1;
+      const sent = JSON.parse(String(init.body)) as { acknowledge_weak_evidence: boolean };
+      if (!sent.acknowledge_weak_evidence) {
+        return {
+          status: 409,
+          body: {
+            error: {
+              code: "asset_reconcile_refused",
+              message: "refused",
+              details: [{ blockers: [], reasons: ["insufficient_evidence"], requires_acknowledgement: true }],
+            },
+          },
+        };
+      }
+      return { body: reconcileResult() };
+    };
+    renderAs("admin", <LifecyclePanel asset={asset({ monitoring_method: "agent" })} onChanged={() => undefined} />);
+    fireEvent.click(screen.getByRole("button", { name: "Reconciliar manualmente…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Reconciliar con activo existente" });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Siguiente" }));
+    fireEvent.change(within(dialog).getByLabelText("Asset ID del destino"), { target: { value: candidate().asset.asset_id } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ver evidencia" }));
+    fireEvent.click(await within(dialog).findByRole("button", { name: "Ver impacto" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reconciliar" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("confirmes explícitamente");
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: ACK_WEAK_EVIDENCE }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Reconciliar" }));
+    await within(dialog).findByText(/Reconciliado/);
+    expect(attempts).toBe(2);
+  });
+
+  it("only admins see manual reconciliation", () => {
+    renderAs("analyst", <LifecyclePanel asset={asset({ monitoring_method: "agent" })} onChanged={() => undefined} />);
+    expect(screen.queryByRole("button", { name: "Reconciliar manualmente…" })).toBeNull();
   });
 });
 

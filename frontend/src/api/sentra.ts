@@ -3,6 +3,14 @@ import type {
   ArchivedFilter,
   AssetDeleteCheck,
   AssetReconcileResult,
+  CleanupAction,
+  CleanupExecuteAction,
+  CleanupPreview,
+  CleanupResult,
+  DuplicateConfidence,
+  LifecycleFilter,
+  LifecycleSource,
+  ReconcilePreview,
   DuplicateCandidateList,
   DuplicatePairList,
   FindingThreatIntel,
@@ -212,6 +220,8 @@ export interface AssetQuery {
   order?: "asc" | "desc";
   /** Fase 5C.1: archivados excluidos por defecto ("include" los muestra, "only" solo ellos). */
   archived?: ArchivedFilter;
+  /** Fase 5C.2: solo inactivos ("stale" incluye también a los candidatos a limpieza). */
+  lifecycle?: LifecycleFilter;
   /** Fase 4M: paginación en el servidor (por defecto 100, máximo 500). */
   limit?: number;
   offset?: number;
@@ -273,6 +283,7 @@ export const sentraApi = {
         department: query.department,
         tag: query.tag,
         archived: query.archived === "exclude" ? undefined : query.archived,
+        lifecycle: query.lifecycle,
         sort: query.sort,
         order: query.order,
         limit: query.limit,
@@ -373,7 +384,9 @@ export const consoleApi = {
  * Todas las escrituras llevan la `lifecycle_version` que la UI mostró (409 si cambió).
  */
 export const lifecycleApi = {
-  duplicates: (signal?: AbortSignal) => apiGet<DuplicatePairList>("/assets/duplicates", { signal }),
+  /** Sin `minConfidence` el servidor aplica su valor por defecto (medium). */
+  duplicates: (signal?: AbortSignal, minConfidence?: DuplicateConfidence) =>
+    apiGet<DuplicatePairList>(`/assets/duplicates${queryString({ min_confidence: minConfidence })}`, { signal }),
   candidates: (assetId: string, signal?: AbortSignal) =>
     apiGet<DuplicateCandidateList>(`/assets/${encodeURIComponent(assetId)}/duplicate-candidates`, { signal }),
   deleteCheck: (assetId: string, signal?: AbortSignal) =>
@@ -384,12 +397,42 @@ export const lifecycleApi = {
     apiPost<Asset>(`/assets/${encodeURIComponent(assetId)}/restore`, { version }),
   remove: (assetId: string, version: number) =>
     apiDelete<void>(`/assets/${encodeURIComponent(assetId)}${queryString({ version: String(version) })}`),
-  reconcile: (assetId: string, targetAssetId: string, version: number, targetVersion: number) =>
+  /** Fase 5C.2: impacto de reconciliar `assetId` (SOURCE, agente nuevo) en `targetAssetId`. */
+  reconcilePreview: (assetId: string, targetAssetId: string, signal?: AbortSignal) =>
+    apiGet<ReconcilePreview>(
+      `/assets/${encodeURIComponent(assetId)}/reconcile-preview${queryString({ target_asset_id: targetAssetId })}`,
+      { signal },
+    ),
+  reconcile: (
+    assetId: string,
+    targetAssetId: string,
+    version: number,
+    targetVersion: number,
+    acknowledgeWeakEvidence = false,
+  ) =>
     apiPost<AssetReconcileResult>(`/assets/${encodeURIComponent(assetId)}/reconcile`, {
       target_asset_id: targetAssetId,
       version,
       target_version: targetVersion,
+      acknowledge_weak_evidence: acknowledgeWeakEvidence,
     }),
+  /** Fase 5C.2: vista previa de la limpieza (solo activos al menos stale; assets:manage). */
+  cleanupPreview: (
+    query: { action?: CleanupAction; source?: LifecycleSource; limit?: number; offset?: number },
+    signal?: AbortSignal,
+  ) =>
+    apiGet<CleanupPreview>(
+      `/assets/lifecycle/cleanup-preview${queryString({
+        action: query.action,
+        source: query.source,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  /** Ejecuta la limpieza por lotes; el servidor re-evalúa cada activo con la fila bloqueada. */
+  cleanup: (action: CleanupExecuteAction, items: { asset_id: string; version: number }[], reason?: string) =>
+    apiPost<CleanupResult>("/assets/lifecycle/cleanup", reason === undefined ? { action, items } : { action, items, reason }),
 };
 
 /** Acciones sobre alertas (permiso alerts:manage). */

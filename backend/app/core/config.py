@@ -519,6 +519,28 @@ class Settings(BaseSettings):
     # cortar las purgas por lotes ni los recálculos, que trabajan en transacciones cortas.
     db_statement_timeout_seconds: int | None = Field(default=None, ge=1, le=86_400)
 
+    # --- Fase 5C.2: ciclo de vida de activos (docs/agent-asset-lifecycle.md) ---------------
+    # Un descubierto pasa a "stale" solo si cumple LAS DOS condiciones: no se ve desde hace
+    # este tiempo Y faltó en este número de scans completos y exitosos que cubrían su red.
+    # Solo el tiempo no basta: con el discovery parado o el servidor apagado no hay pruebas
+    # de ausencia, y solo los scans no bastan: varios scans seguidos en una hora no
+    # demuestran que un equipo apagado por la noche haya desaparecido.
+    discovered_stale_after_hours: int = Field(default=72, ge=1, le=8760)
+    discovered_stale_missed_scans: int = Field(default=3, ge=1, le=100)
+    # Ventana de purga: un descubierto stale solo es candidato a borrado físico (manual o
+    # automático) cuando lleva al menos estos días sin verse.
+    discovered_purge_after_days: int = Field(default=14, ge=1, le=3650)
+    # Gestionados y monitorizados: "stale" tras estos días sin contacto. Nunca se borran
+    # físicamente; solo pasan a candidatos a archivar.
+    managed_stale_after_days: int = Field(default=30, ge=1, le=3650)
+    # Borrado automático de descubiertos elegibles. APAGADO por defecto: el preview y el
+    # borrado manual no lo necesitan. Encendido, solo borra descubiertos que pasan todos los
+    # gates, en lotes acotados, revalidando cada uno dentro de su transacción y auditando.
+    asset_auto_cleanup: bool = False
+    # Máximo de activos por ejecución de limpieza (manual por lote o automática).
+    asset_cleanup_batch_size: int = Field(default=50, ge=1, le=500)
+    asset_cleanup_interval_minutes: int = Field(default=360, ge=5, le=10_080)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en
@@ -664,6 +686,16 @@ class Settings(BaseSettings):
         # Unos umbrales mal escritos pararían la API al arrancar, nunca se "arreglan" solos.
         parse_risk_thresholds(value)
         return value
+
+    @model_validator(mode="after")
+    def _check_asset_lifecycle(self) -> "Settings":
+        # La purga no puede llegar antes que el propio "stale": un activo sería borrable sin
+        # haber cumplido la política de inactividad.
+        if self.discovered_purge_after_days * 24 < self.discovered_stale_after_hours:
+            raise ValueError(
+                "DISCOVERED_PURGE_AFTER_DAYS must not be shorter than DISCOVERED_STALE_AFTER_HOURS"
+            )
+        return self
 
     @model_validator(mode="after")
     def _check_discovery(self) -> "Settings":

@@ -14,6 +14,16 @@ os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
 # THREAT_INTEL_SYNC_ENABLED=true (pruebas reales) no debe cambiar lo que comprueban los tests.
 # Los tests del modo con red lo activan de forma explícita.
 os.environ["THREAT_INTEL_SYNC_ENABLED"] = "false"
+# Fase 5C.2: la política de ciclo de vida se fija a sus valores por defecto por la misma
+# razón (un .env de desarrollo con otros umbrales o con ASSET_AUTO_CLEANUP=true cambiaría lo
+# que es stale o borrable). Los tests que necesitan otra política la construyen explícita.
+os.environ["DISCOVERED_STALE_AFTER_HOURS"] = "72"
+os.environ["DISCOVERED_STALE_MISSED_SCANS"] = "3"
+os.environ["DISCOVERED_PURGE_AFTER_DAYS"] = "14"
+os.environ["MANAGED_STALE_AFTER_DAYS"] = "30"
+os.environ["ASSET_AUTO_CLEANUP"] = "false"
+os.environ["ASSET_CLEANUP_BATCH_SIZE"] = "50"
+os.environ["ASSET_CLEANUP_INTERVAL_MINUTES"] = "360"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta

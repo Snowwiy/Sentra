@@ -57,6 +57,10 @@ function asset(overrides: Partial<Asset> = {}): Asset {
     managed_history: false,
     event_coverage: null,
     event_coverage_at: null,
+    lifecycle_state: "active",
+    lifecycle_source: "discovered",
+    missed_discovery_scans: 0,
+    last_activity_at: null,
     ...overrides,
   };
 }
