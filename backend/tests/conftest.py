@@ -72,6 +72,9 @@ os.environ["SENSOR_MAX_CLOCK_SKEW_SECONDS"] = "300"
 os.environ["SENSOR_MIN_VERSION"] = "0.1.0"
 os.environ["SENSOR_RECOMMENDED_VERSION"] = "0.1.0"
 os.environ["SENSOR_SWEEP_INTERVAL_SECONDS"] = "30"
+# Fase 6A: retención de observaciones de discovery con su valor por defecto (sin purga), por
+# la misma razón: un .env de desarrollo con otra retención no debe cambiar los tests.
+os.environ["DISCOVERY_OBSERVATION_RETENTION_DAYS"] = ""
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta

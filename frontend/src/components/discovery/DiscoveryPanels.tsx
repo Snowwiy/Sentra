@@ -4,6 +4,7 @@ import {
   JOB_STATUS_LABELS,
   formatClock,
   jobElapsedSeconds,
+  jobProfileName,
   originLabel,
   profileLabel,
   executionLabel,
@@ -187,7 +188,11 @@ export function JobsPanel({
                   <td>{job.status === "completed" || job.status === "cancelled" ? job.hosts_new : "—"}</td>
                   <td>{job.hosts_updated ?? "—"}</td>
                   <td className="muted">{formatClock(jobElapsedSeconds(job))}</td>
-                  <td className="muted small">{profileLabel(job.parameters)}</td>
+                  <td className="small">
+                    {/* Fase 6A: perfil (Básico, Quick, Standard, Deep) y su resumen de parámetros. */}
+                    <span className="strong">{jobProfileName(job)}</span>
+                    <div className="muted">{profileLabel(job.parameters)}</div>
+                  </td>
                   <td className="muted">{originLabel(job)}</td>
                 </tr>
               ))}

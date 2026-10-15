@@ -10,6 +10,8 @@ import {
   formatClock,
   isActive,
   jobElapsedSeconds,
+  jobProfileName,
+  jobTypeLabel,
   originLabel,
   profileLabel,
   stopReasonLabel,
@@ -19,6 +21,7 @@ import { errorMessage, formatDateTime } from "../../lib/format";
 import { deviceTypeLabel } from "../../lib/identity";
 import { usePolling } from "../../lib/usePolling";
 import { ErrorState, LoadingState } from "../StateViews";
+import { JobObservations } from "./ObservationTable";
 
 // Un scan dura segundos o minutos: consultar cada 1,5 s da sensación de tiempo real sin
 // cargar la API (una consulta barata por pestaña abierta, solo mientras está activo).
@@ -132,7 +135,11 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
         </div>
         <div className="field">
           <dt>Perfil</dt>
-          <dd className="small">{profileLabel(data.parameters)}</dd>
+          <dd className="small">
+            <span className="strong">{jobProfileName(data)}</span>{" "}
+            <span className="muted">({jobTypeLabel(data)})</span>
+            <div className="muted">{profileLabel(data.parameters)}</div>
+          </dd>
         </div>
       </dl>
 
@@ -140,6 +147,11 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
         <ActiveJob job={data} now={now} />
       ) : (
         <FinishedJob job={data} showChanges={showChanges} />
+      )}
+
+      {/* Fase 6A: observaciones del job (paginadas en el servidor). */}
+      {(isAdvanced(data) || (data.observations_total ?? 0) > 0) && (
+        <JobObservations jobId={data.job_id} active={isActive(data)} refreshKey={data.observations_total ?? 0} />
       )}
 
       {job.error && (
@@ -238,7 +250,14 @@ function ActiveJob({ job, now }: { job: DiscoveryJob; now: number }) {
         <Counter label="Actualizados" value="al terminar" title="Se calcula al aplicar el resultado" />
         <Counter label="Errores" value={job.error_count} />
         <Counter label="Duración" value={formatClock(jobElapsedSeconds(job, now))} />
+        {isAdvanced(job) && <Counter label="Observaciones" value={job.observations_total ?? 0} />}
       </dl>
+      {job.error_count > 0 && job.errors.length > 0 && (
+        <details>
+          <summary className="muted small">Errores parciales ({job.errors.length})</summary>
+          <pre className="code-block small">{job.errors.join("\n")}</pre>
+        </details>
+      )}
       {job.cancel_requested && (
         <div className="banner" role="status">
           Cancelación solicitada: el scan se detiene en unos segundos. Un scan cancelado no marca
@@ -266,6 +285,12 @@ function FinishedJob({ job, showChanges }: { job: DiscoveryJobDetail; showChange
           dispositivos ni puertos nuevos en esta ejecución.
         </div>
       )}
+      {job.status === "completed" && job.error_count > 0 && (
+        <div className="banner banner--warn" role="status">
+          Completado con {job.error_count} {job.error_count === 1 ? "error parcial" : "errores parciales"}:
+          algunas sondas fallaron y sus hosts pueden aparecer como desconocidos.
+        </div>
+      )}
       {job.status !== "completed" && (
         <div className="banner banner--warn" role="status">
           {reason ? `Motivo: ${reason}. ` : ""}Resultado parcial: no se infiere que ningún
@@ -281,6 +306,16 @@ function FinishedJob({ job, showChanges }: { job: DiscoveryJobDetail; showChange
         <Counter label="Puertos cerrados" value={job.ports_closed} />
         <Counter label="Duración" value={formatClock(job.duration_seconds)} />
         <Counter label="Errores" value={job.error_count} />
+        {isAdvanced(job) && (
+          <>
+            <Counter label="Observaciones" value={job.observations_total ?? 0} />
+            <Counter
+              label="Sin respuesta"
+              value={job.status === "completed" ? (job.hosts_unresponsive ?? 0) : "—"}
+              title="Activos conocidos de la red que no respondieron en este scan completo"
+            />
+          </>
+        )}
       </dl>
       {job.errors.length > 0 && (
         <details>
@@ -365,4 +400,8 @@ function Counter({ label, value, title }: { label: string; value: string | numbe
       <dd className="strong">{value}</dd>
     </div>
   );
+}
+
+function isAdvanced(job: DiscoveryJob): boolean {
+  return job.job_type ? job.job_type === "discovery_advanced" : Boolean(job.profile);
 }

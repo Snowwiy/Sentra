@@ -303,6 +303,10 @@ class SensorObservation(Base):
     # {"22": "open", "80": "closed"}: estado de cada puerto sondeado.
     ports: Mapped[dict[str, str]] = mapped_column(JSONB)
     sources: Mapped[list[str]] = mapped_column(JSONB)
+    # Fase 6A (discovery_advanced): tiempo de TCP connect medido por el sensor y si el DNS
+    # inverso se confirmó con una consulta directa. Null en jobs básicos o sin medida.
+    rtt_ms: Mapped[int | None] = mapped_column(Integer)
+    forward_dns_match: Mapped[bool | None] = mapped_column(Boolean)
     # Hora del sensor (validada contra el desfase permitido) y hora del servidor al recibir:
     # la del servidor es la autoridad; la del sensor se conserva como evidencia (6D/6E).
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

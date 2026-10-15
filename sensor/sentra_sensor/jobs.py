@@ -4,7 +4,8 @@ El sensor está dentro de una red ajena y ejecuta lo que le pide un servidor rem
 servidor (o alguien con acceso a él) pudiera mandar cualquier cosa, el sensor sería una
 puerta de entrada al site. Por eso:
 
-* Solo existe `discovery_basic`. No hay tipos genéricos, ni comandos, ni scripts.
+* Solo existen `discovery_basic` y (Fase 6A) `discovery_advanced`. No hay tipos genéricos,
+  ni comandos, ni scripts, ni binarios enviados por el servidor.
 * El esquema es exacto: claves desconocidas = rechazo (un campo nuevo no se ignora en
   silencio, porque podría cambiar el significado del job).
 * El target se vuelve a comprobar contra las redes permitidas que mandó el servidor
@@ -20,7 +21,11 @@ from typing import Any
 from sentra_sensor.protocol import IPNetwork, ServerConfig
 
 JOB_TYPE_DISCOVERY_BASIC = "discovery_basic"
-KNOWN_JOB_TYPES = frozenset({JOB_TYPE_DISCOVERY_BASIC})
+JOB_TYPE_DISCOVERY_ADVANCED = "discovery_advanced"
+KNOWN_JOB_TYPES = frozenset({JOB_TYPE_DISCOVERY_BASIC, JOB_TYPE_DISCOVERY_ADVANCED})
+# Única versión del esquema de discovery_advanced que entiende este sensor.
+ADVANCED_SCHEMA_VERSION = 1
+ADVANCED_PROFILES = frozenset({"quick", "standard", "deep"})
 
 JOB_KEYS = frozenset(
     {
@@ -47,6 +52,26 @@ PARAMETER_KEYS = frozenset(
         "reverse_dns",
         "arp",
         "deadline_seconds",
+    }
+)
+ADVANCED_PARAMETER_KEYS = frozenset(
+    {
+        "schema_version",
+        "profile",
+        "target",
+        "ports",
+        "timeout_ms",
+        "dns_timeout_ms",
+        "concurrency",
+        "max_probes_per_second",
+        "tcp_retries",
+        "icmp",
+        "arp",
+        "reverse_dns",
+        "forward_dns",
+        "max_dns_queries",
+        "deadline_seconds",
+        "max_hosts",
     }
 )
 MAX_DEADLINE_SECONDS = 24 * 3600
@@ -81,6 +106,13 @@ class DiscoveryParameters:
     reverse_dns: bool
     arp: bool
     deadline_seconds: int
+    # Fase 6A (solo discovery_advanced). Los valores por defecto son exactamente el
+    # comportamiento básico: sin reintentos, sin DNS directo y sin presupuesto DNS.
+    profile: str | None = None
+    tcp_retries: int = 0
+    forward_dns: bool = False
+    dns_timeout_ms: int | None = None
+    max_dns_queries: int | None = None
 
 
 @dataclass(frozen=True)
@@ -217,23 +249,107 @@ def _validate(
     if not isinstance(key, str) or not 1 <= len(key) <= 200:
         raise JobRejectedError("invalid_schema", "idempotency_key invalid")
     params = raw["parameters"]
-    if not isinstance(params, dict) or set(params) != PARAMETER_KEYS:
-        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+    job_type = str(raw["job_type"])
+    if job_type == JOB_TYPE_DISCOVERY_ADVANCED:
+        parameters = _advanced(params, config)
+    else:
+        parameters = _basic(params, config)
+    return DiscoveryJob(
+        job_id=job_id,
+        site_id=site_id,
+        sensor_id=sensor_id,
+        job_type=job_type,
+        attempt=attempt,
+        created_at=created_at,
+        expires_at=expires_at,
+        lease_expires_at=lease_expires_at,
+        idempotency_key=key,
+        parameters=parameters,
+    )
 
+
+def _target_and_ports(
+    params: dict[str, Any], config: ServerConfig, max_hosts: int, max_ports: int
+) -> tuple[IPNetwork, tuple[int, ...]]:
     network = parse_target(params["target"])
     if not target_allowed(network, config.allowed_networks):
         raise JobRejectedError("target_out_of_scope", "target outside the site's networks")
-    if host_count(network) > config.max_hosts_per_job:
+    if host_count(network) > max_hosts:
         raise JobRejectedError("target_too_large", "target exceeds max_hosts_per_job")
-
     ports_raw = params["ports"]
     if not isinstance(ports_raw, list):
         raise JobRejectedError("invalid_schema", "ports must be a list")
-    if len(ports_raw) > config.max_ports_per_observation:
+    if len(ports_raw) > max_ports:
         raise JobRejectedError("ports_invalid", "too many ports")
     ports = tuple(_int(p, "ports[]", 1, 65_535) for p in ports_raw)
     if len(set(ports)) != len(ports):
         raise JobRejectedError("ports_invalid", "duplicate ports")
+    return network, ports
+
+
+def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
+    """discovery_advanced v1: esquema exacto y cada límite contra los topes del servidor.
+
+    Si el servidor es anterior a 6A (sin topes avanzados en la config), los topes valen 0 y
+    cualquier job avanzado se rechaza: el sensor nunca supone límites que nadie le dio.
+    """
+    if not isinstance(params, dict) or set(params) != ADVANCED_PARAMETER_KEYS:
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+    if params["schema_version"] != ADVANCED_SCHEMA_VERSION or isinstance(
+        params["schema_version"], bool
+    ):
+        raise JobRejectedError("schema_unsupported", "unsupported discovery_advanced schema")
+    if params["profile"] not in ADVANCED_PROFILES:
+        raise JobRejectedError("invalid_schema", "unknown scan profile")
+    if config.advanced_max_timeout_ms <= 0 or config.advanced_max_ports <= 0:
+        raise JobRejectedError("advanced_not_configured", "server sent no advanced limits")
+    max_hosts = _int(params["max_hosts"], "max_hosts", 1, config.max_hosts_per_job)
+    network, ports = _target_and_ports(params, config, max_hosts, config.advanced_max_ports)
+    deadline_cap = config.max_deadline_seconds or MAX_DEADLINE_SECONDS
+    parameters = DiscoveryParameters(
+        target=network,
+        ports=ports,
+        timeout_ms=_int(params["timeout_ms"], "timeout_ms", 50, config.advanced_max_timeout_ms),
+        concurrency=_int(params["concurrency"], "concurrency", 1, config.max_concurrency),
+        max_probes_per_second=_int(
+            params["max_probes_per_second"],
+            "max_probes_per_second",
+            1,
+            config.max_probes_per_second,
+        ),
+        icmp=_bool(params["icmp"], "icmp"),
+        reverse_dns=_bool(params["reverse_dns"], "reverse_dns"),
+        arp=_bool(params["arp"], "arp"),
+        deadline_seconds=_int(
+            params["deadline_seconds"],
+            "deadline_seconds",
+            1,
+            min(deadline_cap, MAX_DEADLINE_SECONDS),
+        ),
+        profile=str(params["profile"]),
+        tcp_retries=_int(params["tcp_retries"], "tcp_retries", 0, config.max_tcp_retries),
+        forward_dns=_bool(params["forward_dns"], "forward_dns"),
+        dns_timeout_ms=_int(
+            params["dns_timeout_ms"], "dns_timeout_ms", 50, max(50, config.max_dns_timeout_ms)
+        ),
+        max_dns_queries=_int(
+            params["max_dns_queries"], "max_dns_queries", 0, config.max_dns_queries
+        ),
+    )
+    if parameters.forward_dns and not parameters.reverse_dns:
+        raise JobRejectedError("invalid_schema", "forward_dns requires reverse_dns")
+    if not (parameters.ports or parameters.icmp or parameters.arp):
+        raise JobRejectedError("invalid_schema", "job has no probe method")
+    return parameters
+
+
+def _basic(params: object, config: ServerConfig) -> DiscoveryParameters:
+    if not isinstance(params, dict) or set(params) != PARAMETER_KEYS:
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+
+    network, ports = _target_and_ports(
+        params, config, config.max_hosts_per_job, config.max_ports_per_observation
+    )
 
     parameters = DiscoveryParameters(
         target=network,
@@ -255,15 +371,4 @@ def _validate(
     )
     if not (parameters.ports or parameters.icmp or parameters.arp):
         raise JobRejectedError("invalid_schema", "job has no probe method")
-    return DiscoveryJob(
-        job_id=job_id,
-        site_id=site_id,
-        sensor_id=sensor_id,
-        job_type=JOB_TYPE_DISCOVERY_BASIC,
-        attempt=attempt,
-        created_at=created_at,
-        expires_at=expires_at,
-        lease_expires_at=lease_expires_at,
-        idempotency_key=key,
-        parameters=parameters,
-    )
+    return parameters

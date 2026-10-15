@@ -290,6 +290,9 @@ class Settings(BaseSettings):
     discovery_job_timeout_minutes: int = Field(default=30, ge=1, le=1440)
     # Complete runs without seeing a host before it is reported offline/disappeared.
     discovery_offline_after_misses: int = Field(default=3, ge=1, le=100)
+    # Fase 6A: días que se conservan las observaciones de discovery (evidencia por job y
+    # dirección). Vacío = sin purga, como el resto de retenciones (opt-in); recomendado 90.
+    discovery_observation_retention_days: int | None = Field(default=None, ge=1, le=36_500)
 
     # --- Fase 4H: motor de detección y correlación (ver docs/detection-engine.md) ---
     # Desactivarlo deja de crear señales y detecciones; la ingesta sigue igual.
@@ -674,7 +677,7 @@ class Settings(BaseSettings):
             return value.strip() or None
         return value
 
-    @field_validator("report_retention_days", mode="before")
+    @field_validator("report_retention_days", "discovery_observation_retention_days", mode="before")
     @classmethod
     def _blank_report_retention(cls, value: object) -> object:
         # `REPORT_RETENTION_DAYS=` en .env significa "sin retención": se conserva todo.

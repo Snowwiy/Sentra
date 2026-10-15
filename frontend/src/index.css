@@ -2211,3 +2211,33 @@ td > .badge:first-child {
     display: none;
   }
 }
+
+/* Fase 6A: perfiles avanzados de descubrimiento (puertos, límites y observaciones). */
+.port-choices {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+}
+
+.limits-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.form-error {
+  color: var(--crit);
+}
+
+.observation-hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 4px;
+}
+
+@media (max-width: 560px) {
+  .limits-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

@@ -259,3 +259,36 @@ async def reverse_dns(
     except TimeoutError:
         return None
     return clean_hostname(name, str(address))
+
+
+# --- Forward DNS (Fase 6A) -------------------------------------------------------------------
+
+
+def _forward(name: str) -> set[str] | None:
+    try:
+        infos = socket.getaddrinfo(name, None, type=socket.SOCK_STREAM)
+    except (OSError, UnicodeError):
+        return None
+    found = set()
+    for info in infos:
+        try:
+            found.add(str(ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])))
+        except ValueError:
+            continue
+    return found
+
+
+async def forward_dns(executor: ThreadPoolExecutor, name: str, timeout: float) -> set[str] | None:
+    """Direcciones de `name` según el resolvedor del sistema; None si no hay respuesta.
+
+    Solo sirve para confirmar el DNS inverso (FCrDNS): Sentra nunca sondea ni conecta con
+    lo que devuelve, así que un DNS manipulado (rebinding) no puede redirigir el scan fuera
+    del target autorizado. El nombre ya viene normalizado por clean_hostname.
+    """
+    if clean_hostname(name, "") is None:
+        return None
+    loop = asyncio.get_running_loop()
+    try:
+        return await asyncio.wait_for(loop.run_in_executor(executor, _forward, name), timeout)
+    except TimeoutError:
+        return None

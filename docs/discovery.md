@@ -13,6 +13,10 @@ does not create a second asset: both records converge into one (see Reconciliati
 
 The agent-based flow is unchanged: agents use the same protocol and see no difference.
 
+> Fase 6A: perfiles `quick`/`standard`/`deep`, evidencia por host y cambios en
+> [advanced-network-discovery.md](advanced-network-discovery.md). Las reglas de seguridad de
+> abajo se aplican igual.
+
 ## Safety rules (read first)
 
 - **Nothing is probed unless you list networks** in `DISCOVERY_ALLOWED_NETWORKS`. The

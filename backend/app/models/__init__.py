@@ -33,7 +33,12 @@ from app.models.detection_rule import (
     RuleSource,
     RuleStatus,
 )
-from app.models.discovery import DiscoveryJob, DiscoveryJobStatus, DiscoveryTrigger
+from app.models.discovery import (
+    DiscoveryJob,
+    DiscoveryJobStatus,
+    DiscoveryObservation,
+    DiscoveryTrigger,
+)
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
@@ -140,6 +145,7 @@ __all__ = [
     "DetectionStatus",
     "DiscoveryJob",
     "DiscoveryJobStatus",
+    "DiscoveryObservation",
     "DiscoveryTrigger",
     "EnrollmentTokenState",
     "EventLevel",

@@ -101,7 +101,8 @@ def _purge_old_data(session: Session) -> int:
     print(
         f"deleted {result.telemetry_samples} telemetry samples, {result.system_events} events,"
         f" {result.asset_changes} inventory changes, {result.alerts} resolved alerts and"
-        f" {result.detections} resolved detections and {result.risk_snapshots} risk snapshots"
+        f" {result.detections} resolved detections, {result.risk_snapshots} risk snapshots and"
+        f" {result.discovery_observations} discovery observations"
     )
     return 0
 

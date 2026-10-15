@@ -1,6 +1,20 @@
 import { describe, expect, it } from "vitest";
 import type { DiscoveryJob } from "../api/types";
-import { exactProgress, formatClock, isActive, originLabel, profileLabel } from "./discovery";
+import {
+  checkLimits,
+  exactProgress,
+  formatClock,
+  isActive,
+  jobProfileName,
+  jobTypeLabel,
+  limitDraft,
+  observationSource,
+  originLabel,
+  parsePorts,
+  profileLabel,
+  sensorSupportsAdvanced,
+} from "./discovery";
+import type { DiscoveryLimits } from "../api/types";
 
 function job(overrides: Partial<DiscoveryJob>): DiscoveryJob {
   return {
@@ -65,5 +79,64 @@ describe("discovery helpers", () => {
     expect(originLabel(job({ requested_via: null, trigger: "scheduled" }))).toBe("Programado");
     expect(originLabel(job({ requested_via: null }))).toBe("Manual");
     expect(originLabel(job({ requested_via: "cli" }))).toBe("CLI");
+  });
+});
+
+// --- Fase 6A ---------------------------------------------------------------------------------
+
+const LIMITS: DiscoveryLimits = {
+  timeout_ms: 500,
+  dns_timeout_ms: 1000,
+  concurrency: 32,
+  max_probes_per_second: 100,
+  tcp_retries: 0,
+  max_hosts: 1024,
+  max_ports: 16,
+  deadline_minutes: 10,
+  max_dns_queries: 0,
+};
+const CAPS: DiscoveryLimits = { ...LIMITS, timeout_ms: 800, concurrency: 64, tcp_retries: 2, deadline_minutes: 30, max_ports: 256 };
+
+describe("descubrimiento avanzado", () => {
+  it("nombra el perfil del job y su tipo (los jobs antiguos son básicos)", () => {
+    expect(jobProfileName({ profile: "deep" })).toBe("Deep");
+    expect(jobProfileName({ profile: null })).toBe("Básico");
+    expect(jobProfileName({})).toBe("Básico");
+    expect(jobTypeLabel({ job_type: "discovery_advanced", profile: "quick" })).toBe("Avanzado");
+    expect(jobTypeLabel({ profile: null })).toBe("Básico");
+  });
+
+  it("solo los sensores con network.discovery.advanced admiten perfiles", () => {
+    expect(sensorSupportsAdvanced({ capabilities: ["discovery_basic", "network.discovery.advanced"] })).toBe(true);
+    expect(sensorSupportsAdvanced({ capabilities: ["discovery_basic"] })).toBe(false);
+    expect(sensorSupportsAdvanced(undefined)).toBe(false);
+  });
+
+  it("valida límites contra los topes y solo devuelve lo que cambia", () => {
+    const draft = limitDraft(LIMITS);
+    expect(checkLimits(draft, LIMITS, CAPS)).toEqual({ changed: {}, errors: {} });
+    const result = checkLimits(
+      { ...draft, concurrency: "16", timeout_ms: "900", tcp_retries: "-1", deadline_minutes: "abc", max_hosts: "0" },
+      LIMITS,
+      CAPS,
+    );
+    expect(result.changed).toEqual({ concurrency: 16 });
+    expect(Object.keys(result.errors).sort()).toEqual(["deadline_minutes", "max_hosts", "tcp_retries", "timeout_ms"]);
+    expect(result.errors.timeout_ms).toMatch(/Máximo 800/);
+    // 0 reintentos es válido.
+    expect(checkLimits({ ...draft, tcp_retries: "2" }, LIMITS, CAPS).changed).toEqual({ tcp_retries: 2 });
+  });
+
+  it("interpreta puertos únicos dentro de 1–65535", () => {
+    expect(parsePorts("")).toEqual({ ports: [] });
+    expect(parsePorts("8080, 8443 8080;22")).toEqual({ ports: [8080, 8443, 22] });
+    expect(parsePorts("0").error).toMatch(/fuera de 1–65535/);
+    expect(parsePorts("70000").error).toMatch(/fuera/);
+    expect(parsePorts("ssh").error).toMatch(/no es un puerto/);
+  });
+
+  it("fuente de la observación: servidor local o sensor", () => {
+    expect(observationSource({ executor: "local", sensor_name: null, sensor_id: null })).toBe("Servidor local");
+    expect(observationSource({ executor: "sensor", sensor_name: "sn-1", sensor_id: "x" })).toBe("Sensor sn-1");
   });
 });

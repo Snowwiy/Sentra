@@ -171,6 +171,13 @@ import type {
   ResponseExecutionList,
   ResponsePreview,
   DiscoveryExecutionTarget,
+  DiscoveryLimits,
+  DiscoveryProfileCatalog,
+  DiscoveryProfileName,
+  DiscoveryTunableLimit,
+  ObservationList,
+  ObservationMethod,
+  ObservationReachability,
   Sensor,
   SensorEnrollment,
   SensorEnrollmentCreated,
@@ -300,6 +307,22 @@ function queryString(params: Record<string, string | number | boolean | undefine
   return query ? `?${query}` : "";
 }
 
+/** Filtros de GET /discovery/observations (Fase 6A); todos opcionales. */
+export interface ObservationQuery {
+  jobId?: string;
+  siteId?: string;
+  network?: string;
+  sensorId?: string;
+  executor?: DiscoveryExecutionTarget;
+  method?: ObservationMethod;
+  reachability?: ObservationReachability;
+  q?: string;
+  /** Solo la última observación por (site, IP). */
+  latest?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
 export const sentraApi = {
   // /health/ready answers 503 with a valid body when not ready; that is data, not a failure.
   readiness: (signal?: AbortSignal) =>
@@ -385,6 +408,27 @@ export const sentraApi = {
     apiGet<DiscoveryJobDetail>(`/discovery/jobs/${encodeURIComponent(jobId)}`, { signal }),
   discoverySchedule: (signal?: AbortSignal) =>
     apiGet<DiscoverySchedule>("/discovery/schedule", { signal }),
+  // Fase 6A: perfiles avanzados con sus límites efectivos (ya recortados a los topes).
+  discoveryProfiles: (signal?: AbortSignal) =>
+    apiGet<DiscoveryProfileCatalog>("/discovery/profiles", { signal }),
+  // Observaciones paginadas y filtradas en el servidor: el navegador nunca carga todas.
+  discoveryObservations: (params: ObservationQuery, signal?: AbortSignal) =>
+    apiGet<ObservationList>(
+      `/discovery/observations${queryString({
+        job_id: params.jobId,
+        site_id: params.siteId,
+        network: params.network,
+        sensor_id: params.sensorId,
+        executor: params.executor,
+        method: params.method,
+        reachability: params.reachability,
+        q: params.q,
+        latest: params.latest,
+        limit: params.limit,
+        offset: params.offset,
+      })}`,
+      { signal },
+    ),
   getAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal }),
   listAgents: (signal?: AbortSignal, siteId?: string) =>
@@ -403,6 +447,10 @@ export interface DiscoveryStartOptions {
   siteId?: string;
   executionTarget?: DiscoveryExecutionTarget;
   sensorId?: string;
+  /** Fase 6A: sin perfil = descubrimiento básico; `ports` y `limits` exigen perfil. */
+  profile?: DiscoveryProfileName;
+  ports?: number[];
+  limits?: Partial<Pick<DiscoveryLimits, DiscoveryTunableLimit>>;
 }
 
 export const consoleApi = {
@@ -427,6 +475,12 @@ export const consoleApi = {
       ...(options.siteId ? { site_id: options.siteId } : {}),
       ...(options.executionTarget ? { execution_target: options.executionTarget } : {}),
       ...(options.executionTarget === "sensor" && options.sensorId ? { sensor_id: options.sensorId } : {}),
+      ...(options.profile ? { profile: options.profile } : {}),
+      // Sin perfil no se envían opciones: el servidor respondería 422.
+      ...(options.profile && options.ports?.length ? { ports: options.ports } : {}),
+      ...(options.profile && options.limits && Object.keys(options.limits).length > 0
+        ? { limits: options.limits }
+        : {}),
     }),
   cancelDiscovery: (jobId: string) =>
     apiPost<DiscoveryJobDetail>(`/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`),

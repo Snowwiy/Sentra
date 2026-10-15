@@ -7,6 +7,10 @@ descubre otros equipos de su red. Código del sensor: `sensor/` (paquete `sentra
 solo biblioteca estándar). Seguridad: [sensor-security.md](sensor-security.md). Despliegue:
 [sensor-deployment.md](sensor-deployment.md).
 
+Fase 6A: los sensores 0.2.0 aceptan además `discovery_advanced` (capability
+`network.discovery.advanced`, límites revalidados en el sensor); ver
+[advanced-network-discovery.md](advanced-network-discovery.md).
+
 ## Arquitectura
 
 ```

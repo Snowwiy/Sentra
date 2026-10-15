@@ -84,6 +84,13 @@ class DiscoveryJobRead(ResponseModel):
     execution_target: Literal["local", "sensor"]
     sensor_id: UUID | None
     sensor_name: str | None
+    # Fase 6A. profile null = discovery básico (anterior a 6A).
+    profile: Literal["quick", "standard", "deep"] | None = None
+    job_type: Literal["discovery_basic", "discovery_advanced"] = "discovery_basic"
+    # Filas de observación del job (incluidas las "no_response") y activos conocidos que no
+    # respondieron en un scan completo (evidencia, no desaparición).
+    observations_total: int = 0
+    hosts_unresponsive: int = 0
 
 
 class DiscoveryJobList(ResponseModel):
@@ -126,6 +133,110 @@ class DiscoveryJobCreate(RequestModel):
     site_id: UUID | None = None
     execution_target: Literal["local", "sensor"] = "local"
     sensor_id: UUID | None = None
+    # Fase 6A. Sin profile: discovery básico de siempre (ports/limits no se admiten).
+    profile: Literal["quick", "standard", "deep"] | None = None
+    # Subconjunto de los puertos del perfil; fuera del perfil exige discovery:tune. El tope
+    # real (HARD_MAX_PORTS) lo aplica el servicio; este solo evita listas absurdas.
+    ports: list[int] | None = Field(default=None, max_length=1024)
+    limits: "DiscoveryLimitsIn | None" = None
+
+
+class DiscoveryLimitsIn(RequestModel):
+    """Ajustes por job (solo discovery:tune). Los topes del servidor los aplica el servicio."""
+
+    timeout_ms: int | None = Field(default=None, ge=50, le=120_000)
+    dns_timeout_ms: int | None = Field(default=None, ge=50, le=120_000)
+    concurrency: int | None = Field(default=None, ge=1, le=4096)
+    max_probes_per_second: int | None = Field(default=None, ge=1, le=100_000)
+    tcp_retries: int | None = Field(default=None, ge=0, le=10)
+    max_hosts: int | None = Field(default=None, ge=1, le=1 << 20)
+    deadline_minutes: int | None = Field(default=None, ge=1, le=1440)
+
+
+class DiscoveryLimitsRead(ResponseModel):
+    timeout_ms: int
+    dns_timeout_ms: int
+    concurrency: int
+    max_probes_per_second: int
+    tcp_retries: int
+    max_hosts: int
+    max_ports: int
+    deadline_minutes: int
+    max_dns_queries: int
+
+
+class DiscoveryProfileRead(ResponseModel):
+    name: Literal["quick", "standard", "deep"]
+    label: str
+    description: str
+    ports: list[int]
+    icmp: bool
+    tcp: bool
+    arp: bool
+    reverse_dns: bool
+    forward_dns: bool
+    limits: DiscoveryLimitsRead
+
+
+class DiscoveryProfilesRead(ResponseModel):
+    default_profile: str
+    can_tune: bool
+    caps: DiscoveryLimitsRead
+    profiles: list[DiscoveryProfileRead]
+
+
+class ObservationEvidence(ResponseModel):
+    field: str
+    value: Any
+    method: str
+    state: Literal["observed", "inferred"]
+
+
+class ObservationChange(ResponseModel):
+    kind: str
+    previous: str | None
+    current: str | None
+    state: Literal["observed", "inferred"]
+
+
+class PortHint(ResponseModel):
+    port: int
+    hint: str
+    # Siempre "inferred": el número de puerto sugiere un servicio, no lo confirma.
+    state: Literal["inferred"] = "inferred"
+
+
+class ObservationRead(ResponseModel):
+    observation_id: UUID
+    job_id: UUID
+    site_id: UUID
+    site_name: str
+    executor: Literal["local", "sensor"]
+    sensor_id: UUID | None
+    sensor_name: str | None
+    asset_id: UUID | None
+    address: str
+    mac: str | None
+    hostname: str | None
+    reverse_dns: str | None
+    forward_dns_match: bool | None
+    open_ports: list[int]
+    port_hints: list[PortHint]
+    methods: list[str]
+    reachability: Literal["responded", "no_response", "unknown"]
+    rtt_ms: int | None
+    confidence: Literal["low", "medium", "high"]
+    evidence: list[ObservationEvidence]
+    changes: list[ObservationChange]
+    profile: str | None
+    observed_at: datetime
+
+
+class ObservationList(ResponseModel):
+    items: list[ObservationRead]
+    total: int
+    limit: int
+    offset: int
 
 
 class DiscoveryScheduleRead(ResponseModel):
@@ -184,3 +295,6 @@ class ExposureRead(ResponseModel):
     last_network_seen_at: datetime | None
     ports: list[ExposedPort]
     agent_listeners: list[AgentListener]
+
+
+DiscoveryJobCreate.model_rebuild()

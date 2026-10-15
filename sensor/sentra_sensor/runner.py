@@ -540,7 +540,11 @@ class SensorRunner:
         self.active = active
         logger.info(
             "job started",
-            extra={"job_id": job.job_id, "target": str(job.parameters.target)},
+            extra={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target": str(job.parameters.target),
+            },
         )
 
         def body() -> None:

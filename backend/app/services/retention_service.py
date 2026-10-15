@@ -26,6 +26,7 @@ from app.models.alert import Alert, AlertStatus
 from app.models.asset import Asset
 from app.models.change import AssetChange
 from app.models.detection import Detection, DetectionStatus
+from app.models.discovery import DiscoveryObservation
 from app.models.event import SystemEvent
 from app.models.risk import RiskSnapshot
 from app.models.telemetry import TelemetrySample
@@ -41,6 +42,8 @@ class RetentionPolicy:
     alert_days: int | None = None
     detection_days: int | None = None
     risk_history_days: int | None = None
+    # Fase 6A: observaciones de discovery (evidencia por job y dirección).
+    discovery_observation_days: int | None = None
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "RetentionPolicy":
@@ -51,6 +54,7 @@ class RetentionPolicy:
             settings.alert_retention_days,
             settings.detection_retention_days,
             settings.risk_history_retention_days,
+            settings.discovery_observation_retention_days,
         )
 
     @property
@@ -64,6 +68,7 @@ class RetentionPolicy:
                 self.alert_days,
                 self.detection_days,
                 self.risk_history_days,
+                self.discovery_observation_days,
             )
         )
 
@@ -76,11 +81,13 @@ class PurgeResult:
     alerts: int = 0
     detections: int = 0
     risk_snapshots: int = 0
+    discovery_observations: int = 0
 
     @property
     def total(self) -> int:
         return (
-            self.telemetry_samples
+            self.discovery_observations
+            + self.telemetry_samples
             + self.system_events
             + self.asset_changes
             + self.alerts
@@ -137,6 +144,13 @@ class RetentionService:
             cutoff = now - timedelta(days=self._policy.risk_history_days)
             # Las contribuciones se borran en cascada; el riesgo actual (asset_risk) nunca.
             snapshots = self._purge(RiskSnapshot, RiskSnapshot.calculated_at < cutoff)
+        observations = 0
+        if self._policy.discovery_observation_days is not None:
+            cutoff = now - timedelta(days=self._policy.discovery_observation_days)
+            # Solo la evidencia por dirección: jobs, activos y cambios se conservan.
+            observations = self._purge(
+                DiscoveryObservation, DiscoveryObservation.observed_at < cutoff
+            )
         return PurgeResult(
             telemetry_samples=samples,
             system_events=events,
@@ -144,6 +158,7 @@ class RetentionService:
             alerts=alerts,
             detections=detections,
             risk_snapshots=snapshots,
+            discovery_observations=observations,
         )
 
     def _purge(
@@ -153,7 +168,8 @@ class RetentionService:
         | type[AssetChange]
         | type[Alert]
         | type[Detection]
-        | type[RiskSnapshot],
+        | type[RiskSnapshot]
+        | type[DiscoveryObservation],
         *where: ColumnElement[bool],
     ) -> int:
         deleted = 0

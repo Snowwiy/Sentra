@@ -1,4 +1,4 @@
-"""Scanner básico de descubrimiento (TCP connect, ICMP opcional, ARP, DNS inverso opcional).
+"""Scanner de descubrimiento (TCP connect, ICMP opcional, ARP, DNS inverso y directo opcional).
 
 Diseño de seguridad:
 * Solo sondea direcciones de un target YA validado (jobs.validate_job).
@@ -44,6 +44,8 @@ HOST_CHUNK = 64
 MAX_ERRORS = 50
 MAX_UNPROBED = 4096
 _MAC = re.compile(r"^([0-9a-f]{2}[:-]){5}[0-9a-f]{2}$", re.IGNORECASE)
+# Mismo formato que acepta el servidor para reverse_dns.
+_HOSTNAME = re.compile(r"^[A-Za-z0-9._-]{1,253}$")
 # Errores que significan "no hay nadie ahí" (sin respuesta ARP, sin ruta): no son fallos de
 # la sonda, son un resultado negativo válido.
 _UNREACHABLE = {errno.EHOSTUNREACH, errno.ENETUNREACH, errno.EHOSTDOWN}
@@ -67,6 +69,12 @@ class NeighborReader(Protocol):
 
 class ReverseResolver(Protocol):
     async def resolve(self, address: str, timeout: float) -> str | None: ...
+
+
+class ForwardResolver(Protocol):
+    """Opcional (Fase 6A): resolvers sin `forward` simplemente no confirman nombres."""
+
+    async def forward(self, name: str, timeout: float) -> set[str] | None: ...
 
 
 # --- implementaciones reales -------------------------------------------------------------
@@ -236,6 +244,30 @@ class SystemReverseResolver:
             return None
         return name[:253] if name else None
 
+    async def forward(self, name: str, timeout: float) -> set[str] | None:
+        """Direcciones de `name` (FCrDNS). Solo se comparan: nunca se sondean ni se conecta
+        a ellas, así que un DNS manipulado (rebinding) no puede sacar el scan del target."""
+        if not _HOSTNAME.match(name):
+            return None
+        loop = asyncio.get_running_loop()
+        try:
+            infos = await asyncio.wait_for(
+                loop.run_in_executor(
+                    self._pool,
+                    lambda: socket.getaddrinfo(name, None, type=socket.SOCK_STREAM),
+                ),
+                timeout,
+            )
+        except (TimeoutError, OSError, UnicodeError):
+            return None
+        found: set[str] = set()
+        for info in infos:
+            try:
+                found.add(str(ipaddress.ip_address(str(info[4][0]).split("%", 1)[0])))
+            except ValueError:
+                continue
+        return found
+
     def close(self) -> None:
         self._pool.shutdown(wait=False, cancel_futures=True)
 
@@ -251,6 +283,10 @@ class Observation:
     mac: str | None = None
     reverse_dns: str | None = None
     observed_at: str = ""
+    # Fase 6A: menor tiempo de un TCP connect con respuesta (open o RST) medido de verdad;
+    # None = no se midió (el ping del sistema no se usa: incluye arrancar un proceso).
+    rtt_ms: int | None = None
+    forward_dns_match: bool | None = None
 
     def to_json(self) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -263,6 +299,11 @@ class Observation:
             body["mac"] = self.mac
         if self.reverse_dns:
             body["reverse_dns"] = self.reverse_dns
+        # Claves de 6A solo con valor: un lote básico sigue siendo idéntico al de 0.1.x.
+        if self.rtt_ms is not None:
+            body["rtt_ms"] = self.rtt_ms
+        if self.forward_dns_match is not None:
+            body["forward_dns_match"] = self.forward_dns_match
         return body
 
 
@@ -323,6 +364,9 @@ class Scanner:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._task: asyncio.Task[None] | None = None
         self._lock = threading.Lock()
+        # Presupuesto de consultas DNS (inversas + directas) de discovery_advanced.
+        self._dns_left = params.max_dns_queries
+        self._dns_budget_logged = False
         if params.icmp and icmp is None:
             self._error("icmp requested but not available on this sensor")
         if params.arp and neighbors is None:
@@ -333,6 +377,17 @@ class Scanner:
     def _error(self, message: str) -> None:
         if len(self._errors) < MAX_ERRORS:
             self._errors.append(message[:200])
+
+    def _dns_allowed(self) -> bool:
+        if self._dns_left is None:
+            return True
+        if self._dns_left <= 0:
+            if not self._dns_budget_logged:
+                self._dns_budget_logged = True
+                self._error("dns query budget exhausted: remaining hosts without DNS")
+            return False
+        self._dns_left -= 1
+        return True
 
     def request_cancel(self) -> None:
         """Seguro desde otro hilo: interrumpe el scan en curso sin esperar a la tanda."""
@@ -413,10 +468,17 @@ class Scanner:
                 failed = True
                 self._error(f"{address}: {exc}")
 
+        loop = asyncio.get_running_loop()
+
+        async def timed(port: int) -> tuple[str, float]:
+            started = loop.time()
+            state = await self._tcp.probe(address, port, timeout)
+            return state, loop.time() - started
+
         async def port_probe(port: int) -> None:
             nonlocal failed
             try:
-                state = await self._limited(lambda: self._tcp.probe(address, port, timeout))
+                state, elapsed = await self._limited(lambda: timed(port))
             except ProbeError as exc:
                 failed = True
                 self._error(f"{address}: {exc}")
@@ -425,8 +487,20 @@ class Scanner:
             # Un RST (closed) también prueba que hay un host vivo en esa dirección.
             if state in (PORT_OPEN, PORT_CLOSED):
                 observation.sources.add("tcp")
+                measured = max(0, round(elapsed * 1000))
+                current = observation.rtt_ms
+                observation.rtt_ms = measured if current is None else min(current, measured)
 
         await asyncio.gather(*(port_probe(p) for p in self._params.ports))
+        # Fase 6A: reintentos SOLO de puertos sin respuesta y SOLO en hosts que ya
+        # respondieron: en una dirección vacía multiplicarían el coste sin aportar evidencia.
+        for _ in range(self._params.tcp_retries):
+            if not observation.sources:
+                break
+            retry = [p for p, state in observation.ports.items() if state == PORT_FILTERED]
+            if not retry:
+                break
+            await asyncio.gather(*(port_probe(p) for p in retry))
         observation.observed_at = datetime.now(UTC).isoformat()
         self._checked += 1
         pending[address] = observation
@@ -444,10 +518,24 @@ class Scanner:
         alive = [o for o in pending.values() if o.sources]
         if self._resolver is not None and allow_slow and alive:
             resolver = self._resolver
-            timeout = min(2.0, self._params.timeout_ms / 1000 + 1)
-            names = await asyncio.gather(*(resolver.resolve(o.address, timeout) for o in alive))
-            for observation, name in zip(alive, names, strict=True):
+            if self._params.dns_timeout_ms is not None:
+                timeout = self._params.dns_timeout_ms / 1000
+            else:
+                timeout = min(2.0, self._params.timeout_ms / 1000 + 1)
+            lookup = [o for o in alive if self._dns_allowed()]
+            names = await asyncio.gather(*(resolver.resolve(o.address, timeout) for o in lookup))
+            for observation, name in zip(lookup, names, strict=True):
                 observation.reverse_dns = name
+            forward = getattr(resolver, "forward", None)
+            if self._params.forward_dns and forward is not None:
+                named = [o for o in lookup if o.reverse_dns and self._dns_allowed()]
+                found = await asyncio.gather(
+                    *(forward(o.reverse_dns, timeout) for o in named), return_exceptions=True
+                )
+                for observation, addresses in zip(named, found, strict=True):
+                    # Sin respuesta (None o error) no se concluye nada: queda sin comprobar.
+                    if isinstance(addresses, set):
+                        observation.forward_dns_match = observation.address in addresses
         for observation in alive:
             # Un host que respondió no es "unprobed" aunque alguna sonda suelta fallase.
             self._failed.discard(observation.address)

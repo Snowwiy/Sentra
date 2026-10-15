@@ -35,6 +35,10 @@ class Permission(enum.StrEnum):
     ASSET_DUPLICATES_READ = "assets:duplicates_read"
     # Iniciar y cancelar descubrimientos de red (siempre dentro de la allowlist del servidor).
     DISCOVERY_RUN = "discovery:run"
+    # Fase 6A: fijar límites de un discovery avanzado (timeouts, concurrencia, ritmo,
+    # reintentos, hosts, duración) y puertos fuera del perfil, siempre bajo los topes del
+    # servidor. Solo admin: cambia cuánta carga recibe la red de un site.
+    DISCOVERY_TUNE = "discovery:tune"
     # Revocar y rehabilitar agentes.
     AGENTS_MANAGE = "agents:manage"
     # Crear, listar y revocar tokens de enrollment: dan acceso a la plataforma a un host nuevo.
