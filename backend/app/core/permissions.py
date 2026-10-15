@@ -104,6 +104,13 @@ class Permission(enum.StrEnum):
     # Resumen ejecutivo e informe técnico global, cancelar informes de otros y borrar
     # (expirar) artefactos. Solo admin.
     REPORTS_ADMIN = "reports:admin"
+    # Fase 5F. Ver sites y sensores es monitoring:read (sin secretos). Crear, editar,
+    # deshabilitar y archivar sites y sus redes autorizadas: solo admin, porque las redes de
+    # un site son exactamente lo que sus sensores pueden escanear.
+    SITES_MANAGE = "sites:manage"
+    # Tokens de enrolamiento de sensores, revocar, deshabilitar, habilitar y rotar credencial:
+    # dan o quitan a un proceso remoto la capacidad de observar una red. Solo admin.
+    SENSORS_MANAGE = "sensors:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {

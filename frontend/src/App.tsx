@@ -58,6 +58,9 @@ const ReportDetailPage = lazy(() =>
   import("./pages/ReportDetailPage").then((m) => ({ default: m.ReportDetailPage })),
 );
 const reportsFallback = <LoadingState label="Cargando informes…" />;
+// Fase 5F: sites y sensores distribuidos en su propio chunk.
+const SitesPage = lazy(() => import("./pages/SitesPage").then((m) => ({ default: m.SitesPage })));
+const SensorsPage = lazy(() => import("./pages/SensorsPage").then((m) => ({ default: m.SensorsPage })));
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -264,6 +267,26 @@ export function AppRoutes() {
             element={
               <RequirePermission permission="ai:use">
                 <LocalAIPage />
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="settings/sites"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={incidentsFallback}>
+                  <SitesPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="sensors"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={incidentsFallback}>
+                  <SensorsPage />
+                </Suspense>
               </RequirePermission>
             }
           />

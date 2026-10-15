@@ -1,5 +1,5 @@
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import Field
@@ -77,6 +77,13 @@ class DiscoveryJobRead(ResponseModel):
     progress: DiscoveryProgressRead | None
     # Perfil usado: puertos, timeout, concurrencia, ICMP, DNS inverso.
     parameters: dict[str, Any] | None
+    # --- Fase 5F (aditivo) ---
+    site_id: UUID
+    site_name: str
+    # "local": lo ejecuta el propio servidor; "sensor": un sensor del site.
+    execution_target: Literal["local", "sensor"]
+    sensor_id: UUID | None
+    sensor_name: str | None
 
 
 class DiscoveryJobList(ResponseModel):
@@ -113,6 +120,12 @@ class DiscoveryJobCreate(RequestModel):
     # Una red de DISCOVERY_ALLOWED_NETWORKS (o una subred suya). El backend la valida con
     # la misma allowlist que la CLI; la lista desplegable del frontend no es una garantía.
     target: str = Field(min_length=1, max_length=64)
+    # Fase 5F. Sin site: el site por defecto. "local" solo existe en el site por defecto
+    # (DISCOVERY_ALLOWED_NETWORKS del servidor); "sensor" exige sensor_id del mismo site y un
+    # target dentro de una red habilitada de ese site.
+    site_id: UUID | None = None
+    execution_target: Literal["local", "sensor"] = "local"
+    sensor_id: UUID | None = None
 
 
 class DiscoveryScheduleRead(ResponseModel):

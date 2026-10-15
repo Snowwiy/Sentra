@@ -13,6 +13,7 @@ es texto. Cada cambio queda auditado (también los intentos fallidos).
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from typing import Annotated, Literal
 from uuid import UUID
 
@@ -55,6 +56,7 @@ from app.schemas.vulnerability import (
 from app.services import audit_service
 from app.services.auth_service import AuthContext
 from app.services.incident_service import IncidentService, Operator, detail
+from app.services.site_service import resolve_site
 from app.services.vulnerability_catalog_service import VulnerabilityCatalogService
 from app.services.vulnerability_service import (
     TARGET,
@@ -180,6 +182,7 @@ def vulnerabilities_overview(_: Reader, service: Service) -> VulnerabilityOvervi
 def list_findings(
     _: Reader,
     service: Service,
+    session: DbSession,
     status: Status | None = None,
     # Solo los que necesitan trabajo (open, acknowledged, mitigating); ignorado con status.
     active: bool = False,
@@ -201,7 +204,10 @@ def list_findings(
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: solo findings de activos de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> FindingList:
+    site = resolve_site(session, site_id)
     internal = None
     if asset_id is not None:
         ids = service.asset_ids([asset_id])
@@ -212,6 +218,7 @@ def list_findings(
         status, active, severity, match_state, confidence, exposure, vulnerability_id, source,
         stale, q, internal, kev, epss_min, intel_stale,
     )  # fmt: skip
+    f = replace(f, site_id=site)
     return service.list_findings(f, sort, order == "desc", limit, offset)
 
 

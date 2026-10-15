@@ -58,6 +58,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "reports:read",
     "reports:generate",
     "reports:admin",
+    "sites:manage",
+    "sensors:manage",
   ],
 };
 

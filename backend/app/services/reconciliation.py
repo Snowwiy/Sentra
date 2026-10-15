@@ -67,7 +67,11 @@ def primary_mac(interfaces: Iterable[Mapping[str, Any]] | None, primary_ip: str)
 
 
 def find_discovered_match(
-    session: Session, ips: set[str], macs: set[str], exclude_id: int | None = None
+    session: Session,
+    ips: set[str],
+    macs: set[str],
+    exclude_id: int | None = None,
+    site_id: int | None = None,
 ) -> Asset | None:
     if not ips and not macs:
         return None
@@ -79,6 +83,10 @@ def find_discovered_match(
     query = select(Asset).where(Asset.agent_id.is_(None), or_(*conditions))
     if exclude_id is not None:
         query = query.where(Asset.id != exclude_id)
+    if site_id is not None:
+        # Fase 5F: nunca se reconcilia entre sites. 192.168.1.20 o la misma MAC en otra sede
+        # (VM clonada, MAC falsificada, equipo trasladado) no es evidencia suficiente.
+        query = query.where(Asset.site_id == site_id)
     candidates: Sequence[Asset] = session.scalars(query.with_for_update()).all()
     by_mac = [c for c in candidates if c.mac_address and c.mac_address in macs]
     by_ip = [
@@ -119,7 +127,9 @@ def adopt_discovered(session: Session, managed: Asset, ips: set[str], macs: set[
         ips = ips | {managed.primary_ip}
     if managed.mac_address:
         macs = macs | {managed.mac_address}
-    source = find_discovered_match(session, ips, macs, exclude_id=managed.id)
+    source = find_discovered_match(
+        session, ips, macs, exclude_id=managed.id, site_id=managed.site_id
+    )
     if source is None:
         return False
     merge_into(session, source=source, target=managed)

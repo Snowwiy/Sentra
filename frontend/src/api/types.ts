@@ -97,6 +97,9 @@ export interface Asset {
   missed_discovery_scans: number;
   /** max(last_seen_at, last_network_seen_at) o discovered_at. */
   last_activity_at: IsoDateTime | null;
+  /** Fase 5F: site al que pertenece el activo. */
+  site_id: string;
+  site_name: string;
 }
 
 // --- Ciclo de vida de activos (Fase 5C.1) -----------------------------------------------------
@@ -142,7 +145,8 @@ export type ReconcileBlocker =
   | "source_archived"
   | "target_never_managed"
   | "target_agent_online"
-  | "platform_mismatch";
+  | "platform_mismatch"
+  | "different_site";
 /** Avisos que un admin puede aceptar explícitamente (acknowledge_weak_evidence). */
 export type ReconcileWarning = "insufficient_evidence" | "machine_id_mismatch";
 export type DuplicateConflict = "machine_id_mismatch";
@@ -580,6 +584,8 @@ export interface DashboardSummary {
   active_alerts: number;
   /** null si el rol no puede leer vulnerabilidades (vulnerabilities:read). */
   vulnerabilities?: DashboardVulnerabilities | null;
+  /** Fase 5F: eco del alcance aplicado (null = todos los sites). */
+  site_id: string | null;
 }
 
 export type CheckStatus = "ok" | "error";
@@ -896,7 +902,16 @@ export interface DiscoveryJob {
   /** Solo mientras está en cola o en curso. */
   progress: DiscoveryProgress | null;
   parameters: Record<string, unknown> | null;
+  /** Fase 5F: site del job y dónde se ejecuta (servidor local o un sensor del site). */
+  site_id: string;
+  site_name: string;
+  execution_target: DiscoveryExecutionTarget;
+  sensor_id: string | null;
+  sensor_name: string | null;
 }
+
+/** Fase 5F: el servidor local solo en el site por defecto; el resto, con un sensor. */
+export type DiscoveryExecutionTarget = "local" | "sensor";
 
 export interface DiscoveryProgress {
   /** queued, pending, liveness, details, done. Solo liveness tiene un total exacto. */
@@ -1017,6 +1032,9 @@ export interface Agent {
   asset_state: "active" | "archived";
   archived_at: IsoDateTime | null;
   lifecycle_version: number;
+  /** Fase 5F: site del activo del agente. */
+  site_id: string;
+  site_name: string;
 }
 
 export interface AgentSummary {
@@ -1052,6 +1070,9 @@ export interface EnrollmentToken {
   note: string | null;
   created_via: string;
   last_asset_id: string | null;
+  /** Fase 5F: site en el que quedará el agente; null = site por defecto. */
+  site_id: string | null;
+  site_name: string | null;
 }
 
 /** Only the create response carries `token`, once. Keep it in memory only. */
@@ -1069,6 +1090,8 @@ export interface EnrollmentTokenRequest {
   expected_platform?: "windows" | "linux";
   expected_hostname?: string;
   note?: string;
+  /** Fase 5F: sin valor, el agente queda en el site por defecto. */
+  site_id?: string;
 }
 
 export interface ConsoleInfo {
@@ -1112,7 +1135,9 @@ export type Permission =
   | "response:manage"
   | "reports:read"
   | "reports:generate"
-  | "reports:admin";
+  | "reports:admin"
+  | "sites:manage"
+  | "sensors:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -3361,4 +3386,167 @@ export interface Report {
 export interface ReportList {
   items: Report[];
   total: number;
+}
+
+// --- Fase 5F: multi-site y sensores distribuidos ----------------------------------------------
+
+export type SiteStatus = "active" | "disabled" | "archived";
+
+/** GET /sites/{site_id}. */
+export interface Site {
+  site_id: string;
+  name: string;
+  slug: string;
+  description: string | null;
+  location_label: string | null;
+  timezone: string;
+  status: SiteStatus;
+  is_default: boolean;
+  /** Concurrencia optimista (409 site_conflict si cambió). */
+  version: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  archived_at: IsoDateTime | null;
+  asset_count: number;
+  sensor_count: number;
+  network_count: number;
+}
+
+/** Ordenados: el site por defecto primero y después por nombre. Incluye archivados. */
+export interface SiteList {
+  items: Site[];
+}
+
+export interface SiteCreate {
+  name: string;
+  slug?: string;
+  description?: string;
+  location_label?: string;
+  timezone?: string;
+}
+
+export interface SiteUpdate {
+  version: number;
+  name?: string;
+  description?: string | null;
+  location_label?: string | null;
+  timezone?: string;
+  status?: "active" | "disabled";
+}
+
+export interface SiteNetwork {
+  network_id: string;
+  site_id: string;
+  cidr: string;
+  name: string | null;
+  enabled: boolean;
+  host_count: number;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+}
+
+export interface SiteNetworkList {
+  items: SiteNetwork[];
+}
+
+/** Estado efectivo: offline/stale solo significa que no reporta (no comprometido ni borrado). */
+export type SensorStatus = "pending" | "online" | "offline" | "stale" | "disabled" | "revoked";
+export type VersionStatus = "current" | "outdated" | "unsupported" | "unknown";
+export type SensorJobStatus = "pending" | "leased" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+
+export interface SensorJob {
+  job_id: string;
+  site_id: string;
+  sensor_id: string;
+  job_type: "discovery_basic";
+  status: SensorJobStatus;
+  attempt: number;
+  max_attempts: number;
+  created_at: IsoDateTime;
+  created_by: string;
+  expires_at: IsoDateTime;
+  leased_at: IsoDateTime | null;
+  lease_expires_at: IsoDateTime | null;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
+  error_code: string | null;
+  discovery_job_id: string | null;
+  target: string | null;
+  observations_received: number;
+  batches_received: number;
+}
+
+export interface SensorJobList {
+  items: SensorJob[];
+}
+
+export interface Sensor {
+  sensor_id: string;
+  name: string;
+  site_id: string;
+  site_name: string;
+  status: SensorStatus;
+  hostname: string | null;
+  platform: string | null;
+  sensor_version: string | null;
+  version_status: VersionStatus;
+  capabilities: string[];
+  last_seen_at: IsoDateTime | null;
+  enrolled_at: IsoDateTime;
+  created_at: IsoDateTime;
+  disabled_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  revoke_reason: string | null;
+  rotation_pending: boolean;
+  credential_issued_at: IsoDateTime | null;
+  queue_depth: number | null;
+  spool_items: number | null;
+  uptime_seconds: number | null;
+  last_successful_job_at: IsoDateTime | null;
+  clock_skew_seconds: number | null;
+  pending_jobs: number;
+  last_job: SensorJob | null;
+  version: number;
+}
+
+export interface SensorSummary {
+  total: number;
+  pending: number;
+  online: number;
+  offline: number;
+  stale: number;
+  disabled: number;
+  revoked: number;
+}
+
+export interface SensorList {
+  items: Sensor[];
+  summary: SensorSummary;
+}
+
+export type SensorEnrollmentState = "active" | "consumed" | "expired" | "revoked";
+
+/** Token de enrollment de sensor tal y como se lista: nunca contiene el token. */
+export interface SensorEnrollment {
+  enrollment_id: string;
+  site_id: string;
+  site_name: string;
+  name: string;
+  state: SensorEnrollmentState;
+  created_at: IsoDateTime;
+  expires_at: IsoDateTime;
+  used_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  sensor_id: string | null;
+  created_by: string;
+}
+
+/** Solo la respuesta de creación trae `token` (una vez) y el comando con la URL del servidor. */
+export interface SensorEnrollmentCreated extends SensorEnrollment {
+  token: string;
+  command_example: string;
+}
+
+export interface SensorEnrollmentList {
+  items: SensorEnrollment[];
 }

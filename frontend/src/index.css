@@ -2142,3 +2142,72 @@ td > .badge:first-child {
   color: var(--accent);
   border-color: var(--accent);
 }
+
+/* --- Fase 5F: selector de site y sensores ------------------------------------------------- */
+.site-selector {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.site-selector__label {
+  color: var(--text-muted);
+  font-size: 12px;
+}
+
+.site-selector__select {
+  min-width: 120px;
+  max-width: 200px;
+  padding: 3px 8px;
+  font-size: 13px;
+}
+
+.site-chip {
+  white-space: nowrap;
+}
+
+.page__scope {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.status--pending {
+  color: var(--idle);
+  background: rgb(100 116 139 / 0.1);
+  border-style: dashed;
+}
+
+/* Sensor sin reportar: aviso, no alarma (offline no significa comprometido). */
+.status--sensor-offline {
+  color: var(--warn);
+  background: rgb(245 158 11 / 0.08);
+}
+
+.status--disabled {
+  color: var(--idle);
+  background: rgb(100 116 139 / 0.1);
+}
+
+.status--revoked {
+  color: var(--crit);
+  background: rgb(239 68 68 / 0.08);
+  border-style: dashed;
+}
+
+.command-box {
+  display: block;
+  padding: 8px 10px;
+  overflow-x: auto;
+  white-space: pre;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+}
+
+@media (max-width: 560px) {
+  .site-selector__label {
+    display: none;
+  }
+}

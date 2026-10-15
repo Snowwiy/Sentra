@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query
 
 from app.api.auth import READ
-from app.api.deps import get_risk_service
+from app.api.deps import DbSession, get_risk_service
 from app.api.params import text_query
 from app.api.responses import error_responses
 from app.models.asset import AssetCriticality, AssetStatus
@@ -25,6 +25,7 @@ from app.schemas.risk import (
     RiskRange,
 )
 from app.services.risk_service import RiskFilter, RiskService, RiskSort
+from app.services.site_service import resolve_site
 
 router = APIRouter(prefix="/risk", tags=["risk"], dependencies=[READ])
 Service = Annotated[RiskService, Depends(get_risk_service)]
@@ -39,6 +40,7 @@ def risk_overview(service: Service) -> RiskOverview:
 @router.get("/assets", response_model=RiskAssetList)
 def list_risk_assets(
     service: Service,
+    session: DbSession,
     level: RiskLevel | None = None,
     confidence: RiskConfidence | None = None,
     # Tipo de dispositivo (app/discovery/classify.py) o "unknown".
@@ -52,6 +54,8 @@ def list_risk_assets(
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: solo activos de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> RiskAssetList:
     return service.list_assets(
         RiskFilter(
@@ -62,6 +66,7 @@ def list_risk_assets(
             criticality=criticality,
             min_score=min_score,
             search=q.strip() if q and q.strip() else None,
+            site_id=resolve_site(session, site_id),
         ),
         sort,
         order == "desc",

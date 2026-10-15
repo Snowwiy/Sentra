@@ -80,3 +80,19 @@ def csrf_token_matches(session_token: str, provided: str | None) -> bool:
     if not provided or len(provided) > MAX_CREDENTIAL_LENGTH:
         return False
     return hmac.compare_digest(csrf_token_for(session_token).encode(), provided.encode())
+
+
+# --- Sensores distribuidos (Fase 5F) --------------------------------------------------------
+#
+# Credenciales con prefijo propio: un token de sensor nunca se confunde con uno de agente o de
+# sesión (tablas y cabeceras separadas) y un escáner de secretos los reconoce si se filtran.
+SENSOR_ENROLLMENT_PREFIX = "sentra_se_"
+SENSOR_CREDENTIAL_PREFIX = "sentra_sc_"
+
+
+def generate_sensor_enrollment_token() -> str:
+    return SENSOR_ENROLLMENT_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)
+
+
+def generate_sensor_credential() -> str:
+    return SENSOR_CREDENTIAL_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)

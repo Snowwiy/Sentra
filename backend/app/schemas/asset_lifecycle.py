@@ -57,6 +57,8 @@ ReconcileBlocker = Literal[
     "target_never_managed",
     "target_agent_online",
     "platform_mismatch",
+    # Fase 5F: origen y destino en sites distintos.
+    "different_site",
 ]
 # Avisos: un admin puede reconciliar igualmente si los acepta de forma explícita
 # (acknowledge_weak_evidence). Caso típico: reinstalación de Windows con MachineGuid nuevo.

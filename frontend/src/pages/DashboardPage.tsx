@@ -24,6 +24,9 @@ import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
+import { useSite } from "../site/SiteContext";
+import { SiteScopeChip } from "../site/SiteSelector";
+import { useScopedPage } from "../site/useScopedPage";
 import { useDebounced } from "../lib/useDebounced";
 import { CRITICALITY_LABELS, CRITICALITY_ORDER } from "../lib/risk";
 import {
@@ -222,10 +225,15 @@ export function ContextFilterBar({
 }
 
 export function DashboardPage() {
+  // Fase 5F: KPIs, tablas y recuentos con el mismo alcance de site.
+  const { scopeId, sites } = useSite();
+  // Columna Site solo con "Todos los sites" y más de un site (con uno solo no aporta nada).
+  const showSite = !scopeId && sites.length > 1;
   const [contextFilters, setContextFilters] = useState<ContextFilters>(NO_FILTERS);
   const [filter, setFilter] = useState<Filter>("all");
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+  // Al cambiar de site se vuelve a la primera página.
+  const [page, setPage] = useScopedPage();
   // Fase 5C.1: los activos archivados no se muestran salvo que se pida (con su historial).
   const [showArchived, setShowArchived] = useState(false);
   // Los campos de texto esperan a que se deje de escribir antes de consultar.
@@ -240,8 +248,9 @@ export function DashboardPage() {
         archived: showArchived ? "include" : undefined,
         limit: PAGE_SIZE,
         offset: (page - 1) * PAGE_SIZE,
+        siteId: scopeId,
       }),
-    [debouncedFilters, filter, q, page, showArchived],
+    [debouncedFilters, filter, q, page, showArchived, scopeId],
   );
   const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
     fetchAssets,
@@ -249,18 +258,22 @@ export function DashboardPage() {
     true,
     true,
   );
-  const fetchSummary = useCallback((signal: AbortSignal) => sentraApi.dashboardSummary(signal), []);
+  const fetchSummary = useCallback(
+    (signal: AbortSignal) => sentraApi.dashboardSummary(signal, scopeId),
+    [scopeId],
+  );
   const summary = usePolling(fetchSummary, config.refreshIntervalMs);
   const fetchOpenAlerts = useCallback(
-    (signal: AbortSignal) => sentraApi.listAlerts({ active: true, limit: 5 }, signal),
-    [],
+    (signal: AbortSignal) => sentraApi.listAlerts({ active: true, limit: 5, siteId: scopeId }, signal),
+    [scopeId],
   );
   const openAlerts = usePolling(fetchOpenAlerts, config.refreshIntervalMs);
   const fetchActivity = useCallback(
     (signal: AbortSignal) => sentraApi.listEvents({ minLevel: "warning", limit: 10 }, signal),
     [],
   );
-  const activity = usePolling(fetchActivity, config.refreshIntervalMs);
+  // Los eventos del sistema no se filtran por site: solo se muestran con "Todos los sites".
+  const activity = usePolling(fetchActivity, config.refreshIntervalMs, !scopeId);
   const navigate = useNavigate();
 
   // Cualquier cambio de filtro, búsqueda u orden vuelve a la primera página.
@@ -298,7 +311,9 @@ export function DashboardPage() {
       <div className="page__header">
         <div>
           <h1>Activos</h1>
-          <p className="muted small">
+          <p className="muted small page__scope">
+            {/* Eco del servidor (summary.site_id) cuando ya llegó; si no, la selección local. */}
+            <SiteScopeChip siteId={kpis ? kpis.site_id : undefined} />
             {updatedAt && `Actualizado ${formatRelative(updatedAt.toISOString())} · `}
             refresco cada {config.refreshIntervalMs / 1000} s
           </p>
@@ -345,7 +360,17 @@ export function DashboardPage() {
         </p>
       )}
 
-      <IncidentsOverviewPanel />
+      {scopeId ? (
+        // El resumen SOC de incidentes es global; con un site elegido se usan los KPIs del alcance.
+        kpis?.incidents && (
+          <p className="muted small" aria-label="Incidentes del site">
+            <Link to="/incidents">Incidentes</Link>: {kpis.incidents.active} activos ·{" "}
+            {kpis.incidents.critical} críticos · {kpis.incidents.unassigned} sin asignar
+          </p>
+        )
+      ) : (
+        <IncidentsOverviewPanel />
+      )}
 
       {openAlerts.data && openAlerts.data.items.length > 0 && (
         <section className="panel panel--alerts" aria-label="Alertas abiertas">
@@ -406,6 +431,7 @@ export function DashboardPage() {
                   <th>Método</th>
                   <th>OS / tipo</th>
                   <th>IP</th>
+                  {showSite && <th>Site</th>}
                   <th>Riesgo</th>
                   <th>CPU</th>
                   <th>RAM</th>
@@ -446,6 +472,7 @@ export function DashboardPage() {
                         )}
                       </td>
                       <td className="mono">{asset.primary_ip}</td>
+                      {showSite && <td className="small">{asset.site_name}</td>}
                       <td>
                         <RiskCell
                           score={asset.risk_score}
@@ -487,7 +514,7 @@ export function DashboardPage() {
         {total > 0 && <Pager page={page} pages={pages} total={total} onPage={setPage} noun="activos" />}
       </section>
 
-      {activity.data && activity.data.items.length > 0 && (
+      {!scopeId && activity.data && activity.data.items.length > 0 && (
         <section className="panel" aria-label="Actividad reciente">
           <div className="panel__toolbar">
             <h2>Actividad reciente</h2>

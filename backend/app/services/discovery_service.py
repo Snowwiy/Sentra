@@ -15,6 +15,10 @@ One job per allowed network and run. Rules that keep the result quiet and trustw
 - Agent assets never get "disappeared" alerts (their agent says more); instead, an agent
   asset that answers on the network while its agent is silent gets "monitoring lost".
 - One running job per network, enforced by the database (unique partial index).
+- Fase 5F: todo es POR SITE. El discovery del propio servidor trabaja en el site por defecto
+  (Local) con DISCOVERY_ALLOWED_NETWORKS; los sensores de otros sites suben observaciones que
+  se aplican con este mismo ResultApplier dentro de SU site. Un activo solo se empareja con
+  activos de su site: la misma IP o MAC en otro site es otro activo (nunca se fusionan solos).
 - Jobs del dashboard: se crean en cola (queued) y los ejecuta DiscoveryRunner en segundo
   plano; el navegador consulta el estado en lugar de mantener una petición abierta. La
   cancelación se pide en la base de datos y el scan la recoge en su siguiente latido.
@@ -63,6 +67,7 @@ from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.identification import oui_database, record_observation, refresh_identity
 from app.services.reconciliation import interface_identity
+from app.services.site_service import default_site_id
 from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
@@ -387,17 +392,8 @@ class DiscoveryService:
         }
 
     @staticmethod
-    def _is_baseline(session: Session, target: str) -> bool:
-        # La primera ejecución COMPLETA de una red es la línea base. Un job cancelado o
-        # fallido no cuenta: el siguiente completo sigue siendo baseline y no genera ruido.
-        return not session.scalar(
-            select(
-                exists().where(
-                    DiscoveryJob.target == target,
-                    DiscoveryJob.status == DiscoveryJobStatus.COMPLETED,
-                )
-            )
-        )
+    def _is_baseline(session: Session, target: str, site_id: int | None = None) -> bool:
+        return is_baseline(session, target, site_id)
 
     def _execute(self, job_id: int, network: IPNetwork, baseline: bool) -> JobSummary:
         target = str(network)
@@ -506,6 +502,25 @@ _ZERO_COUNTERS: dict[str, int] = {
 }
 
 
+def is_baseline(session: Session, target: str, site_id: int | None = None) -> bool:
+    """¿Es la primera ejecución COMPLETA de esta red (en este site)?
+
+    Un job cancelado o fallido no cuenta: el siguiente completo sigue siendo baseline y no
+    genera ruido. Fase 5F: la línea base es por (site, red): 192.168.1.0/24 de otro site es
+    otra red con su propia línea base. Sin site: el site por defecto (discovery local).
+    """
+    site = site_id if site_id is not None else default_site_id(session)
+    return not session.scalar(
+        select(
+            exists().where(
+                DiscoveryJob.site_id == site,
+                DiscoveryJob.target == target,
+                DiscoveryJob.status == DiscoveryJobStatus.COMPLETED,
+            )
+        )
+    )
+
+
 def expire_stale_jobs(session: Session, now: datetime) -> int:
     """Marca como fallidos los jobs activos sin latido reciente (su proceso ya no existe).
 
@@ -516,6 +531,9 @@ def expire_stale_jobs(session: Session, now: datetime) -> int:
         update(DiscoveryJob)
         .where(
             DiscoveryJob.status.in_(ACTIVE_JOB_STATUSES),
+            # Fase 5F: un job de sensor no tiene latido de un proceso de la API; su vida la
+            # gobiernan el lease y el plazo del job del sensor (services/sensor_service.py).
+            DiscoveryJob.execution_target == "local",
             func.coalesce(DiscoveryJob.heartbeat_at, DiscoveryJob.started_at)
             < now - JOB_STALE_AFTER,
         )
@@ -541,6 +559,15 @@ def request_cancel(session: Session, public_id: uuid.UUID) -> DiscoveryJob:
     )
     if job is None:
         raise NotFoundError("Discovery job not found")
+    if job.execution_target == "sensor" and job.status in ACTIVE_JOB_STATUSES:
+        # Fase 5F: lo ejecuta un sensor. Si aún no empezó se cancela al momento; en curso, el
+        # sensor recibe la petición en su heartbeat y entrega lo observado (parcial, sin
+        # conclusiones negativas).
+        from app.services.sensor_service import request_sensor_cancel
+
+        request_sensor_cancel(session, job, now)
+        session.commit()
+        return job
     if job.status == DiscoveryJobStatus.QUEUED:
         job.status = DiscoveryJobStatus.CANCELLED
         job.completed_at = now
@@ -572,14 +599,20 @@ def _rank(asset: Asset) -> tuple[bool, bool, bool, datetime]:
 class AssetIndex:
     """Address/MAC → asset lookups for one run, loaded once (no query per host)."""
 
-    def __init__(self, session: Session) -> None:
+    def __init__(self, session: Session, site_id: int | None = None) -> None:
         self.by_mac: dict[str, Asset] = {}
         self.by_ip: dict[str, list[Asset]] = {}
-        assets = session.scalars(select(Asset)).all()
+        # Fase 5F: solo activos del site del scan. 192.168.1.20 de otro site (o la misma MAC
+        # vista en otra sede: VM clonada, MAC falsificada, equipo trasladado) nunca se empareja
+        # automáticamente: la separación por site es la opción segura por defecto.
+        site = site_id if site_id is not None else default_site_id(session)
+        assets = session.scalars(select(Asset).where(Asset.site_id == site)).all()
         interfaces: dict[int, Any] = {
             row[0]: row[1]
             for row in session.execute(
                 select(AssetInventory.asset_id, AssetInventory.data["interfaces"])
+                .join(Asset, Asset.id == AssetInventory.asset_id)
+                .where(Asset.site_id == site)
             )
         }
         for asset in assets:
@@ -624,9 +657,12 @@ class ResultApplier:
         config: DiscoveryConfig,
         thresholds: AlertThresholds,
         gateways: set[str],
+        site_id: int | None = None,
     ) -> None:
         self._session = session
         self._config = config
+        # Fase 5F: site del scan (None = el site por defecto, discovery del propio servidor).
+        self._site_id = site_id if site_id is not None else default_site_id(session)
         self._alerts = AlertService(session, thresholds)
         self._signals = SignalRecorder(session)
         self._gateways = gateways
@@ -653,7 +689,7 @@ class ResultApplier:
         self._ports_opened = 0
         self._ports_closed = 0
         new_asset_ids: list[str] = []
-        index = AssetIndex(self._session)
+        index = AssetIndex(self._session, self._site_id)
         seen: set[int] = set()
         new_assets = 0
         open_total = 0
@@ -731,6 +767,7 @@ class ResultApplier:
 
     def _create(self, obs: HostObservation, now: datetime) -> Asset:
         asset = Asset(
+            site_id=self._site_id,
             monitoring_method=MonitoringMethod.DISCOVERED,
             primary_ip=obs.address,
             mac_address=obs.mac,
@@ -955,6 +992,8 @@ class ResultApplier:
         # Filtered in Python: `seen` can hold tens of thousands of ids (too many SQL params).
         candidates = self._session.scalars(
             select(Asset).where(
+                # Fase 5F: la misma red en otro site son otros dispositivos.
+                Asset.site_id == self._site_id,
                 Asset.discovery_network == str(network),
                 Asset.last_network_seen_at.is_not(None),
                 # Fase 5C.1: un archivado (dispositivo retirado o duplicado) no genera

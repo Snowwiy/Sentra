@@ -20,6 +20,8 @@ import { useDebounced } from "../lib/useDebounced";
 import { useConsole } from "../lib/useConsole";
 import { useListState } from "../lib/useListState";
 import { usePolling } from "../lib/usePolling";
+import { useSite } from "../site/SiteContext";
+import { SiteScopeChip } from "../site/SiteSelector";
 
 // Discovery runs every few minutes at most: no need to poll as often as live telemetry.
 const REFRESH_MS = Math.max(config.refreshIntervalMs, 60_000);
@@ -49,15 +51,24 @@ const SORT_KEYS: Record<Key, AssetSortKey> = {
 
 const METHODS: MonitoringMethod[] = ["discovered", "agentless", "agent"];
 
+/** Red con el alcance de site actual: al cambiar de site la vista empieza de cero (página 1). */
 export function NetworkPage() {
+  const { scopeId } = useSite();
+  return <NetworkView key={scopeId ?? "all"} scopeId={scopeId} />;
+}
+
+function NetworkView({ scopeId }: { scopeId: string | undefined }) {
+  const site = useSite();
+  // Columna Site solo con "Todos los sites" y más de un site (con uno solo no aporta nada).
+  const showSite = !scopeId && site.sites.length > 1;
   // Si hay algún job en cola o en curso, según la última respuesta del historial. Se
   // actualiza dentro del fetcher (no en un efecto) para elegir el intervalo de polling.
   const [discovering, setDiscovering] = useState(false);
   const fetchJobs = useCallback(async (signal: AbortSignal) => {
-    const result = await api.discoveryJobs(10, signal);
+    const result = await api.discoveryJobs(10, signal, scopeId);
     setDiscovering(result.items.some(isActive));
     return result;
-  }, []);
+  }, [scopeId]);
   const jobs = usePolling(fetchJobs, discovering ? ACTIVE_JOBS_MS : REFRESH_MS);
   const list = useListState<Key, { method: string; status: string; type: string; subnet: string }>(
     { key: "ip", dir: "asc" },
@@ -77,8 +88,9 @@ export function NetworkPage() {
         order: list.sort.dir,
         limit: PAGE_SIZE,
         offset: (list.page - 1) * PAGE_SIZE,
+        siteId: scopeId,
       }),
-    [method, status, type, subnet, q, list.sort.key, list.sort.dir, list.page],
+    [method, status, type, subnet, q, list.sort.key, list.sort.dir, list.page, scopeId],
   );
   const assets = usePolling(
     fetchAssets,
@@ -87,7 +99,7 @@ export function NetworkPage() {
     true,
   );
   // Contadores por método y tipos existentes: agregados del servidor, no de una página.
-  const fetchSummary = useCallback((signal: AbortSignal) => api.dashboardSummary(signal), []);
+  const fetchSummary = useCallback((signal: AbortSignal) => api.dashboardSummary(signal, scopeId), [scopeId]);
   const summary = usePolling(fetchSummary, discovering ? ACTIVE_ASSETS_MS : REFRESH_MS);
   const fetchScope = useCallback((signal: AbortSignal) => api.discoveryScope(signal), []);
   const scope = usePolling(fetchScope, 10 * REFRESH_MS);
@@ -143,8 +155,11 @@ export function NetworkPage() {
   }, [summary.data]);
   const subnets = scope.data?.allowed_networks ?? [];
   const activeJobs = (jobs.data?.items ?? []).filter(isActive);
-  const scopeEnabled = scope.data?.enabled === true;
-  const startDisabledReason = !scope.data
+  // Fase 5F: además del servidor local (site por defecto), cualquier site activo con sensores
+  // puede descubrir; el modal decide el destino concreto.
+  const sensorSites = site.sites.some((s) => s.status === "active" && s.sensor_count > 0);
+  const scopeEnabled = scope.data?.enabled === true || sensorSites;
+  const startDisabledReason = !scope.data && !sensorSites
     ? "Cargando redes autorizadas…"
     : !scopeEnabled
       ? DISABLED_MESSAGE
@@ -176,7 +191,8 @@ export function NetworkPage() {
       <div className="page__header">
         <div>
           <h1>Red</h1>
-          <p className="muted small">
+          <p className="muted small page__scope">
+            <SiteScopeChip />
             Activos descubiertos en las redes autorizadas y activos con agente, en una sola vista.
           </p>
         </div>
@@ -294,6 +310,7 @@ export function NetworkPage() {
                     {header("Tipo", "type")}
                     {header("Estado", "status")}
                     {header("Método", "method")}
+                    {showSite && <th>Site</th>}
                     {header("Descubierto", "first")}
                     {header("Visto en red", "last")}
                     {header("Puertos", "ports", true)}
@@ -323,6 +340,7 @@ export function NetworkPage() {
                       <td>
                         <MethodBadge method={asset.monitoring_method} />
                       </td>
+                      {showSite && <td className="small">{asset.site_name}</td>}
                       <td className="muted" title={formatDateTime(asset.discovered_at ?? asset.first_seen_at)}>
                         {formatRelative(asset.discovered_at ?? asset.first_seen_at)}
                       </td>
@@ -347,6 +365,7 @@ export function NetworkPage() {
         loading={jobs.loading}
         error={jobs.error}
         onOpen={(job) => setModal({ jobId: job.job_id })}
+        showSite={showSite}
       />
 
       {modal && (

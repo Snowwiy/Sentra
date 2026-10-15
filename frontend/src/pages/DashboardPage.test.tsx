@@ -63,6 +63,8 @@ function asset(name: string, overrides: Partial<Asset> = {}): Asset {
     lifecycle_source: "discovered",
     missed_discovery_scans: 0,
     last_activity_at: null,
+    site_id: "00000000-0000-0000-0000-00000000d5f1",
+    site_name: "Principal",
     ...overrides,
   };
 }

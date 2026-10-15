@@ -34,6 +34,7 @@ from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
 from app.services.asset_lifecycle_policy import LifecyclePolicy, evaluate, stale_condition
 from app.services.identification import network_adapter_vendor
+from app.services.site_service import SiteRef, site_refs
 
 AssetSort = Literal[
     "name",
@@ -95,6 +96,8 @@ class AssetFilter:
     # Fase 5C.2: "stale" (stale o candidato a limpieza) o "cleanup_candidate". La condición
     # SQL la pone AssetService porque depende de la política y de la hora.
     lifecycle: str | None = None
+    # Fase 5F: id interno del site (None = todos).
+    site_id: int | None = None
 
     def refine(
         self, stmt: Select[Asset], status_expr: ColumnElement[Any], *, with_status: bool = True
@@ -108,6 +111,8 @@ class AssetFilter:
             stmt = stmt.where(Asset.archived_at.is_(None))
         elif self.archived == "only":
             stmt = stmt.where(Asset.archived_at.is_not(None))
+        if self.site_id is not None:
+            stmt = stmt.where(Asset.site_id == self.site_id)
         if self.method is not None:
             stmt = stmt.where(Asset.monitoring_method == self.method)
         if with_status and self.status is not None:
@@ -237,6 +242,7 @@ class AssetService:
         # Fase 5C.2: sin política explícita (CLI, otros servicios) se usan los valores por
         # defecto, que coinciden con los de config.py.
         self._lifecycle = lifecycle or LifecyclePolicy()
+        self._sites: dict[int, SiteRef] | None = None
 
     def list_assets(
         self,
@@ -367,4 +373,12 @@ class AssetService:
             lifecycle_source=lifecycle.source.value,
             missed_discovery_scans=asset.network_misses or 0,
             last_activity_at=lifecycle.last_activity_at,
+            site_id=self._site(asset.site_id).public_id,
+            site_name=self._site(asset.site_id).name,
         )
+
+    def _site(self, site_id: int) -> SiteRef:
+        # Los sites son pocos: una consulta por petición, no una por activo.
+        if self._sites is None or site_id not in self._sites:
+            self._sites = site_refs(self._session)
+        return self._sites[site_id]

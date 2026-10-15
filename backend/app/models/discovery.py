@@ -3,11 +3,23 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Enum, Index, Integer, String, Uuid, text
+from sqlalchemy import (
+    BigInteger,
+    Boolean,
+    DateTime,
+    Enum,
+    ForeignKey,
+    Index,
+    Integer,
+    String,
+    Uuid,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
+from app.models.site import DEFAULT_SITE_SQL
 
 
 class DiscoveryJobStatus(enum.StrEnum):
@@ -38,6 +50,11 @@ class DiscoveryStopReason(enum.StrEnum):
     # El proceso que lo ejecutaba dejó de dar señales de vida (caída, kill).
     INTERRUPTED = "interrupted"
     ERROR = "error"
+    # Fase 5F: job de sensor que nadie empezó antes de su plazo.
+    EXPIRED = "expired"
+    # Fase 5F: el sensor cerró el job pero faltaban lotes de resultados (descartados por
+    # el propio sensor). Se aplica como parcial: sin conclusiones negativas.
+    INCOMPLETE = "incomplete"
 
 
 class DiscoveryJob(Base):
@@ -48,18 +65,32 @@ class DiscoveryJob(Base):
         # At most one running job per network: a second scheduler, API worker or a manual
         # run started meanwhile is refused by the database instead of scanning twice.
         # Un job en cola cuenta como activo: reserva la red desde que se pide en la web.
+        # Fase 5F: la red se reserva POR SITE. 192.168.1.0/24 de dos sites son redes distintas
+        # que pueden escanearse a la vez (cada una por su sensor).
         Index(
             "uq_discovery_jobs_running_target",
+            "site_id",
             "target",
             unique=True,
             postgresql_where=text("status IN ('queued', 'running')"),
         ),
         Index("ix_discovery_jobs_started", "started_at"),
+        Index("ix_discovery_jobs_site_started", "site_id", "started_at"),
+        Index("ix_discovery_jobs_sensor", "sensor_id"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     public_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, default=uuid.uuid4)
     target: Mapped[str] = mapped_column(String(64))
+    # Fase 5F: site de la red escaneada (por defecto el local) y dónde se ejecuta: "local" (el
+    # propio servidor, histórico) o "sensor" (un sensor del site, que sube observaciones).
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), server_default=text(DEFAULT_SITE_SQL)
+    )
+    execution_target: Mapped[str] = mapped_column(
+        String(16), default="local", server_default="local"
+    )
+    sensor_id: Mapped[int | None] = mapped_column(ForeignKey("sensors.id", ondelete="SET NULL"))
     trigger: Mapped[DiscoveryTrigger] = mapped_column(
         Enum(
             DiscoveryTrigger,

@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { Link, Outlet, useNavigate } from "react-router-dom";
 import { ROLE_LABELS, useAuth } from "../auth/AuthContext";
+import { SiteProvider } from "../site/SiteContext";
+import { SiteSelector } from "../site/SiteSelector";
 import { HealthIndicator } from "./HealthIndicator";
 
 export function Layout() {
@@ -15,46 +17,52 @@ export function Layout() {
   }
 
   return (
-    <div className="app">
-      <header className="topbar">
-        <Link to="/" className="brand">
-          <img src="/favicon.svg" alt="" width={22} height={22} />
-          <span>Sentra</span>
-        </Link>
-        <nav className="topbar__nav">
-          <Link to="/">Activos</Link>
-          <Link to="/agents">Agentes</Link>
-          <Link to="/network">Red</Link>
-          <Link to="/risk">Riesgo</Link>
-          {auth.can("vulnerabilities:read") && <Link to="/vulnerabilities">Vulnerabilidades</Link>}
-          {auth.can("threat_intel:read") && <Link to="/threat-intel">Inteligencia</Link>}
-          <Link to="/detections">Detecciones</Link>
-          {auth.can("incidents:read") && <Link to="/incidents">Incidentes</Link>}
-          <Link to="/alerts">Alertas</Link>
-          {/* Solo navegación: las páginas y la API exigen response:read igualmente. */}
-          {auth.can("response:read") && <Link to="/response">Response</Link>}
-          {auth.can("response:read") && <Link to="/playbooks">Playbooks</Link>}
-          {auth.can("reports:read") && <Link to="/reports">Informes</Link>}
-          {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
-          {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
-          {/* Solo navegación: la página y la API exigen users:manage igualmente. */}
-          {auth.can("users:manage") && <Link to="/admin/users">Usuarios</Link>}
-          {auth.can("assets:manage") && <Link to="/admin/lifecycle">Ciclo de vida</Link>}
-        </nav>
-        <HealthIndicator />
-        {auth.user && (
-          <div className="userbar" aria-label="Sesión">
-            <span className="strong">{auth.user.username}</span>
-            <span className="role-badge">{ROLE_LABELS[auth.user.role] ?? auth.user.role}</span>
-            <button type="button" className="button button--small" disabled={leaving} onClick={() => void logout()}>
-              Cerrar sesión
-            </button>
-          </div>
-        )}
-      </header>
-      <main className="content">
-        <Outlet />
-      </main>
-    </div>
+    // Fase 5F: el alcance de site es global a todas las páginas con sesión.
+    <SiteProvider>
+      <div className="app">
+        <header className="topbar">
+          <Link to="/" className="brand">
+            <img src="/favicon.svg" alt="" width={22} height={22} />
+            <span>Sentra</span>
+          </Link>
+          <nav className="topbar__nav">
+            <Link to="/">Activos</Link>
+            <Link to="/agents">Agentes</Link>
+            <Link to="/network">Red</Link>
+            <Link to="/risk">Riesgo</Link>
+            {auth.can("vulnerabilities:read") && <Link to="/vulnerabilities">Vulnerabilidades</Link>}
+            {auth.can("threat_intel:read") && <Link to="/threat-intel">Inteligencia</Link>}
+            <Link to="/detections">Detecciones</Link>
+            {auth.can("incidents:read") && <Link to="/incidents">Incidentes</Link>}
+            <Link to="/alerts">Alertas</Link>
+            {/* Solo navegación: las páginas y la API exigen response:read igualmente. */}
+            {auth.can("response:read") && <Link to="/response">Response</Link>}
+            {auth.can("response:read") && <Link to="/playbooks">Playbooks</Link>}
+            {auth.can("reports:read") && <Link to="/reports">Informes</Link>}
+            {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
+            {auth.can("monitoring:read") && <Link to="/sensors">Sensores</Link>}
+            {auth.can("monitoring:read") && <Link to="/settings/sites">Sites</Link>}
+            {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
+            {/* Solo navegación: la página y la API exigen users:manage igualmente. */}
+            {auth.can("users:manage") && <Link to="/admin/users">Usuarios</Link>}
+            {auth.can("assets:manage") && <Link to="/admin/lifecycle">Ciclo de vida</Link>}
+          </nav>
+          <SiteSelector />
+          <HealthIndicator />
+          {auth.user && (
+            <div className="userbar" aria-label="Sesión">
+              <span className="strong">{auth.user.username}</span>
+              <span className="role-badge">{ROLE_LABELS[auth.user.role] ?? auth.user.role}</span>
+              <button type="button" className="button button--small" disabled={leaving} onClick={() => void logout()}>
+                Cerrar sesión
+              </button>
+            </div>
+          )}
+        </header>
+        <main className="content">
+          <Outlet />
+        </main>
+      </div>
+    </SiteProvider>
   );
 }

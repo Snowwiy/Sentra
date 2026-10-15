@@ -268,6 +268,19 @@ INTERFACES = {
     "ReportArtifact": "ReportArtifactOut",
     "Report": "ReportOut",
     "ReportList": "ReportList",
+    # Fase 5F: sites y sensores distribuidos.
+    "Site": "SiteRead",
+    "SiteList": "SiteList",
+    "SiteNetwork": "SiteNetworkRead",
+    "SiteNetworkList": "SiteNetworkList",
+    "Sensor": "SensorRead",
+    "SensorList": "SensorList",
+    "SensorSummary": "SensorSummary",
+    "SensorJob": "SensorJobRead",
+    "SensorJobList": "SensorJobList",
+    "SensorEnrollment": "SensorEnrollmentRead",
+    "SensorEnrollmentCreated": "SensorEnrollmentCreated",
+    "SensorEnrollmentList": "SensorEnrollmentList",
 }
 ENUMS = [
     "AssetStatus",

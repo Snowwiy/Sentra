@@ -73,6 +73,7 @@ export const RECONCILE_BLOCKER_LABELS: Record<ReconcileBlocker, string> = {
   target_never_managed: "el destino nunca tuvo agente",
   target_agent_online: "el agente del destino sigue activo y en línea",
   platform_mismatch: "sistemas operativos distintos",
+  different_site: "los activos están en sites distintos",
 };
 
 export const RECONCILE_WARNING_LABELS: Record<ReconcileWarning, string> = {

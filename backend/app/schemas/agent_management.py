@@ -49,6 +49,9 @@ class AgentRead(ResponseModel):
     asset_state: Literal["active", "archived"] = "active"
     archived_at: datetime | None = None
     lifecycle_version: int = 0
+    # Fase 5F: site del activo del agente.
+    site_id: UUID
+    site_name: str
 
 
 class AgentSummary(ResponseModel):

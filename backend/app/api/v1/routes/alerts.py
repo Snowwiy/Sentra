@@ -15,6 +15,7 @@ from app.schemas.alert import AlertList, AlertRead
 from app.services import audit_service
 from app.services.alert_service import AlertService
 from app.services.auth_service import AuthContext
+from app.services.site_service import resolve_site
 
 router = APIRouter(prefix="/alerts", tags=["alerts"])
 Service = Annotated[AlertService, Depends(get_alert_service)]
@@ -24,6 +25,7 @@ Manager = Annotated[AuthContext, Depends(require_permission(Permission.ALERTS_MA
 @router.get("", response_model=AlertList, responses=error_responses(404), dependencies=[READ])
 def list_alerts(
     service: Service,
+    session: DbSession,
     status: AlertStatus | None = None,
     # Open or acknowledged; ignored when `status` is given.
     active: bool = False,
@@ -34,10 +36,19 @@ def list_alerts(
     q: Annotated[str | None, text_query(200)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: solo alertas de activos de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> AlertList:
     search = q.strip() if q else None
     return service.list_alerts(
-        AlertFilter(status=status, active=active, severity=severity, rule=rule, search=search),
+        AlertFilter(
+            status=status,
+            active=active,
+            severity=severity,
+            rule=rule,
+            search=search,
+            site_id=resolve_site(session, site_id),
+        ),
         asset_id,
         limit,
         offset,

@@ -1,0 +1,42 @@
+# Configuración del Sentra Sensor (copiar a /etc/sentra-sensor/sensor.toml o
+# %ProgramData%\Sentra\Sensor\sensor.toml).
+#
+# Las redes que el sensor puede sondear NO se configuran aquí: las decide el servidor
+# (redes habilitadas del Site) y llegan en cada heartbeat. Editar este fichero no amplía
+# el alcance del sensor.
+
+[sensor]
+# URL pública del servidor Sentra. Solo https:// (http:// únicamente para 127.0.0.1/localhost
+# en desarrollo). La verificación TLS no se puede desactivar.
+server_url = "https://sentra.example.com"
+
+# CA privada adicional (PEM) si el servidor usa un certificado de una CA interna.
+# ca_bundle = "/etc/sentra-sensor/ca.pem"
+
+# Directorio de datos (credencial, spool, estado, logs). Por defecto:
+#   Linux (servicio): /var/lib/sentra-sensor    Windows: %ProgramData%\Sentra\Sensor
+# data_dir = "/var/lib/sentra-sensor"
+
+# Rutas relativas a data_dir (o absolutas DENTRO de data_dir; se rechaza '..').
+credential_path = "credential.json"
+spool_path = "spool.sqlite3"
+
+# Valores iniciales; el servidor envía los efectivos en cada heartbeat.
+poll_interval_seconds = 30
+heartbeat_interval_seconds = 30
+
+# Límites del spool durable (resultados pendientes de entregar si el servidor no responde).
+spool_max_mb = 64
+spool_max_items = 10000
+spool_max_age_hours = 72
+
+# Tope del backoff exponencial (con jitter) de los reintentos.
+retry_max_delay_seconds = 300
+
+log_level = "INFO"
+# log_dir = "/var/log/sentra-sensor"
+
+# Uso de binarios del sistema (argv fijo, sin shell). Desactívalos para ser más restrictivo
+# que el servidor: sin ping no hay sondas ICMP; sin arp (Windows) no hay MAC.
+allow_system_ping = true
+allow_system_arp = true

@@ -37,6 +37,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "response-engine": _BASE + 11,
     # Fase 5E: generación de informes pendientes, recuperación de huérfanos y retención.
     "report-worker": _BASE + 12,
+    # Fase 5F: caducidad de jobs de sensor, leases vencidos y sensores perdidos.
+    "sensor-maintenance": _BASE + 13,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.

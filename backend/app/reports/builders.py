@@ -47,6 +47,7 @@ from app.models.incident import (
 from app.models.inventory import AssetInventory
 from app.models.response import Playbook, PlaybookRun, ResponseExecution
 from app.models.risk import AssetRisk, RiskContributionRecord, RiskSnapshot
+from app.models.site import Site
 from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.user import User
 from app.models.vulnerability import VulnerabilityFinding
@@ -201,6 +202,11 @@ def asset_conditions(ctx: BuildContext) -> list[ColumnElement[bool]]:
         conditions.append(Asset.public_id.in_(_ids(ctx.filters["asset_ids"])))
     if ctx.filters.get("platforms"):
         conditions.append(_platform_condition(ctx.filters["platforms"]))
+    if ctx.filters.get("site_id"):
+        # Fase 5F: solo activos del site pedido.
+        conditions.append(
+            Asset.site_id.in_(select(Site.id).where(Site.public_id == UUID(ctx.filters["site_id"])))
+        )
     # Un activo creado después de la hora de corte no existía para este informe.
     conditions.append(Asset.first_seen_at <= ctx.cutoff)
     return conditions

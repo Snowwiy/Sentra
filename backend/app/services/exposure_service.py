@@ -9,6 +9,7 @@ as an unexpected open port.
 
 import ipaddress
 from collections.abc import Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 from uuid import UUID
@@ -25,6 +26,7 @@ from app.models.discovery import ACTIVE_JOB_STATUSES, DiscoveryJob, DiscoveryTri
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
+from app.models.site import Sensor
 from app.repositories.asset_repository import AssetRepository
 from app.schemas.discovery import (
     AgentListener,
@@ -41,6 +43,7 @@ from app.schemas.discovery import (
     ExposureRead,
     PortProcess,
 )
+from app.services.site_service import SiteRef, site_refs
 
 
 class ExposureService:
@@ -128,13 +131,15 @@ class ExposureService:
 
     # --- discovery jobs and scope ------------------------------------------------------------
 
-    def jobs(self, limit: int) -> DiscoveryJobList:
-        jobs = self._session.scalars(
-            select(DiscoveryJob)
-            .order_by(DiscoveryJob.started_at.desc(), DiscoveryJob.id.desc())
-            .limit(limit)
-        ).all()
-        return DiscoveryJobList(items=[_job_read(job) for job in jobs])
+    def jobs(self, limit: int, site_id: int | None = None) -> DiscoveryJobList:
+        query = select(DiscoveryJob).order_by(
+            DiscoveryJob.started_at.desc(), DiscoveryJob.id.desc()
+        )
+        if site_id is not None:
+            query = query.where(DiscoveryJob.site_id == site_id)
+        jobs = self._session.scalars(query.limit(limit)).all()
+        refs = _JobRefs.load(self._session, jobs)
+        return DiscoveryJobList(items=[_job_read(job, refs) for job in jobs])
 
     def job(self, public_id: UUID) -> DiscoveryJobDetail:
         job = self._session.scalar(select(DiscoveryJob).where(DiscoveryJob.public_id == public_id))
@@ -186,7 +191,9 @@ class ExposureService:
             for change, asset in rows
         ]
         return DiscoveryJobDetail(
-            **_job_read(job).model_dump(), new_assets=new_assets, changes=changes
+            **_job_read(job, _JobRefs.load(self._session, [job])).model_dump(),
+            new_assets=new_assets,
+            changes=changes,
         )
 
     def scope(self) -> DiscoveryScopeRead:
@@ -250,7 +257,32 @@ def ipaddress_key(address: str) -> tuple[int, int]:
     return (ip.version, int(ip))
 
 
-def _job_read(job: DiscoveryJob) -> DiscoveryJobRead:
+@dataclass(frozen=True)
+class _JobRefs:
+    """Site y sensor de una página de jobs en dos consultas (sin N+1)."""
+
+    sites: dict[int, SiteRef]
+    sensors: dict[int, tuple[UUID, str]]
+
+    @classmethod
+    def load(cls, session: Session, jobs: Sequence[DiscoveryJob]) -> "_JobRefs":
+        sensor_ids = {job.sensor_id for job in jobs if job.sensor_id is not None}
+        sensors = (
+            {
+                row.id: (row.public_id, row.name)
+                for row in session.execute(
+                    select(Sensor.id, Sensor.public_id, Sensor.name).where(
+                        Sensor.id.in_(sensor_ids)
+                    )
+                )
+            }
+            if sensor_ids
+            else {}
+        )
+        return cls(site_refs(session), sensors)
+
+
+def _job_read(job: DiscoveryJob, refs: _JobRefs) -> DiscoveryJobRead:
     finished = job.status not in ACTIVE_JOB_STATUSES
     progress = job.progress if job.status in ACTIVE_JOB_STATUSES else None
     return DiscoveryJobRead(
@@ -279,4 +311,9 @@ def _job_read(job: DiscoveryJob) -> DiscoveryJobRead:
         stop_reason=job.stop_reason,
         progress=DiscoveryProgressRead.model_validate(progress) if progress else None,
         parameters=job.parameters,
+        site_id=refs.sites[job.site_id].public_id,
+        site_name=refs.sites[job.site_id].name,
+        execution_target="sensor" if job.execution_target == "sensor" else "local",
+        sensor_id=refs.sensors[job.sensor_id][0] if job.sensor_id in refs.sensors else None,
+        sensor_name=refs.sensors[job.sensor_id][1] if job.sensor_id in refs.sensors else None,
     )

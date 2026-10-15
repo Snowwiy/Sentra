@@ -8,6 +8,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Enum,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -20,6 +21,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db.base import Base
 from app.discovery.device_types import ClassificationConfidence
+from app.models.site import DEFAULT_SITE_SQL
 
 
 class AssetStatus(enum.StrEnum):
@@ -75,6 +77,10 @@ class Asset(Base):
         # Fase 5C.1: sugerencias de duplicados (misma identidad de máquina o mismo nombre).
         Index("ix_assets_machine_id_hash", "machine_id_hash"),
         Index("ix_assets_hostname_lower", text("lower(hostname)")),
+        # Fase 5F: la identidad de red depende del site (misma IP privada en dos sites = dos
+        # activos). Discovery y la reconciliación buscan por (site, IP); sirve también de
+        # índice de la clave foránea.
+        Index("ix_assets_site_ip", "site_id", "primary_ip"),
     )
 
     # Internal surrogate key; never exposed through the API.
@@ -86,6 +92,14 @@ class Asset(Base):
         _enum(MonitoringMethod, "asset_monitoring_method"),
         default=MonitoringMethod.AGENT,
         server_default=MonitoringMethod.AGENT.value,
+    )
+
+    # Fase 5F: site al que pertenece. Por defecto (función de la base de datos) el site local,
+    # así todo lo anterior a 5F y los agentes sin site explícito siguen donde estaban. Solo un
+    # admin lo cambia de forma explícita y auditada (POST /assets/{id}/site): nunca se mueve
+    # solo ni se fusiona con activos de otro site.
+    site_id: Mapped[int] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), server_default=text(DEFAULT_SITE_SQL)
     )
 
     # SHA-256 of the agent's bearer token (see core/security.py). Null means the agent has no

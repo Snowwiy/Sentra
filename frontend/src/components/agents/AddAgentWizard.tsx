@@ -16,6 +16,7 @@ import {
   type WindowsInstallMethod,
 } from "../../lib/install";
 import { usePolling } from "../../lib/usePolling";
+import { useSite } from "../../site/SiteContext";
 import { CopyButton } from "../CopyButton";
 import { Modal } from "../Modal";
 
@@ -62,6 +63,12 @@ export function AddAgentWizard({
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const [created, setCreated] = useState<EnrollmentTokenCreated>();
+  // Fase 5F: site del futuro agente (vacío = site por defecto). Por defecto, el alcance elegido.
+  const site = useSite();
+  const assignableSites = site.sites.filter((s) => s.status === "active" && !s.is_default);
+  const [siteId, setSiteId] = useState<string>(() =>
+    site.current && site.current.status === "active" && !site.current.is_default ? site.current.site_id : "",
+  );
 
   const server = checkServerUrl(serverUrl);
 
@@ -73,6 +80,7 @@ export function AddAgentWizard({
         expected_platform: platform,
         max_uses: 1,
         ...(hostname.trim() ? { expected_hostname: hostname.trim() } : {}),
+        ...(siteId ? { site_id: siteId } : {}),
       });
       setCreated(token);
       setStep("install");
@@ -190,6 +198,24 @@ export function AddAgentWizard({
               {platform === "windows" ? " en PowerShell" : ""}).
             </span>
           </label>
+          {assignableSites.length > 0 && (
+            <label className="form-field">
+              <span>Site (opcional)</span>
+              <select
+                className="input input--select"
+                value={siteId}
+                onChange={(event) => setSiteId(event.target.value)}
+              >
+                <option value="">{site.defaultSite ? `${site.defaultSite.name} (por defecto)` : "Site por defecto"}</option>
+                {assignableSites.map((s) => (
+                  <option key={s.site_id} value={s.site_id}>
+                    {s.name}
+                  </option>
+                ))}
+              </select>
+              <span className="muted small">El agente que se registre con este token quedará en ese site.</span>
+            </label>
+          )}
           <p className="muted small">
             Plataforma {PLATFORM_NAMES[platform]} · un solo uso · caduca en {info.enrollment_token_ttl_minutes}{" "}
             minutos.

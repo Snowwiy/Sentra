@@ -71,6 +71,11 @@ function job(overrides: Partial<DiscoveryJobDetail> = {}): DiscoveryJobDetail {
     stop_reason: null,
     progress: { phase: "liveness", details_total: 0, details_done: 0 },
     parameters: { ports: [22, 80, 443], icmp: true, reverse_dns: true },
+    site_id: "00000000-0000-0000-0000-00000000d5f1",
+    site_name: "Principal",
+    execution_target: "local",
+    sensor_id: null,
+    sensor_name: null,
     new_assets: [],
     changes: [],
     ...overrides,
@@ -153,6 +158,8 @@ function asset(ip: string, network: string | null = NET): Asset {
     lifecycle_source: "discovered",
     missed_discovery_scans: 0,
     last_activity_at: null,
+    site_id: "00000000-0000-0000-0000-00000000d5f1",
+    site_name: "Principal",
   };
 }
 
@@ -170,6 +177,7 @@ const SUMMARY: DashboardSummary = {
   incidents: null,
   detections: { active: 0, by_severity: {} },
   active_alerts: 0,
+  site_id: null,
 };
 
 type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown };
@@ -497,7 +505,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     await within(history).findByText("Completed");
     const headers = within(history).getAllByRole("columnheader").map((h) => h.textContent);
     expect(headers).toEqual([
-      "Fecha/hora", "Red", "Estado", "Encontrados", "Nuevos", "Actualizados", "Duración", "Perfil", "Origen",
+      "Fecha/hora", "Red", "Ejecución", "Estado", "Encontrados", "Nuevos", "Actualizados", "Duración", "Perfil", "Origen",
     ]);
     expect(within(history).getByText("Cancelled")).toBeInTheDocument();
     expect(within(history).getByText("Failed")).toBeInTheDocument();

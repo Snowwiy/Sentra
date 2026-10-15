@@ -1,0 +1,76 @@
+# Sentra Sensor: descubrimiento de red autorizado dentro de un Site.
+# Servicio de sistema normal y visible: `systemctl status sentra-sensor`,
+# `journalctl -u sentra-sensor`. Solo conexiones SALIENTES (HTTPS) hacia el servidor.
+[Unit]
+Description=Sentra Sensor (distributed network discovery)
+Documentation=file:///opt/sentra-sensor/README.md
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# Usuario de servicio sin privilegios (crear con:
+#   useradd --system --home-dir /var/lib/sentra-sensor --shell /usr/sbin/nologin sentra-sensor)
+User=sentra-sensor
+Group=sentra-sensor
+Environment=SENTRA_SENSOR_SERVICE=1
+WorkingDirectory=/var/lib/sentra-sensor
+ExecStart=/opt/sentra-sensor/bin/sentra-sensor --config /etc/sentra-sensor/sensor.toml run
+# SIGTERM: el sensor cancela el scan en curso, encola lo observado en el spool y sale.
+KillSignal=SIGTERM
+TimeoutStopSec=45
+# Reinicio ante caídas del proceso. La caída del SERVIDOR no es un fallo del servicio: el
+# sensor la gestiona con backoff y spool sin salir.
+Restart=on-failure
+RestartSec=10
+UMask=0077
+StateDirectory=sentra-sensor
+StateDirectoryMode=0700
+LogsDirectory=sentra-sensor
+LogsDirectoryMode=0700
+
+# --- Hardening ---------------------------------------------------------------------------
+NoNewPrivileges=true
+# Sin capacidades por defecto. TCP connect no necesita ninguna y /proc/net/arp es legible.
+CapabilityBoundingSet=
+AmbientCapabilities=
+# ICMP (ping): el `ping` del sistema usa sockets ICMP "datagram" sin privilegios si el grupo
+# del servicio está en net.ipv4.ping_group_range (por defecto en Debian/Ubuntu/Fedora
+# recientes). Si no lo está, hay dos opciones:
+#   a) sysctl -w net.ipv4.ping_group_range="0 2147483647"   (recomendada), o
+#   b) descomentar las dos líneas siguientes (CAP_NET_RAW SOLO para ICMP; con
+#      NoNewPrivileges=true las file capabilities de /usr/bin/ping se ignoran).
+#CapabilityBoundingSet=CAP_NET_RAW
+#AmbientCapabilities=CAP_NET_RAW
+# O desactivar ICMP del todo con allow_system_ping = false en sensor.toml.
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/sentra-sensor /var/log/sentra-sensor
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectKernelLogs=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+ProtectProc=invisible
+ProcSubset=all
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+# Deliberadamente NO:
+#   PrivateNetwork=true -> el sensor debe ver la red del site y llegar al servidor.
+#   MemoryDenyWriteExecute=true -> puede romper ctypes/libffi de Python.
+#   ProcSubset=pid -> ocultaría /proc/net/arp (tabla ARP para las MAC).
+
+[Install]
+WantedBy=multi-user.target

@@ -21,7 +21,13 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import ConflictError, NotFoundError, UnauthorizedError
+from app.core.exceptions import (
+    ConflictError,
+    NotFoundError,
+    SiteConflictError,
+    SiteNotFoundError,
+    UnauthorizedError,
+)
 from app.core.security import (
     ENROLLMENT_TOKEN_PREFIX,
     MAX_CREDENTIAL_LENGTH,
@@ -30,6 +36,7 @@ from app.core.security import (
 )
 from app.models.asset import Asset
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
+from app.models.site import Site
 from app.schemas.agent import HostInfo
 from app.schemas.enrollment import (
     EnrollmentTokenCreate,
@@ -51,6 +58,14 @@ class EnrollmentTokenService:
     def create(self, request: EnrollmentTokenCreate, created_via: str) -> EnrollmentTokenCreated:
         now = datetime.now(UTC)
         ttl = timedelta(minutes=request.ttl_minutes) if request.ttl_minutes else self._default_ttl
+        site_id = None
+        if request.site_id is not None:
+            site = self._session.scalar(select(Site).where(Site.public_id == request.site_id))
+            if site is None:
+                raise SiteNotFoundError("Site not found")
+            if site.status != "active":
+                raise SiteConflictError("site_not_active", f"Site is {site.status}")
+            site_id = site.id
         token = generate_enrollment_token()
         row = AgentEnrollmentToken(
             token_hash=hash_token(token),
@@ -62,6 +77,7 @@ class EnrollmentTokenService:
             expected_hostname=request.expected_hostname,
             note=request.note,
             created_via=created_via,
+            site_id=site_id,
         )
         self._session.add(row)
         self._session.commit()
@@ -128,6 +144,11 @@ class EnrollmentTokenService:
             reason = "platform mismatch"
         elif row.expected_hostname and row.expected_hostname.lower() != host.hostname.lower():
             reason = "hostname mismatch"
+        elif row.site_id is not None:
+            # Fase 5F: un token de un site deshabilitado o archivado ya no enrola a nadie.
+            site_status = self._session.scalar(select(Site.status).where(Site.id == row.site_id))
+            if site_status != "active":
+                reason = "site not active"
         if reason is not None:
             logger.warning(
                 "enrollment token rejected",
@@ -154,6 +175,7 @@ class EnrollmentTokenService:
         )
 
     def _read(self, row: AgentEnrollmentToken, now: datetime) -> EnrollmentTokenRead:
+        site = self._session.get(Site, row.site_id) if row.site_id is not None else None
         asset_id = None
         if row.last_asset_id is not None:
             asset_id = self._session.scalar(
@@ -174,4 +196,6 @@ class EnrollmentTokenService:
             note=row.note,
             created_via=row.created_via,
             last_asset_id=asset_id,
+            site_id=site.public_id if site is not None else None,
+            site_name=site.name if site is not None else None,
         )

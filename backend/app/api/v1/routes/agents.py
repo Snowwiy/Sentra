@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Request, Response, status
+from fastapi import APIRouter, Depends, Query, Request, Response, status
 
 from app.api.auth import READ, client_ip
 from app.api.deps import (
@@ -32,6 +32,7 @@ from app.schemas.response import (
 from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import AgentService
 from app.services.response_service import ResponseService
+from app.services.site_service import resolve_site
 
 router = APIRouter(prefix="/agents", tags=["agents"])
 Service = Annotated[AgentService, Depends(get_agent_service)]
@@ -124,9 +125,11 @@ def command_result(
 @router.get("", response_model=AgentList, dependencies=[READ])
 def list_agents(
     service: Annotated[AgentManagementService, Depends(get_agent_management_service)],
+    session: DbSession,
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> AgentList:
     """Enrolled agents with liveness and credential state (read-only, like /assets).
 
-    Never returns tokens, hashes or enrollment tokens.
+    Never returns tokens, hashes or enrollment tokens. Fase 5F: `site_id` filtra por site.
     """
-    return service.list_agents()
+    return service.list_agents(resolve_site(session, site_id))

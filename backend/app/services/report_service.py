@@ -56,6 +56,7 @@ from app.models.report import (
     ReportArtifact,
 )
 from app.models.response import Playbook, ResponseExecution
+from app.models.site import Site
 from app.models.user import User
 from app.reports import builders
 from app.reports.builders import BuildContext, BuildError, iso
@@ -325,6 +326,14 @@ class ReportService:
     def _filters(self, definition: ReportDefinition, body: ReportRequest) -> dict[str, Any]:
         raw = body.filters
         out: dict[str, Any] = {}
+        if raw.site_id is not None:
+            # Fase 5F: válido para todos los tipos; se guarda el uuid y se comprueba que existe.
+            site = self._session.scalar(select(Site).where(Site.public_id == raw.site_id))
+            if site is None:
+                raise ReportValidationError(
+                    "report_target_not_found", "Site not found", [{"filter": "site_id"}]
+                )
+            out["site_id"] = str(site.public_id)
         limit = self._settings.report_max_assets
         allowed_values = {
             "severities": definition.severity_values,
@@ -423,6 +432,10 @@ class ReportService:
                     [{"filter": name, "ids": absent[:10]}],
                 )
 
+        if filters.get("site_id"):
+            site = session.scalar(select(Site).where(Site.public_id == UUID(filters["site_id"])))
+            if site is not None:
+                scope["site"] = {"id": str(site.public_id), "name": site.name}
         if filters.get("asset_ids"):
             wanted = filters["asset_ids"]
             assets = list(

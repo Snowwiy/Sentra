@@ -91,6 +91,26 @@ const REPORT_MESSAGES: Record<string, string> = {
   report_target_not_found: "No se encontró el elemento indicado o no tienes acceso a él.",
 };
 
+// Multi-site y sensores (Fase 5F). site_conflict/sensor_conflict: otro admin cambió el site o
+// el sensor; la UI recarga antes de reintentar (nunca se sobrescribe en silencio).
+const SITE_MESSAGES: Record<string, string> = {
+  site_conflict: "Otro administrador ha modificado este site. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  site_slug_taken: "Ya existe un site con ese identificador (slug). Elige otro.",
+  site_default_protected: "El site por defecto no se puede deshabilitar, archivar ni borrar.",
+  site_archived: "El site está archivado: restáuralo antes de editarlo.",
+  site_has_data: "El site tiene datos (activos, sensores, jobs o tokens): archívalo en lugar de borrarlo.",
+  site_not_found: "El site no existe o ya no está disponible.",
+  site_not_active: "El site no está activo (deshabilitado o archivado).",
+  site_network_overlap: "La red se solapa con otra red de este mismo site.",
+  sensor_conflict: "Otro administrador ha modificado este sensor. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  sensor_revoked: "El sensor está revocado: no admite más acciones.",
+  sensor_not_found: "El sensor no existe o ya no está disponible.",
+  sensor_not_available: "El sensor no está disponible (deshabilitado, revocado, de otro site o sin la capacidad de discovery).",
+  site_network_not_found: "La red no existe o ya no está disponible.",
+  sensor_enrollment_consumed: "El token ya se usó: revoca el sensor en lugar del token.",
+  discovery_local_default_site_only: "El servidor local solo descubre redes del site por defecto: usa un sensor del site.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -122,6 +142,10 @@ function translate(code: string, message: string): string {
   if (ASSET_CONTEXT_MESSAGES[code]) return ASSET_CONTEXT_MESSAGES[code];
   if (RESPONSE_MESSAGES[code]) return RESPONSE_MESSAGES[code];
   if (REPORT_MESSAGES[code]) return REPORT_MESSAGES[code];
+  if (SITE_MESSAGES[code]) return SITE_MESSAGES[code];
+  // CIDR rechazado: el detalle (inglés) dice el motivo (host bits, /0, multicast, tamaño...).
+  if (code === "site_network_invalid") return `Red no válida: ${message}`;
+  if (code === "discovery_target_refused") return `Destino de descubrimiento no válido: ${message}`;
   // Validación de informes (422): el detalle (inglés) dice qué filtro o rango falla.
   if (code === "report_range_too_large" || code === "report_range_invalid") return `Rango no válido: ${message}`;
   if (code === "report_scope_too_large") return `Alcance demasiado grande: ${message}`;

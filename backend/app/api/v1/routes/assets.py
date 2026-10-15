@@ -65,6 +65,7 @@ from app.schemas.discovery import ExposureRead
 from app.schemas.inventory import InventoryRead
 from app.schemas.process import ProcessSnapshotRead
 from app.schemas.risk import CriticalityUpdate, RiskAssetDetail
+from app.schemas.site import AssetSiteChange
 from app.schemas.telemetry import TelemetryHistory
 from app.services import audit_service
 from app.services.agent_management_service import AgentManagementService
@@ -84,6 +85,7 @@ from app.services.exposure_service import ExposureService
 from app.services.inventory_service import InventoryService
 from app.services.process_service import ProcessService
 from app.services.risk_service import RiskService
+from app.services.site_service import move_asset, resolve_site
 from app.services.telemetry_service import TelemetryService
 from app.vulnerabilities.queue import mark_dirty
 
@@ -102,6 +104,7 @@ AgentManager = Annotated[AuthContext, Depends(require_permission(Permission.AGEN
 @router.get("", response_model=AssetList)
 def list_assets(
     service: Service,
+    session: DbSession,
     # discovered / agentless / agent (DISCOVERED / MONITORED / MANAGED).
     method: MonitoringMethod | None = None,
     status: AssetStatus | None = None,
@@ -130,6 +133,8 @@ def list_assets(
     # Fase 5C.2: "stale" (stale o candidato a limpieza) o solo "cleanup_candidate". Siempre
     # sobre activos no archivados.
     lifecycle: Literal["stale", "cleanup_candidate"] | None = None,
+    # Fase 5F: solo activos de este site (por defecto, todos).
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> AssetList:
     search = q.strip() if q else None
     try:
@@ -155,6 +160,7 @@ def list_assets(
             tag=tag_value,
             archived=archived,
             lifecycle=lifecycle,
+            site_id=resolve_site(session, site_id),
         ),
         sort=sort,
         limit=limit,
@@ -564,6 +570,28 @@ def archive_asset(
         details={"reason": asset.archive_reason, "managed": asset.ever_managed},
         commit=False,
     )
+    session.commit()
+    return assets.get_asset(asset_id)
+
+
+@router.post(
+    "/{asset_id}/site",
+    response_model=AssetRead,
+    responses=error_responses(401, 403, 404, 409),
+)
+def change_asset_site(
+    asset_id: UUID,
+    body: AssetSiteChange,
+    ctx: AssetManager,
+    session: DbSession,
+    assets: Service,
+) -> AssetRead:
+    """Fase 5F: mueve el activo a otro site (solo admin, auditado como asset_site_changed).
+
+    409 asset_lifecycle_conflict si cambió desde que se cargó; 409 site_not_active si el
+    site destino está deshabilitado o archivado.
+    """
+    move_asset(session, asset_id, body, actor(ctx))
     session.commit()
     return assets.get_asset(asset_id)
 

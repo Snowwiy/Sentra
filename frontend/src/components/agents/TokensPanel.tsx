@@ -46,6 +46,7 @@ export function TokensPanel({
                 <th>Expira</th>
                 <th>Plataforma</th>
                 <th>Hostname esperado</th>
+                <th>Site</th>
                 <th>Estado</th>
                 <th>Origen</th>
                 <th>Usado por</th>
@@ -59,6 +60,7 @@ export function TokensPanel({
                   <td title={formatDateTime(token.expires_at)}>{formatDateTime(token.expires_at)}</td>
                   <td>{token.expected_platform ?? <span className="muted">cualquiera</span>}</td>
                   <td className="mono small">{token.expected_hostname ?? <span className="muted">—</span>}</td>
+                  <td className="small">{token.site_name ?? <span className="muted">por defecto</span>}</td>
                   <td>
                     <TokenStateBadge state={token.state} />
                   </td>

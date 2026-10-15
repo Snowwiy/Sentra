@@ -28,6 +28,7 @@ from app.schemas.detection_rule import RULE_UID_PATTERN
 from app.services import audit_service
 from app.services.auth_service import AuthContext
 from app.services.detection_service import DetectionFilter, DetectionService
+from app.services.site_service import resolve_site
 
 router = APIRouter(tags=["detections"])
 Manager = Annotated[AuthContext, Depends(require_permission(Permission.DETECTIONS_MANAGE))]
@@ -47,6 +48,7 @@ Service = Annotated[DetectionService, Depends(get_detection_service)]
 )
 def list_detections(
     service: Service,
+    session: DbSession,
     status: DetectionStatus | None = None,
     # Abiertas o reconocidas; se ignora si se indica `status`.
     active: bool = False,
@@ -63,6 +65,8 @@ def list_detections(
     q: Annotated[str | None, text_query(200)] = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 100,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: solo detecciones de activos de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> DetectionList:
     return service.list(
         DetectionFilter(
@@ -76,6 +80,7 @@ def list_detections(
             since=since,
             until=until,
             search=q.strip() if q and q.strip() else None,
+            site_id=resolve_site(session, site_id),
         ),
         limit,
         offset,

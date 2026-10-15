@@ -104,3 +104,9 @@ export const PHASE_LABELS: Record<string, string> = {
   details: "Analizando puertos y nombres",
   done: "Guardando resultados",
 };
+
+/** Fase 5F: dónde se ejecutó un job ("Servidor local" o "Sensor <nombre>"). */
+export function executionLabel(job: Pick<DiscoveryJob, "execution_target" | "sensor_name" | "sensor_id">): string {
+  if (job.execution_target !== "sensor") return "Servidor local";
+  return `Sensor ${job.sensor_name ?? job.sensor_id?.slice(0, 8) ?? "desconocido"}`;
+}
