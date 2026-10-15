@@ -78,6 +78,19 @@ const RESPONSE_MESSAGES: Record<string, string> = {
   confirmation_required: "Esta acción cambia datos: confírmala explícitamente.",
 };
 
+// Informes y exportación de evidencias (Fase 5E).
+const REPORT_MESSAGES: Record<string, string> = {
+  reports_disabled: "La generación de informes está desactivada en este servidor.",
+  report_queue_full: "Hay demasiados informes en cola. Inténtalo de nuevo en unos minutos.",
+  report_conflict: "La solicitud ha cambiado desde el último intento. Revisa el formulario y vuelve a pulsar Generar.",
+  report_not_ready: "El informe aún no está listo para descargar.",
+  report_artifact_unavailable: "El fichero del informe ya no está disponible (caducado o borrado).",
+  report_integrity_failed: "El fichero del informe no ha superado la comprobación de integridad del servidor.",
+  report_invalid_state: "El informe ya no está en un estado que permita esta acción.",
+  report_asset_archived: "El activo está archivado: marca «Incluir archivados» para incluirlo en el informe.",
+  report_target_not_found: "No se encontró el elemento indicado o no tienes acceso a él.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -108,6 +121,11 @@ function translate(code: string, message: string): string {
   if (INCIDENT_MESSAGES[code]) return INCIDENT_MESSAGES[code];
   if (ASSET_CONTEXT_MESSAGES[code]) return ASSET_CONTEXT_MESSAGES[code];
   if (RESPONSE_MESSAGES[code]) return RESPONSE_MESSAGES[code];
+  if (REPORT_MESSAGES[code]) return REPORT_MESSAGES[code];
+  // Validación de informes (422): el detalle (inglés) dice qué filtro o rango falla.
+  if (code === "report_range_too_large" || code === "report_range_invalid") return `Rango no válido: ${message}`;
+  if (code === "report_scope_too_large") return `Alcance demasiado grande: ${message}`;
+  if (code.startsWith("report_")) return `Solicitud de informe no válida: ${message}`;
   // Parámetros o definición de playbook inválidos: el detalle (inglés) dice qué corregir.
   if (code === "response_invalid_parameters") return `Parámetros no válidos: ${message}`;
   if (code.startsWith("playbook_")) return `Playbook no válido: ${message}`;
@@ -231,4 +249,57 @@ export function apiPatch<T>(path: string, body: unknown, options: RequestOptions
 
 export function apiDelete<T>(path: string, options: RequestOptions = {}): Promise<T> {
   return request<T>("DELETE", path, undefined, options);
+}
+
+/** Fichero descargado de la API (p. ej. el artefacto de un informe, Fase 5E). */
+export interface DownloadedFile {
+  blob: Blob;
+  /** Nombre de Content-Disposition, si el servidor lo envía (y es seguro). */
+  filename: string | undefined;
+  /** Cabecera X-Sentra-SHA256 (hex), si el servidor la envía. */
+  sha256: string | undefined;
+}
+
+function filenameFromDisposition(header: string | null): string | undefined {
+  if (!header) return undefined;
+  const match = /filename\*?=(?:UTF-8'')?"?([^";]+)"?/i.exec(header);
+  if (!match) return undefined;
+  let name = match[1] ?? "";
+  try {
+    name = decodeURIComponent(name);
+  } catch {
+    // Nombre sin codificar: se usa tal cual.
+  }
+  // Nunca rutas: solo el nombre del fichero.
+  return name.split(/[\\/]/).pop() || undefined;
+}
+
+/**
+ * GET binario con la cookie de sesión. Devuelve el contenido como Blob; quien llama decide
+ * cómo guardarlo (nunca se interpreta ni se inserta en la página).
+ */
+export async function apiDownload(path: string, { signal }: { signal?: AbortSignal } = {}): Promise<DownloadedFile> {
+  let response: Response;
+  try {
+    response = await fetch(`${config.apiBaseUrl}/api/v1${path}`, {
+      method: "GET",
+      headers: { Accept: "*/*" },
+      cache: "no-store",
+      credentials: "include",
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === "AbortError") throw error;
+    throw new ApiError(0, "network_error", "No se pudo conectar con la API de Sentra");
+  }
+  if (!response.ok) {
+    const error = await parseError(response);
+    if (response.status === 401) unauthorizedHandler?.();
+    throw error;
+  }
+  return {
+    blob: await response.blob(),
+    filename: filenameFromDisposition(response.headers.get("Content-Disposition")),
+    sha256: response.headers.get("X-Sentra-SHA256")?.trim().toLowerCase() || undefined,
+  };
 }

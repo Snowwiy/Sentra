@@ -34,6 +34,7 @@ export function Layout() {
           {/* Solo navegación: las páginas y la API exigen response:read igualmente. */}
           {auth.can("response:read") && <Link to="/response">Response</Link>}
           {auth.can("response:read") && <Link to="/playbooks">Playbooks</Link>}
+          {auth.can("reports:read") && <Link to="/reports">Informes</Link>}
           {auth.can("ai:use") && <Link to="/ai">AI Insights</Link>}
           {auth.can("ai:use") && <Link to="/settings/ai">Configuración</Link>}
           {/* Solo navegación: la página y la API exigen users:manage igualmente. */}

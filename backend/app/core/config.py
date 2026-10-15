@@ -563,6 +563,34 @@ class Settings(BaseSettings):
     # Cada cuánto el job response-engine caduca comandos y avanza playbooks.
     response_sweep_interval_seconds: int = Field(default=15, ge=5, le=3600)
 
+    # --- Fase 5E: Reporting y exportación de evidencia (docs/reporting.md) ------------------
+    # Generación server-side de informes (HTML, PDF, CSV y paquete de evidencia) solo con
+    # datos de Sentra: sin IA, sin Internet. Apagado: la API responde 409 reports_disabled
+    # pero el historial y las descargas ya generadas siguen disponibles.
+    report_enabled: bool = True
+    # Carpeta de artefactos FUERA del repositorio y del webroot. Sin valor: carpeta de datos
+    # de la aplicación del usuario del servicio (ver app/reports/storage.py). En producción se
+    # recomienda fijarla (production-check avisa) para incluirla en las copias de seguridad.
+    report_output_dir: str | None = None
+    # Rango máximo de un informe y número máximo de ids por filtro (activos, incidentes...).
+    report_max_range_days: int = Field(default=365, ge=1, le=3650)
+    report_max_assets: int = Field(default=100, ge=1, le=1000)
+    # Filas máximas por tabla del snapshot: un informe global nunca vuelca tablas completas.
+    report_max_rows: int = Field(default=500, ge=10, le=10_000)
+    # Días que se conservan los artefactos de informes terminados. Sin valor (por defecto)
+    # no se borra nada: el historial de informes es evidencia.
+    report_retention_days: int | None = Field(default=None, ge=1, le=36_500)
+    # Tiempo máximo de una generación; un trabajo "running" que lo supera (proceso caído)
+    # se cierra como failed en el siguiente barrido. Nunca queda running para siempre.
+    report_job_timeout_seconds: int = Field(default=300, ge=30, le=3600)
+    # Trabajos pendientes o en curso: por usuario y en total (acota cola, disco y memoria).
+    report_max_concurrent: int = Field(default=3, ge=1, le=50)
+    report_max_queued_total: int = Field(default=20, ge=1, le=500)
+    # Tamaño máximo de un artefacto final (PDF, HTML, CSV o ZIP de evidencia).
+    report_max_artifact_mb: int = Field(default=25, ge=1, le=500)
+    # Cada cuánto el job report-worker atiende la cola (latencia hasta empezar a generar).
+    report_worker_interval_seconds: int = Field(default=5, ge=1, le=300)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en
@@ -592,11 +620,35 @@ class Settings(BaseSettings):
         parse_networks(value, (info.field_name or "").upper())
         return value
 
-    @field_validator("log_file", "backup_dir", "pg_bin_dir", "frontend_dist_dir", mode="before")
+    @field_validator(
+        "log_file",
+        "backup_dir",
+        "pg_bin_dir",
+        "frontend_dist_dir",
+        "report_output_dir",
+        mode="before",
+    )
     @classmethod
     def _blank_paths(cls, value: object) -> object:
         if isinstance(value, str):
             return value.strip() or None
+        return value
+
+    @field_validator("report_retention_days", mode="before")
+    @classmethod
+    def _blank_report_retention(cls, value: object) -> object:
+        # `REPORT_RETENTION_DAYS=` en .env significa "sin retención": se conserva todo.
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("report_output_dir")
+    @classmethod
+    def _check_report_output_dir(cls, value: str | None) -> str | None:
+        # Ruta absoluta: una relativa dependería del directorio de arranque del servicio y
+        # podría acabar dentro del repositorio o del webroot sin que nadie lo note.
+        if value is not None and ("\x00" in value or not os.path.isabs(value)):
+            raise ValueError("REPORT_OUTPUT_DIR must be an absolute path")
         return value
 
     @field_validator("ai_redact")

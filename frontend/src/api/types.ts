@@ -1109,7 +1109,10 @@ export type Permission =
   | "threat_intel:manage"
   | "response:read"
   | "response:execute"
-  | "response:manage";
+  | "response:manage"
+  | "reports:read"
+  | "reports:generate"
+  | "reports:admin";
 
 export interface CurrentUser {
   user_id: string;
@@ -3212,5 +3215,150 @@ export interface PlaybookRun {
 
 export interface PlaybookRunList {
   items: PlaybookRun[];
+  total: number;
+}
+
+// --- Fase 5E: informes y exportación de evidencias ------------------------------------------
+
+export type ReportFormat = "html" | "pdf" | "csv" | "evidence";
+export type ReportStatus = "pending" | "running" | "succeeded" | "failed" | "cancelled" | "expired";
+export type ReportRangePreset = "24h" | "7d" | "30d" | "90d" | "custom";
+/** Filtros que un tipo de informe puede admitir (GET /reports/catalog, `filters`). */
+export type ReportFilterKey =
+  | "asset_ids"
+  | "incident_ids"
+  | "detection_ids"
+  | "execution_ids"
+  | "playbook_ids"
+  | "severities"
+  | "statuses"
+  | "risk_levels"
+  | "platforms"
+  | "include_archived";
+
+export interface ReportTypeInfo {
+  id: string;
+  name: string;
+  description: string;
+  audience: "executive" | "technical" | string;
+  template_version: number;
+  supported_formats: ReportFormat[];
+  filters: ReportFilterKey[];
+  required_filters: ReportFilterKey[];
+  /** Valores válidos de filters.statuses para este tipo ([] si no aplica). */
+  status_values: string[];
+  /** Valores válidos de filters.severities para este tipo, si el servidor los envía. */
+  severity_values?: string[];
+  /** Valores válidos de filters.risk_levels ([] si el tipo no admite ese filtro). */
+  risk_level_values?: string[];
+  /** Valores válidos de filters.platforms ([] si el tipo no admite ese filtro). */
+  platform_values?: string[];
+  uses_range: boolean;
+  max_range_days: number;
+  can_generate: boolean;
+}
+
+export interface ReportCatalog {
+  items: ReportTypeInfo[];
+  classifications: string[];
+  limits: { max_range_days: number; max_ids: number; max_rows: number };
+  enabled: boolean;
+}
+
+export interface ReportFilters {
+  asset_ids?: string[];
+  incident_ids?: string[];
+  detection_ids?: string[];
+  execution_ids?: string[];
+  playbook_ids?: string[];
+  severities?: string[];
+  statuses?: string[];
+  risk_levels?: string[];
+  platforms?: string[];
+  include_archived?: boolean;
+}
+
+export interface ReportRange {
+  preset: ReportRangePreset;
+  /** Solo con preset "custom": ISO 8601 en UTC. */
+  from?: string;
+  to?: string;
+}
+
+/** Cuerpo de POST /reports/preview y POST /reports. */
+export interface ReportRequest {
+  report_type: string;
+  format: ReportFormat;
+  classification: string;
+  range?: ReportRange;
+  filters: ReportFilters;
+  /** Solo en POST /reports: misma clave = mismo informe. */
+  idempotency_key?: string;
+}
+
+export interface ReportWarning {
+  code: string;
+  message: string;
+}
+
+export interface ReportPreview {
+  report_type: string;
+  name: string;
+  format: ReportFormat;
+  classification: string;
+  template_version: number;
+  time_from: string | null;
+  time_to: string | null;
+  timezone: string;
+  filters: ReportFilters;
+  sections: string[];
+  /** Conteos aproximados; las claves dependen del tipo. */
+  scope: Record<string, unknown>;
+  warnings: ReportWarning[];
+  can_generate: boolean;
+}
+
+export interface ReportArtifact {
+  filename: string;
+  content_type: string;
+  size_bytes: number;
+  sha256: string;
+  created_at: string;
+}
+
+export interface Report {
+  id: string;
+  report_type: string;
+  name: string;
+  title: string;
+  format: ReportFormat;
+  classification: string;
+  status: ReportStatus;
+  template_version: number;
+  requested_by: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  /** "Datos a fecha de": instante del snapshot, al generarse. */
+  cutoff_at: string | null;
+  time_from: string | null;
+  time_to: string | null;
+  timezone: string;
+  filters: ReportFilters;
+  scope: Record<string, unknown>;
+  summary: string[];
+  artifact: ReportArtifact | null;
+  snapshot_sha256: string | null;
+  error_code: string | null;
+  error_message: string | null;
+  cancel_requested: boolean;
+  deduplicated: boolean;
+  can_cancel: boolean;
+  can_delete: boolean;
+  version: number;
+}
+
+export interface ReportList {
+  items: Report[];
   total: number;
 }

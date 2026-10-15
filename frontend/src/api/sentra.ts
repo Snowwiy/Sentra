@@ -1,5 +1,11 @@
-import { apiDelete, apiGet, apiPatch, apiPost } from "./client";
+import { apiDelete, apiDownload, apiGet, apiPatch, apiPost } from "./client";
 import type {
+  Report,
+  ReportCatalog,
+  ReportList,
+  ReportPreview,
+  ReportRequest,
+  ReportStatus,
   ArchivedFilter,
   AssetDeleteCheck,
   AssetReconcileResult,
@@ -1247,4 +1253,46 @@ export const responseApi = {
   run: (runId: string, signal?: AbortSignal) => apiGet<PlaybookRun>(playbookRun(runId), { signal }),
   cancelRun: (runId: string, version: number, reason?: string) =>
     apiPost<PlaybookRun>(`${playbookRun(runId)}/cancel`, { version, reason: reason?.trim() || null }),
+};
+
+// --- Fase 5E: informes y exportación de evidencias ------------------------------------------
+
+export interface ReportQuery {
+  reportType?: string;
+  status?: ReportStatus;
+  requestedBy?: string;
+  /** ISO 8601 (UTC). */
+  createdFrom?: string;
+  createdTo?: string;
+  limit?: number;
+  offset?: number;
+}
+
+const reportPath = (reportId: string) => `/reports/${encodeURIComponent(reportId)}`;
+
+export const reportsApi = {
+  catalog: (signal?: AbortSignal) => apiGet<ReportCatalog>("/reports/catalog", { signal }),
+  /** Sin efectos: no crea informe ni fichero. */
+  preview: (input: Omit<ReportRequest, "idempotency_key">) => apiPost<ReportPreview>("/reports/preview", input),
+  /** 202: trabajo pending; la misma idempotency_key devuelve el mismo informe. */
+  create: (input: ReportRequest & { idempotency_key: string }) => apiPost<Report>("/reports", input),
+  list: (query: ReportQuery = {}, signal?: AbortSignal) =>
+    apiGet<ReportList>(
+      `/reports${queryString({
+        report_type: query.reportType,
+        status: query.status,
+        requested_by: query.requestedBy,
+        created_from: query.createdFrom,
+        created_to: query.createdTo,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  get: (reportId: string, signal?: AbortSignal) => apiGet<Report>(reportPath(reportId), { signal }),
+  cancel: (reportId: string) => apiPost<Report>(`${reportPath(reportId)}/cancel`, {}),
+  /** Solo reports:admin: expira el informe y borra su artefacto. */
+  remove: (reportId: string) => apiDelete<Report>(reportPath(reportId)),
+  /** Artefacto binario; nunca se renderiza en la app, solo se guarda como fichero. */
+  download: (reportId: string, signal?: AbortSignal) => apiDownload(`${reportPath(reportId)}/artifact`, { signal }),
 };

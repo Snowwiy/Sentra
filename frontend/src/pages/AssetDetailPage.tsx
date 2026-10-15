@@ -4,6 +4,7 @@ import { ApiError } from "../api/client";
 import { aiApi, sentraApi, vulnerabilitiesApi } from "../api/sentra";
 import { useAuth } from "../auth/AuthContext";
 import { AlertsView } from "../components/AlertsView";
+import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { AgentPanel } from "../components/asset/AgentPanel";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { ChangesList } from "../components/asset/ChangesList";
@@ -223,6 +224,9 @@ export function AssetDetailPage() {
             {asset.device_vendor && ` · ${asset.device_vendor}`}
           </p>
           <p className="muted small mono">{asset.asset_id}</p>
+        </div>
+        <div className="actions">
+          <GenerateReportLink type="asset" ids={{ asset_id: asset.asset_id }} />
         </div>
       </div>
 

@@ -280,6 +280,20 @@ def run_response_engine() -> None:
         logger.info("response sweep", extra={f"response_{k}": v for k, v in counts.items()})
 
 
+def run_report_worker() -> None:
+    """Fase 5E: genera los informes pendientes (acotado por vuelta) y aplica la retención.
+
+    Una sola ejecución a la vez en todo el despliegue (advisory lock del job). Cada informe
+    tiene su propio plazo (REPORT_JOB_TIMEOUT_SECONDS) y su lease: si el proceso muere, la
+    siguiente vuelta lo marca failed (report_interrupted) en vez de dejarlo running.
+    """
+    from app.services.report_service import ReportWorker
+
+    counts = ReportWorker(get_engine(), get_settings()).run_once()
+    if any(counts.values()):
+        logger.info("report worker", extra={f"reports_{k}": v for k, v in counts.items()})
+
+
 def discovery_job(stop: threading.Event) -> Callable[[], None]:
     """Periodic discovery over every allowed network; `stop` cancels a run in progress."""
 

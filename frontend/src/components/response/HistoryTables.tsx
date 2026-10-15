@@ -14,6 +14,7 @@ import {
 import { usePolling } from "../../lib/usePolling";
 import { FilterSelect, Pager, Toolbar } from "../ListControls";
 import { Modal } from "../Modal";
+import { GenerateReportLink } from "../reports/GenerateReportLink";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import { ExecutionStatusBadge, LiveExecution, LiveRun, RiskBadge, RunStatusBadge } from "./ResponseViews";
 
@@ -29,7 +30,12 @@ export function ExecutionModal({ executionId, onClose }: { executionId: string; 
       {loading ? (
         <LoadingState label="Cargando ejecución…" />
       ) : data ? (
-        <LiveExecution initial={data} />
+        <div className="stack">
+          <LiveExecution initial={data} />
+          <div className="actions">
+            <GenerateReportLink type="response_activity" ids={{ execution_id: executionId }} />
+          </div>
+        </div>
       ) : (
         <ErrorState message={error ? errorMessage(error) : "Sin datos"} onRetry={refresh} />
       )}

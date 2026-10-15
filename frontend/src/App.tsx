@@ -52,6 +52,12 @@ const rulesFallback = <LoadingState label="Cargando reglas…" />;
 // Fase 5D: Response Engine y Playbooks en su propio chunk.
 const ResponsePage = lazy(() => import("./pages/ResponsePage").then((m) => ({ default: m.ResponsePage })));
 const PlaybooksPage = lazy(() => import("./pages/PlaybooksPage").then((m) => ({ default: m.PlaybooksPage })));
+// Fase 5E: informes y exportación de evidencias en su propio chunk.
+const ReportsPage = lazy(() => import("./pages/ReportsPage").then((m) => ({ default: m.ReportsPage })));
+const ReportDetailPage = lazy(() =>
+  import("./pages/ReportDetailPage").then((m) => ({ default: m.ReportDetailPage })),
+);
+const reportsFallback = <LoadingState label="Cargando informes…" />;
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -221,6 +227,26 @@ export function AppRoutes() {
               <RequirePermission permission="response:read">
                 <Suspense fallback={incidentsFallback}>
                   <PlaybooksPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="reports"
+            element={
+              <RequirePermission permission="reports:read">
+                <Suspense fallback={reportsFallback}>
+                  <ReportsPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="reports/:reportId"
+            element={
+              <RequirePermission permission="reports:read">
+                <Suspense fallback={reportsFallback}>
+                  <ReportDetailPage />
                 </Suspense>
               </RequirePermission>
             }

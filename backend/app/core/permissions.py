@@ -95,6 +95,15 @@ class Permission(enum.StrEnum):
     # Acciones MEDIUM (mutaciones internas: abrir incidente, nota, archivar), administrar
     # playbooks (crear, versionar, activar, desactivar) y cancelar ejecuciones. Solo admin.
     RESPONSE_MANAGE = "response:manage"
+    # Reporting (Fase 5E). Ver el catálogo de informes, el historial y descargar artefactos
+    # de los tipos cuyos datos el rol ya puede leer (permisos de dominio de cada tipo).
+    REPORTS_READ = "reports:read"
+    # Previsualizar y generar informes técnicos acotados (incidente, activo, detecciones,
+    # vulnerabilidades, riesgo, Response, ciclo de vida) y cancelar los propios.
+    REPORTS_GENERATE = "reports:generate"
+    # Resumen ejecutivo e informe técnico global, cancelar informes de otros y borrar
+    # (expirar) artefactos. Solo admin.
+    REPORTS_ADMIN = "reports:admin"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -107,6 +116,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.VULNERABILITIES_READ,
             Permission.THREAT_INTEL_READ,
             Permission.RESPONSE_READ,
+            Permission.REPORTS_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -129,6 +139,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.THREAT_INTEL_TRIAGE,
             Permission.RESPONSE_READ,
             Permission.RESPONSE_EXECUTE,
+            Permission.REPORTS_READ,
+            Permission.REPORTS_GENERATE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

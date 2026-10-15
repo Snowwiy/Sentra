@@ -17,6 +17,7 @@ import {
   RiskContributionsTable,
   TimelineTab,
 } from "../components/incidents/IncidentTabs";
+import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { InvestigateButton } from "../components/response/InvestigateButton";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
@@ -434,6 +435,7 @@ export function IncidentDetailPage() {
             .filter((a) => a.exists)
             .map((a) => ({ assetId: a.asset_id, label: a.primary_ip ? `${a.name} · ${a.primary_ip}` : a.name }))}
         />
+        <GenerateReportLink type="incident" ids={{ incident_id: incident.incident_id }} />
       </div>
 
       <nav className="tabs" role="tablist" aria-label="Secciones del incidente">
