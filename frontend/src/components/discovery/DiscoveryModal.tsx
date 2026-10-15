@@ -1,12 +1,30 @@
 import { useCallback, useState } from "react";
 import { ApiError } from "../../api/client";
-import { consoleApi, sensorsApi, sitesApi, type DiscoveryStartOptions } from "../../api/sentra";
-import type { DiscoveryExecutionTarget, DiscoveryJob, DiscoveryScope, Sensor, Site } from "../../api/types";
+import { consoleApi, sensorsApi, sentraApi, sitesApi, type DiscoveryStartOptions } from "../../api/sentra";
+import type {
+  DiscoveryExecutionTarget,
+  DiscoveryJob,
+  DiscoveryProfileCatalog,
+  DiscoveryProfileName,
+  DiscoveryScope,
+  Sensor,
+  Site,
+} from "../../api/types";
+import {
+  ADVANCED_CAPABILITY,
+  TUNABLE_LIMITS,
+  checkLimits,
+  limitDraft,
+  parsePorts,
+  sensorSupportsAdvanced,
+  type LimitDraft,
+} from "../../lib/discovery";
 import { errorMessage } from "../../lib/format";
 import { usePolling } from "../../lib/usePolling";
 import { useSite } from "../../site/SiteContext";
 import { Modal } from "../Modal";
 import { DiscoveryJobView, type JobActions } from "./DiscoveryJobView";
+import { DiscoveryProfileFields, type ProfileChoice } from "./DiscoveryProfileFields";
 
 export const DISCOVERY_FEATURE = "El descubrimiento de red";
 
@@ -25,10 +43,41 @@ function startError(err: unknown): string {
   }
   if (err instanceof ApiError && err.code === "discovery_disabled") return DISABLED_MESSAGE;
   if (err instanceof ApiError && err.code === "sensor_not_available") {
-    return "El sensor elegido no está disponible (deshabilitado o revocado). Elige otro.";
+    return "El sensor elegido no está disponible (deshabilitado, revocado o sin soporte para el perfil avanzado). Elige otro.";
+  }
+  // Fase 6A: errores de perfiles, puertos y límites.
+  if (err instanceof ApiError && err.code === "discovery_tune_forbidden") {
+    return "Tu rol no permite ajustar límites ni usar puertos fuera del perfil (requiere discovery:tune).";
+  }
+  if (err instanceof ApiError && err.code === "discovery_limit_exceeded") {
+    const fields = limitDetails(err.details);
+    return fields
+      ? `Un valor supera el tope del servidor: ${fields}.`
+      : `Un valor supera el tope del servidor: ${err.message}`;
+  }
+  if (err instanceof ApiError && err.code === "discovery_scope_too_large") {
+    return "La red tiene más direcciones que el máximo de hosts del perfil. Elige una red más pequeña o sube el límite.";
+  }
+  if (err instanceof ApiError && err.code === "discovery_options_require_profile") {
+    return "Los puertos y límites solo se pueden fijar con un perfil avanzado.";
   }
   return errorMessage(err instanceof Error ? err : new Error(String(err)));
 }
+
+/** details de discovery_limit_exceeded: [{"field": "...", "max": n}] → "Concurrencia (máx. 64)". */
+function limitDetails(details: unknown): string | undefined {
+  if (!Array.isArray(details)) return undefined;
+  const parts = details
+    .filter((d): d is { field: string; max?: number } => typeof d === "object" && d !== null && "field" in d)
+    .map((d) => {
+      const label = TUNABLE_LIMITS.find((l) => l.key === d.field)?.label ?? d.field;
+      return typeof d.max === "number" ? `${label} (máx. ${d.max})` : label;
+    });
+  return parts.length > 0 ? parts.join(", ") : undefined;
+}
+
+// El catálogo de perfiles solo cambia con la configuración del servidor.
+const PROFILES_MS = 10 * 60_000;
 
 export interface DiscoveryModalProps {
   scope: DiscoveryScope | undefined;
@@ -112,6 +161,62 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
+  // Fase 6A: perfil, puertos y límites. Sin catálogo (servidor anterior) solo existe "Básico".
+  const fetchProfiles = useCallback((signal: AbortSignal) => sentraApi.discoveryProfiles(signal), []);
+  const profiles = usePolling(fetchProfiles, PROFILES_MS);
+  const catalog: DiscoveryProfileCatalog | undefined = profiles.data;
+  const selectedSensor = usableSensors.find((s) => s.sensor_id === sensorId);
+  const advancedBlocked =
+    execution === "sensor" && selectedSensor && !sensorSupportsAdvanced(selectedSensor)
+      ? `El sensor ${selectedSensor.name} no declara la capacidad ${ADVANCED_CAPABILITY}: solo admite el descubrimiento básico. Actualízalo para usar Quick, Standard o Deep.`
+      : undefined;
+  const [chosenProfile, setChosenProfile] = useState<ProfileChoice | "">("");
+  const defaultProfile: ProfileChoice =
+    catalog && catalog.profiles.some((p) => p.name === catalog.default_profile) ? catalog.default_profile : "basic";
+  const wanted = chosenProfile || defaultProfile;
+  const profileChoice: ProfileChoice =
+    !catalog || advancedBlocked || !catalog.profiles.some((p) => p.name === wanted) ? "basic" : wanted;
+  const profile = catalog?.profiles.find((p) => p.name === profileChoice);
+  const canTune = Boolean(catalog?.can_tune);
+  const [portChoice, setPortChoice] = useState<Partial<Record<DiscoveryProfileName, number[]>>>({});
+  const [extraPorts, setExtraPorts] = useState("");
+  const [limitDrafts, setLimitDrafts] = useState<Partial<Record<DiscoveryProfileName, LimitDraft>>>({});
+
+  const selectedPorts = profile ? (portChoice[profile.name] ?? profile.ports) : [];
+  const extra = canTune ? parsePorts(extraPorts) : { ports: [] as number[] };
+  const finalPorts = [...new Set([...selectedPorts, ...extra.ports])].sort((a, b) => a - b);
+  const portsError = !profile
+    ? undefined
+    : extra.error
+      ? extra.error
+      : finalPorts.length === 0
+        ? "Elige al menos un puerto."
+        : catalog && finalPorts.length > catalog.caps.max_ports
+          ? `Como máximo ${catalog.caps.max_ports} puertos.`
+          : undefined;
+  const draft = profile ? (limitDrafts[profile.name] ?? limitDraft(profile.limits)) : undefined;
+  const limitCheck = profile && catalog && canTune && draft ? checkLimits(draft, profile.limits, catalog.caps) : undefined;
+  const limitsInvalid = Boolean(limitCheck && Object.keys(limitCheck.errors).length > 0);
+  const portsChanged =
+    profile !== undefined &&
+    (finalPorts.length !== profile.ports.length || finalPorts.some((p) => !profile.ports.includes(p)));
+
+  const togglePort = (port: number) => {
+    if (!profile) return;
+    const name = profile.name;
+    setPortChoice((current) => {
+      const ports = current[name] ?? profile.ports;
+      return {
+        ...current,
+        [name]: ports.includes(port) ? ports.filter((p) => p !== port) : [...ports, port],
+      };
+    });
+  };
+  const changeLimit = (key: keyof LimitDraft, value: string) => {
+    if (!profile || !draft) return;
+    setLimitDrafts((current) => ({ ...current, [profile.name]: { ...draft, [key]: value } }));
+  };
+
   const changeSite = (value: string) => {
     setChosenSite(value);
     setChosenExecution("");
@@ -137,25 +242,38 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
     }
   };
 
-  const currentOptions = (): DiscoveryStartOptions =>
-    multiSite && siteId
-      ? { siteId, executionTarget: execution, sensorId: execution === "sensor" ? sensorId : undefined }
+  const profileOptions = (): DiscoveryStartOptions =>
+    profile
+      ? {
+          profile: profile.name,
+          // Solo se envían si cambian respecto al perfil: lo demás lo decide el servidor.
+          ...(portsChanged ? { ports: finalPorts } : {}),
+          ...(limitCheck && Object.keys(limitCheck.changed).length > 0 ? { limits: limitCheck.changed } : {}),
+        }
       : {};
+
+  const currentOptions = (): DiscoveryStartOptions => ({
+    ...(multiSite && siteId
+      ? { siteId, executionTarget: execution, sensorId: execution === "sensor" ? sensorId : undefined }
+      : {}),
+    ...profileOptions(),
+  });
 
   const actions: JobActions = {
     onShowDevices: props.onShowDevices,
     // Repetir con el mismo site y destino que el job original.
     onRunAgain: (job) =>
-      void start(
-        job.target,
-        multiSite && job.site_id
+      void start(job.target, {
+        ...(multiSite && job.site_id
           ? {
               siteId: job.site_id,
               executionTarget: job.execution_target,
               sensorId: job.sensor_id ?? undefined,
             }
-          : {},
-      ),
+          : {}),
+        // Mismo perfil y puertos; los límites ajustados no se repiten (los fija quien tenga tune).
+        ...(job.profile ? { profile: job.profile, ports: rerunPorts(job, catalog) } : {}),
+      }),
     onChanged: props.onChanged,
     canAdminister,
     adminReason,
@@ -174,10 +292,16 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
   const localEnabled = Boolean(scope?.enabled);
   const siteActive = !multiSite || selectedSite?.status === "active";
   const loadingNetworks = execution === "local" ? !scope : siteNetworks.loading;
+  // Ayuda en cliente: con perfil avanzado, una red mayor que su máximo de hosts se rechazaría.
+  const maxHosts = profile ? (limitCheck?.changed.max_hosts ?? profile.limits.max_hosts) : undefined;
+  const scopeTooLarge = maxHosts !== undefined && selected !== undefined && selected.hosts > maxHosts;
   const ready =
     siteActive &&
     Boolean(target) &&
-    (execution === "local" ? localEnabled : Boolean(sensorId));
+    (execution === "local" ? localEnabled : Boolean(sensorId)) &&
+    !portsError &&
+    !limitsInvalid &&
+    !scopeTooLarge;
 
   return (
     <Modal title="Iniciar descubrimiento" onClose={busy ? () => undefined : onClose} wide>
@@ -325,7 +449,7 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
                 <dt>Direcciones a sondear</dt>
                 <dd>{selected?.hosts ?? "—"}</dd>
               </div>
-              {execution === "local" && scope && (
+              {execution === "local" && scope && !profile && (
                 <>
                   <div className="field">
                     <dt>Puertos TCP</dt>
@@ -344,6 +468,31 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
                 </>
               )}
             </dl>
+            <DiscoveryProfileFields
+              catalog={catalog}
+              catalogError={profiles.error}
+              value={profileChoice}
+              onChange={(value) => {
+                setChosenProfile(value);
+                setError(undefined);
+              }}
+              advancedBlocked={advancedBlocked}
+              selectedPorts={selectedPorts}
+              onTogglePort={togglePort}
+              extraPorts={extraPorts}
+              onExtraPorts={setExtraPorts}
+              portsError={portsError}
+              limits={draft}
+              onLimit={changeLimit}
+              limitCheck={limitCheck}
+              disabled={busy}
+            />
+            {scopeTooLarge && (
+              <div className="banner banner--warn" role="alert">
+                La red tiene {selected?.hosts} direcciones y el perfil admite como máximo {maxHosts} hosts.
+                {canTune ? " Sube el máximo de hosts o elige una red más pequeña." : " Elige una red más pequeña."}
+              </div>
+            )}
             <p className="muted small" role="status">
               Estado:{" "}
               {running
@@ -386,4 +535,15 @@ export function DiscoveryModal(props: DiscoveryModalProps) {
       </form>
     </Modal>
   );
+}
+
+/** Puertos de un job avanzado para repetirlo; sin tune solo se repiten los del perfil actual. */
+function rerunPorts(job: DiscoveryJob, catalog: DiscoveryProfileCatalog | undefined): number[] | undefined {
+  const ports = job.parameters?.ports;
+  if (!Array.isArray(ports) || !ports.every((p): p is number => typeof p === "number")) return undefined;
+  const profile = catalog?.profiles.find((p) => p.name === job.profile);
+  if (!profile) return undefined;
+  const same = ports.length === profile.ports.length && ports.every((p) => profile.ports.includes(p));
+  if (same) return undefined;
+  return catalog?.can_tune || ports.every((p) => profile.ports.includes(p)) ? ports : undefined;
 }

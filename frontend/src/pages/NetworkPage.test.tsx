@@ -571,3 +571,39 @@ describe("NetworkPage: identificación de dispositivos", () => {
     expect(within(row("192.168.50.12")).getByText("Desconocido")).toBeInTheDocument();
   });
 });
+
+describe("NetworkPage: observaciones de red (Fase 6A)", () => {
+  it("la pestaña Observaciones de red pagina en el servidor y el viewer puede leerla", async () => {
+    let query: URLSearchParams | undefined;
+    routes["GET /discovery/observations"] = (_init, url) => {
+      query = url.searchParams;
+      return { body: { items: [], total: 0, limit: 50, offset: 0 } };
+    };
+    renderPage("viewer");
+    const tabs = await screen.findByRole("tablist", { name: "Vistas de red" });
+    const assetsTab = within(tabs).getByRole("tab", { name: "Activos de red" });
+    expect(assetsTab).toHaveAttribute("aria-selected", "true");
+    // Hasta abrir la pestaña no se consulta nada de observaciones.
+    expect(calls.some((c) => c.path === "/discovery/observations")).toBe(false);
+
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Observaciones de red" }));
+    const panel = await screen.findByRole("region", { name: "Observaciones de red" });
+    expect(await within(panel).findByText("Sin observaciones")).toBeInTheDocument();
+    expect(query?.get("latest")).toBe("true");
+    expect(query?.get("limit")).toBe("50");
+    expect(screen.queryByRole("region", { name: "Activos de red" })).not.toBeInTheDocument();
+    expect(calls.some((c) => c.method !== "GET")).toBe(false);
+
+    fireEvent.click(assetsTab);
+    expect(await screen.findByRole("region", { name: "Activos de red" })).toBeInTheDocument();
+  });
+
+  it("el historial muestra el perfil de cada ejecución", async () => {
+    routes["GET /discovery/jobs"] = () => ({
+      body: { items: [{ ...COMPLETED, profile: "quick", job_type: "discovery_advanced" }] },
+    });
+    renderPage();
+    const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
+    expect(await within(history).findByText("Quick")).toBeInTheDocument();
+  });
+});

@@ -28,6 +28,7 @@ from collections.abc import Callable
 from app.core.config import get_settings
 from app.core.exceptions import ConflictError
 from app.db.session import get_sessionmaker
+from app.discovery.profiles import ResolvedProfile
 from app.services.alert_service import AlertThresholds
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 
@@ -61,7 +62,7 @@ class DiscoveryRunner:
     def service(self) -> DiscoveryService:
         return self._service
 
-    def submit(self, target: str, via: str) -> uuid.UUID:
+    def submit(self, target: str, via: str, profile: ResolvedProfile | None = None) -> uuid.UUID:
         """Crea el job en cola y lo programa. Devuelve su public_id.
 
         Lanza TargetError (fuera de la allowlist), DiscoveryBusyError (red ocupada) o
@@ -72,7 +73,7 @@ class DiscoveryRunner:
         with self._lock:
             if len(self._pending) >= MAX_PENDING:
                 raise DiscoveryQueueFullError("Too many discovery jobs queued; retry later")
-            job_id, public_id = self._service.enqueue(target, via)
+            job_id, public_id = self._service.enqueue(target, via, profile)
             self._pending.append(job_id)
             self._ensure_threads()
         self._queue.put(job_id)

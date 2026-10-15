@@ -249,6 +249,13 @@ class SensorConfig(ResponseModel):
     max_concurrency: int
     max_probes_per_second: int
     max_timeout_ms: int
+    # Fase 6A: topes de discovery_advanced (los sensores 0.1.x ignoran estas claves).
+    advanced_max_timeout_ms: int
+    max_dns_timeout_ms: int
+    max_tcp_retries: int
+    max_dns_queries: int
+    advanced_max_ports: int
+    max_deadline_seconds: int
 
 
 class SensorEnrollRequest(RequestModel):
@@ -359,6 +366,10 @@ class ObservationIn(RequestModel):
     )
     ports: list[PortObservation] = Field(default_factory=list)
     sources: list[Literal["icmp", "tcp", "arp"]] = Field(default_factory=list, max_length=3)
+    # Fase 6A (discovery_advanced): tiempo de TCP connect medido y confirmación del DNS
+    # inverso con una consulta directa. Opcionales: un sensor 0.1.x no los envía.
+    rtt_ms: int | None = Field(default=None, ge=0, le=120_000)
+    forward_dns_match: bool | None = None
     observed_at: AwareDatetime
 
     @field_validator("address")

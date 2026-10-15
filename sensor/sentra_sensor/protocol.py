@@ -24,6 +24,13 @@ def _int(data: dict[str, Any], key: str, low: int, high: int) -> int:
     return max(low, min(high, value))
 
 
+def _opt_int(data: dict[str, Any], key: str, low: int, high: int, default: int) -> int:
+    """Clave nueva de la Fase 6A: un servidor anterior no la envía y se usa `default`."""
+    if key not in data:
+        return default
+    return _int(data, key, low, high)
+
+
 @dataclass(frozen=True)
 class ServerConfig:
     site_id: str
@@ -39,6 +46,14 @@ class ServerConfig:
     max_concurrency: int
     max_probes_per_second: int
     max_timeout_ms: int
+    # Fase 6A: topes de discovery_advanced. Con un servidor 5F (sin estas claves) quedan en
+    # valores que no permiten nada más que lo básico (0 reintentos, 0 consultas DNS).
+    advanced_max_timeout_ms: int = 0
+    max_dns_timeout_ms: int = 0
+    max_tcp_retries: int = 0
+    max_dns_queries: int = 0
+    advanced_max_ports: int = 0
+    max_deadline_seconds: int = 0
 
     @classmethod
     def parse(cls, data: object) -> "ServerConfig":
@@ -76,6 +91,12 @@ class ServerConfig:
             max_concurrency=_int(data, "max_concurrency", 1, 4096),
             max_probes_per_second=_int(data, "max_probes_per_second", 1, 100_000),
             max_timeout_ms=_int(data, "max_timeout_ms", 50, 120_000),
+            advanced_max_timeout_ms=_opt_int(data, "advanced_max_timeout_ms", 50, 10_000, 0),
+            max_dns_timeout_ms=_opt_int(data, "max_dns_timeout_ms", 50, 10_000, 0),
+            max_tcp_retries=_opt_int(data, "max_tcp_retries", 0, 3, 0),
+            max_dns_queries=_opt_int(data, "max_dns_queries", 0, 100_000, 0),
+            advanced_max_ports=_opt_int(data, "advanced_max_ports", 1, 1024, 0),
+            max_deadline_seconds=_opt_int(data, "max_deadline_seconds", 60, 86_400, 0),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -93,4 +114,10 @@ class ServerConfig:
             "max_concurrency": self.max_concurrency,
             "max_probes_per_second": self.max_probes_per_second,
             "max_timeout_ms": self.max_timeout_ms,
+            "advanced_max_timeout_ms": self.advanced_max_timeout_ms,
+            "max_dns_timeout_ms": self.max_dns_timeout_ms,
+            "max_tcp_retries": self.max_tcp_retries,
+            "max_dns_queries": self.max_dns_queries,
+            "advanced_max_ports": self.advanced_max_ports,
+            "max_deadline_seconds": self.max_deadline_seconds,
         }

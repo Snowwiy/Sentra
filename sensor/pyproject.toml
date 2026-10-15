@@ -1,6 +1,6 @@
 [project]
 name = "sentra-sensor"
-version = "0.1.0"
+version = "0.2.0"
 description = "Sentra distributed sensor: authorized network discovery inside a remote site"
 requires-python = ">=3.12"
 # Solo biblioteca estándar: menos superficie de ataque y despliegue trivial en sites remotos.

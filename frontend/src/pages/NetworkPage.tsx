@@ -8,6 +8,7 @@ import {
   DiscoveryModal,
 } from "../components/discovery/DiscoveryModal";
 import { JobsPanel, SchedulePanel, ScopePanel } from "../components/discovery/DiscoveryPanels";
+import { NetworkObservations } from "../components/discovery/NetworkObservations";
 import { FilterSelect, Pager, SearchInput, SortHeader, Toolbar } from "../components/ListControls";
 import { AssetName, DeviceTypeCell } from "../components/DeviceIdentity";
 import { DEVICE_TYPE_LABELS, METHOD_LABELS, MethodBadge, PortList } from "../components/NetworkBadges";
@@ -33,6 +34,13 @@ const SCHEDULE_MS = 30_000;
 const PAGE_SIZE = 50;
 
 type ModalState = { jobId?: string } | undefined;
+
+/** Fase 6A: activos de red (vista de siempre) u observaciones de los scans avanzados. */
+type NetworkTab = "assets" | "observations";
+const TABS: { key: NetworkTab; label: string }[] = [
+  { key: "assets", label: "Activos de red" },
+  { key: "observations", label: "Observaciones de red" },
+];
 
 type Key = "ip" | "name" | "type" | "status" | "method" | "first" | "last" | "ports";
 
@@ -107,6 +115,7 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
   const schedule = usePolling(fetchSchedule, SCHEDULE_MS);
   const consoleState = useConsole(DISCOVERY_FEATURE, "discovery:run");
   const [modal, setModal] = useState<ModalState>();
+  const [tab, setTab] = useState<NetworkTab>("assets");
   const tableRef = useRef<HTMLElement>(null);
   const navigate = useNavigate();
 
@@ -142,6 +151,7 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
     // La red del job y los descubiertos más recientes primero: los nuevos quedan arriba.
     list.setFilter("subnet", target);
     list.setSort({ key: "first", dir: "desc" });
+    setTab("assets");
     setModal(undefined);
     tableRef.current?.scrollIntoView?.({ behavior: "smooth", block: "start" });
   };
@@ -247,118 +257,145 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
         <ScopePanel scope={scope.data} error={scope.error} />
       </div>
 
-      <section className="panel" aria-label="Activos de red" ref={tableRef}>
-        <div className="panel__toolbar">
-          <h2>Activos de red</h2>
-          {discovering && <span className="muted small">Actualizando mientras dura el descubrimiento…</span>}
+      <nav className="tabs" role="tablist" aria-label="Vistas de red">
+        {TABS.map(({ key, label }) => (
+          <button
+            key={key}
+            type="button"
+            role="tab"
+            id={`network-tab-${key}`}
+            aria-selected={tab === key}
+            aria-controls={`network-panel-${key}`}
+            className={`tabs__item${tab === key ? " tabs__item--active" : ""}`}
+            onClick={() => setTab(key)}
+          >
+            {label}
+          </button>
+        ))}
+      </nav>
+
+      {tab === "observations" && (
+        <div role="tabpanel" id="network-panel-observations" aria-labelledby="network-tab-observations">
+          <NetworkObservations scopeId={scopeId} allowedNetworks={subnets} />
         </div>
-        <Toolbar>
-          <SearchInput
-            value={list.query}
-            onChange={list.setQuery}
-            placeholder="Buscar nombre, IP o MAC"
-            label="Buscar en la red"
-          />
-          <FilterSelect
-            label="Método"
-            value={list.filters.method}
-            options={METHODS.map((m) => ({ value: m, label: METHOD_LABELS[m] }))}
-            onChange={(v) => list.setFilter("method", v)}
-          />
-          <FilterSelect
-            label="Estado"
-            value={list.filters.status}
-            options={[
-              { value: "online", label: "Online" },
-              { value: "offline", label: "Offline" },
-              { value: "unknown", label: "Unknown" },
-            ]}
-            onChange={(v) => list.setFilter("status", v)}
-          />
-          <FilterSelect label="Tipo" value={list.filters.type} options={types} onChange={(v) => list.setFilter("type", v)} />
-          {subnets.length > 0 && (
-            <FilterSelect
-              label="Subred"
-              value={list.filters.subnet}
-              // "Ver dispositivos" de un job sobre una subred (CLI) también debe verse elegido.
-              options={
-                list.filters.subnet && !subnets.includes(list.filters.subnet)
-                  ? [...subnets, list.filters.subnet]
-                  : subnets
-              }
-              onChange={(v) => list.setFilter("subnet", v)}
-              allLabel="Todas"
-            />
-          )}
-        </Toolbar>
-        {items.length === 0 && !filtered && list.page === 1 ? (
-          <EmptyState title="Sin activos">
-            Pulsa «Iniciar descubrimiento» para analizar una red autorizada, o instala el agente en
-            un equipo.
-          </EmptyState>
-        ) : page.total === 0 ? (
-          <EmptyState title="Ningún activo coincide con el filtro" />
-        ) : (
-          <>
-            <div className="table-wrap">
-              <table className="table">
-                <thead>
-                  <tr>
-                    {header("Dispositivo", "name")}
-                    {header("IP", "ip")}
-                    <th>MAC / NIC</th>
-                    {header("Tipo", "type")}
-                    {header("Estado", "status")}
-                    {header("Método", "method")}
-                    {showSite && <th>Site</th>}
-                    {header("Descubierto", "first")}
-                    {header("Visto en red", "last")}
-                    {header("Puertos", "ports", true)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {page.items.map((asset) => (
-                    <tr
-                      key={asset.asset_id}
-                      className="table__row--link"
-                      onClick={() => navigate(`/assets/${asset.asset_id}`)}
-                    >
-                      <td>
-                        <AssetName asset={asset} showIp={false} />
-                      </td>
-                      <td className="mono">{asset.primary_ip}</td>
-                      <td className="small muted">
-                        <span className="mono">{asset.mac_address ?? "—"}</span>
-                        {asset.network_adapter_vendor && <div>NIC {asset.network_adapter_vendor}</div>}
-                      </td>
-                      <td>
-                        <DeviceTypeCell asset={asset} />
-                      </td>
-                      <td>
-                        <StatusBadge status={asset.status} />
-                      </td>
-                      <td>
-                        <MethodBadge method={asset.monitoring_method} />
-                      </td>
-                      {showSite && <td className="small">{asset.site_name}</td>}
-                      <td className="muted" title={formatDateTime(asset.discovered_at ?? asset.first_seen_at)}>
-                        {formatRelative(asset.discovered_at ?? asset.first_seen_at)}
-                      </td>
-                      <td className="muted" title={formatDateTime(asset.last_network_seen_at)}>
-                        {asset.last_network_seen_at ? formatRelative(asset.last_network_seen_at) : "—"}
-                      </td>
-                      <td>
-                        <PortList ports={asset.open_ports} />
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+      )}
+
+      {tab === "assets" && (
+        <div role="tabpanel" id="network-panel-assets" aria-labelledby="network-tab-assets">
+          <section className="panel" aria-label="Activos de red" ref={tableRef}>
+            <div className="panel__toolbar">
+              <h2>Activos de red</h2>
+              {discovering && <span className="muted small">Actualizando mientras dura el descubrimiento…</span>}
             </div>
-            <Pager page={page.page} pages={page.pages} total={page.total} onPage={list.setPage} noun="activos" />
-          </>
-        )}
-      </section>
+            <Toolbar>
+              <SearchInput
+                value={list.query}
+                onChange={list.setQuery}
+                placeholder="Buscar nombre, IP o MAC"
+                label="Buscar en la red"
+              />
+              <FilterSelect
+                label="Método"
+                value={list.filters.method}
+                options={METHODS.map((m) => ({ value: m, label: METHOD_LABELS[m] }))}
+                onChange={(v) => list.setFilter("method", v)}
+              />
+              <FilterSelect
+                label="Estado"
+                value={list.filters.status}
+                options={[
+                  { value: "online", label: "Online" },
+                  { value: "offline", label: "Offline" },
+                  { value: "unknown", label: "Unknown" },
+                ]}
+                onChange={(v) => list.setFilter("status", v)}
+              />
+              <FilterSelect label="Tipo" value={list.filters.type} options={types} onChange={(v) => list.setFilter("type", v)} />
+              {subnets.length > 0 && (
+                <FilterSelect
+                  label="Subred"
+                  value={list.filters.subnet}
+                  // "Ver dispositivos" de un job sobre una subred (CLI) también debe verse elegido.
+                  options={
+                    list.filters.subnet && !subnets.includes(list.filters.subnet)
+                      ? [...subnets, list.filters.subnet]
+                      : subnets
+                  }
+                  onChange={(v) => list.setFilter("subnet", v)}
+                  allLabel="Todas"
+                />
+              )}
+            </Toolbar>
+            {items.length === 0 && !filtered && list.page === 1 ? (
+              <EmptyState title="Sin activos">
+                Pulsa «Iniciar descubrimiento» para analizar una red autorizada, o instala el agente en
+                un equipo.
+              </EmptyState>
+            ) : page.total === 0 ? (
+              <EmptyState title="Ningún activo coincide con el filtro" />
+            ) : (
+              <>
+                <div className="table-wrap">
+                  <table className="table">
+                    <thead>
+                      <tr>
+                        {header("Dispositivo", "name")}
+                        {header("IP", "ip")}
+                        <th>MAC / NIC</th>
+                        {header("Tipo", "type")}
+                        {header("Estado", "status")}
+                        {header("Método", "method")}
+                        {showSite && <th>Site</th>}
+                        {header("Descubierto", "first")}
+                        {header("Visto en red", "last")}
+                        {header("Puertos", "ports", true)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {page.items.map((asset) => (
+                        <tr
+                          key={asset.asset_id}
+                          className="table__row--link"
+                          onClick={() => navigate(`/assets/${asset.asset_id}`)}
+                        >
+                          <td>
+                            <AssetName asset={asset} showIp={false} />
+                          </td>
+                          <td className="mono">{asset.primary_ip}</td>
+                          <td className="small muted">
+                            <span className="mono">{asset.mac_address ?? "—"}</span>
+                            {asset.network_adapter_vendor && <div>NIC {asset.network_adapter_vendor}</div>}
+                          </td>
+                          <td>
+                            <DeviceTypeCell asset={asset} />
+                          </td>
+                          <td>
+                            <StatusBadge status={asset.status} />
+                          </td>
+                          <td>
+                            <MethodBadge method={asset.monitoring_method} />
+                          </td>
+                          {showSite && <td className="small">{asset.site_name}</td>}
+                          <td className="muted" title={formatDateTime(asset.discovered_at ?? asset.first_seen_at)}>
+                            {formatRelative(asset.discovered_at ?? asset.first_seen_at)}
+                          </td>
+                          <td className="muted" title={formatDateTime(asset.last_network_seen_at)}>
+                            {asset.last_network_seen_at ? formatRelative(asset.last_network_seen_at) : "—"}
+                          </td>
+                          <td>
+                            <PortList ports={asset.open_ports} />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <Pager page={page.page} pages={page.pages} total={page.total} onPage={list.setPage} noun="activos" />
+              </>
+            )}
+          </section>
+        </div>
+      )}
 
       <JobsPanel
         jobs={jobs.data?.items}

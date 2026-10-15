@@ -8,20 +8,35 @@ tipo y una capacidad nuevos con su validación, nunca un campo libre.
 
 import re
 
-# Única tarea de 5F: descubrimiento básico (liveness ICMP/TCP, puertos TCP, ARP, DNS inverso).
+# Tarea de 5F: descubrimiento básico (liveness ICMP/TCP, puertos TCP, ARP, DNS inverso).
 DISCOVERY_BASIC = "discovery_basic"
-JOB_TYPES: frozenset[str] = frozenset({DISCOVERY_BASIC})
+# Fase 6A: descubrimiento avanzado con perfil (quick/standard/deep), esquema versionado
+# (app/discovery/profiles.py) y límites explícitos. discovery_basic se mantiene sin cambios
+# para los sensores 0.1.x, que no necesitan re-enrolarse.
+DISCOVERY_ADVANCED = "discovery_advanced"
+JOB_TYPES: frozenset[str] = frozenset({DISCOVERY_BASIC, DISCOVERY_ADVANCED})
 
+ADVANCED_CAPABILITY = "network.discovery.advanced"
 # Capacidades que el servidor reconoce. Lo que el sensor declare fuera de esta lista se
 # descarta (un sensor no puede "anunciar" snmp para recibir trabajos que aún no existen).
 CAPABILITIES: frozenset[str] = frozenset(
-    {"network.discovery.basic", "network.arp", "network.icmp", "network.tcp"}
+    {
+        "network.discovery.basic",
+        ADVANCED_CAPABILITY,
+        "network.arp",
+        "network.icmp",
+        "network.tcp",
+        "network.dns",
+    }
 )
 # Capacidad imprescindible para recibir un job de cada tipo.
-REQUIRED_CAPABILITY = {DISCOVERY_BASIC: "network.discovery.basic"}
+REQUIRED_CAPABILITY = {
+    DISCOVERY_BASIC: "network.discovery.basic",
+    DISCOVERY_ADVANCED: ADVANCED_CAPABILITY,
+}
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.1.0"
+SENSOR_RUNTIME_VERSION = "0.2.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

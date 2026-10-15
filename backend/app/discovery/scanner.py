@@ -49,6 +49,18 @@ class ScanConfig:
     identify: bool = True
     # Seconds for the whole scan (None: no limit).
     deadline: float | None = None
+    # Fase 6A (perfiles avanzados). Los valores por defecto reproducen exactamente el
+    # discovery básico anterior: sin reintentos, sin DNS directo y sin presupuesto DNS.
+    # Reintentos de puertos sin respuesta, solo en la fase de detalle (hosts ya vivos): en la
+    # de liveness un host apagado multiplicaría su coste sin aportar evidencia.
+    tcp_retries: int = 0
+    # Confirmar el nombre del DNS inverso con una consulta directa (FCrDNS). Solo compara:
+    # nunca se conecta a las direcciones que devuelva (sin riesgo de DNS rebinding/SSRF).
+    forward_dns: bool = False
+    # Timeout de cada consulta DNS (None: el histórico max(timeout, 1 s)).
+    dns_timeout: float | None = None
+    # Consultas DNS máximas del scan (inversas + directas). None: sin límite (básico).
+    max_dns_queries: int | None = None
 
 
 @dataclass
@@ -65,6 +77,13 @@ class HostObservation:
     upnp: UpnpDescription | None = None
     # State of every port that was probed.
     ports: dict[int, PortState] = field(default_factory=dict)
+    # Fase 6A: menor tiempo de un TCP connect que obtuvo respuesta (open o RST), medido de
+    # verdad en este scan. None = no se midió (nunca se inventa: el ping del sistema incluye
+    # el arranque del proceso y no es un RTT).
+    rtt_ms: int | None = None
+    # Fase 6A: ¿el nombre del DNS inverso resuelve de vuelta a esta dirección? None = no se
+    # comprobó. Es evidencia, no identidad.
+    forward_dns_match: bool | None = None
 
     @property
     def open_ports(self) -> list[int]:
@@ -127,6 +146,12 @@ class Prober(Protocol):
     async def reverse_dns(self, address: IPAddress, timeout: float) -> str | None: ...
 
 
+class ForwardResolver(Protocol):
+    """Opcional (Fase 6A): probers sin este método simplemente no confirman nombres."""
+
+    async def forward_dns(self, name: str, timeout: float) -> set[str] | None: ...
+
+
 class SystemProber:
     """The real probes of this host's operating system (see probes.py)."""
 
@@ -150,6 +175,9 @@ class SystemProber:
 
     async def reverse_dns(self, address: IPAddress, timeout: float) -> str | None:
         return await probes.reverse_dns(self._executor, address, timeout)
+
+    async def forward_dns(self, name: str, timeout: float) -> set[str] | None:
+        return await probes.forward_dns(self._executor, name, timeout)
 
     def close(self) -> None:
         self._executor.shutdown(wait=False, cancel_futures=True)
@@ -207,6 +235,9 @@ class NetworkScanner:
         self._alive = 0
         self._details_total = 0
         self._details_done = 0
+        # Presupuesto de consultas DNS del scan (Fase 6A); None = sin límite.
+        self._dns_left = config.max_dns_queries
+        self._dns_budget_logged = False
 
     def progress(self) -> ScanProgress:
         return ScanProgress(
@@ -297,7 +328,18 @@ class NetworkScanner:
     async def _details(
         self, address: IPAddress, obs: HostObservation, ports: tuple[int, ...]
     ) -> None:
-        tasks: list[Awaitable[None]] = [self._tcp(address, obs, port) for port in ports]
+        retries = self._config.tcp_retries
+        # Con reintentos, los puertos de liveness que quedaron sin respuesta en un host que SÍ
+        # está vivo se vuelven a sondear (mismo criterio que el sensor). Nunca en direcciones
+        # vacías: la fase de liveness no reintenta.
+        again = (
+            tuple(p for p, state in obs.ports.items() if state == PortState.FILTERED)
+            if retries
+            else ()
+        )
+        tasks: list[Awaitable[None]] = [self._tcp(address, obs, port, retries) for port in ports]
+        # El intento de liveness ya cuenta como el primero.
+        tasks.extend(self._tcp(address, obs, port, retries - 1) for port in again)
         if self._config.reverse_dns:
             tasks.append(self._rdns(address, obs))
         if self._identity is not None:
@@ -315,17 +357,33 @@ class NetworkScanner:
             self._probes += 1
             return await probe()
 
-    async def _tcp(self, address: IPAddress, obs: HostObservation, port: int) -> None:
-        try:
-            state = await self._limited(
-                lambda: self._prober.tcp(address, port, self._config.timeout)
-            )
-        except _StopScanError:
-            raise
-        except Exception as exc:
-            self._error(f"{address}:{port}: {exc!r}")
-            self._probe_failed.add(str(address))
-            return
+    async def _timed_tcp(self, address: IPAddress, port: int) -> tuple[PortState, float]:
+        loop = asyncio.get_running_loop()
+        started = loop.time()
+        state = await self._prober.tcp(address, port, self._config.timeout)
+        return state, loop.time() - started
+
+    async def _tcp(
+        self, address: IPAddress, obs: HostObservation, port: int, retries: int = 0
+    ) -> None:
+        attempt = 0
+        while True:
+            try:
+                state, elapsed = await self._limited(lambda: self._timed_tcp(address, port))
+            except _StopScanError:
+                raise
+            except Exception as exc:
+                self._error(f"{address}:{port}: {exc!r}")
+                self._probe_failed.add(str(address))
+                return
+            # Solo se reintenta "sin respuesta": un RST o una conexión aceptada ya son la
+            # respuesta definitiva, y un error se informa en lugar de insistir.
+            if state != PortState.FILTERED or attempt >= retries:
+                break
+            attempt += 1
+        if state in (PortState.OPEN, PortState.CLOSED):
+            measured = max(0, round(elapsed * 1000))
+            obs.rtt_ms = measured if obs.rtt_ms is None else min(obs.rtt_ms, measured)
         obs.ports[port] = state
         if state in (PortState.OPEN, PortState.CLOSED):
             obs.alive = True
@@ -345,15 +403,44 @@ class NetworkScanner:
             obs.alive = True
             obs.sources.add("icmp")
 
+    def _dns_allowed(self) -> bool:
+        if self._dns_left is None:
+            return True
+        if self._dns_left <= 0:
+            if not self._dns_budget_logged:
+                self._dns_budget_logged = True
+                self._error("dns query budget exhausted: remaining hosts without DNS")
+            return False
+        self._dns_left -= 1
+        return True
+
     async def _rdns(self, address: IPAddress, obs: HostObservation) -> None:
+        timeout = self._config.dns_timeout or max(self._config.timeout, 1.0)
+        if not self._dns_allowed():
+            return
         try:
             obs.reverse_dns = await self._limited(
-                lambda: self._prober.reverse_dns(address, max(self._config.timeout, 1.0))
+                lambda: self._prober.reverse_dns(address, timeout)
             )
         except _StopScanError:
             raise
         except Exception as exc:
             self._error(f"{address} reverse dns: {exc!r}")
+            return
+        resolver = getattr(self._prober, "forward_dns", None)
+        name = obs.reverse_dns
+        if not (self._config.forward_dns and name and resolver) or not self._dns_allowed():
+            return
+        try:
+            addresses = await self._limited(lambda: resolver(name, timeout))
+        except _StopScanError:
+            raise
+        except Exception as exc:
+            self._error(f"{address} forward dns: {exc!r}")
+            return
+        # None = la consulta no dio respuesta (timeout, NXDOMAIN): no se concluye nada.
+        if addresses is not None:
+            obs.forward_dns_match = str(address) in addresses
 
     async def _ssdp_search(self, addresses: set[str]) -> None:
         identity = self._identity

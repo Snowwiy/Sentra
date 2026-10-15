@@ -11,8 +11,8 @@ Modelo de amenazas resumido:
   credencial (nunca del cuerpo), cada dirección observada debe caer dentro del target del job
   y cada hora se valida contra el desfase permitido. El servidor decide la identidad de los
   activos con su propia lógica (ResultApplier, el mismo que el discovery local).
-- Catálogo cerrado: el único tipo de job es discovery_basic con parámetros fijos generados
-  por el servidor. No hay campo de comando ni ejecución arbitraria.
+- Catálogo cerrado: discovery_basic y (Fase 6A) discovery_advanced, con parámetros fijos
+  generados por el servidor. No hay campo de comando ni ejecución arbitraria.
 - Entrega al menos una vez + idempotencia en el servidor: lotes por batch_id (mismo
   contenido = duplicado inocuo; otro contenido = 409), observaciones fusionadas por
   (job, dirección) y cierre repetido con el mismo intento = la misma respuesta.
@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import (
+    DiscoveryOptionsError,
     DiscoveryTargetError,
     SensorEnrollmentInvalidError,
     SensorForbiddenError,
@@ -58,6 +59,16 @@ from app.core.security import (
 )
 from app.discovery.ports import parse_ports
 from app.discovery.probes import PortState
+from app.discovery.profiles import (
+    HARD_MAX_DNS_QUERIES,
+    HARD_MAX_DNS_TIMEOUT_MS,
+    HARD_MAX_PORTS,
+    HARD_MAX_TCP_RETRIES,
+    HARD_MAX_TIMEOUT_MS,
+    ProfileError,
+    ResolvedProfile,
+    check_scope,
+)
 from app.discovery.scanner import HostObservation, ScanConfig, ScanResult
 from app.discovery.targets import (
     DiscoveryScope,
@@ -113,6 +124,7 @@ from app.schemas.site import (
     SensorSummary,
 )
 from app.sensors.catalog import (
+    DISCOVERY_ADVANCED,
     DISCOVERY_BASIC,
     JOB_TYPES,
     REQUIRED_CAPABILITY,
@@ -206,9 +218,21 @@ def cancel_jobs(session: Session, ids: Sequence[int], reason: str) -> int:
     if not ids:
         return 0
     now = datetime.now(UTC)
+    # Mismo orden de bloqueo que _job: primero los discovery, después los jobs de sensor.
+    session.execute(
+        select(DiscoveryJob.id)
+        .where(
+            DiscoveryJob.id.in_(
+                select(SensorJob.discovery_job_id).where(SensorJob.id.in_(list(ids)))
+            )
+        )
+        .order_by(DiscoveryJob.id)
+        .with_for_update()
+    )
     jobs = session.scalars(
         select(SensorJob)
         .where(SensorJob.id.in_(list(ids)), SensorJob.status.in_(OPEN_SENSOR_JOB_STATUSES))
+        .order_by(SensorJob.id)
         .with_for_update()
     ).all()
     for job in jobs:
@@ -365,6 +389,14 @@ def _config(session: Session, settings: Settings, sensor: Sensor, site: Site) ->
         max_concurrency=settings.discovery_concurrency,
         max_probes_per_second=settings.discovery_max_probes_per_second,
         max_timeout_ms=settings.discovery_timeout_ms,
+        # Fase 6A: topes de discovery_advanced. Un sensor 0.1.x ignora estas claves y nunca
+        # recibe jobs avanzados (no declara la capacidad).
+        advanced_max_timeout_ms=HARD_MAX_TIMEOUT_MS,
+        max_dns_timeout_ms=HARD_MAX_DNS_TIMEOUT_MS,
+        max_tcp_retries=HARD_MAX_TCP_RETRIES,
+        max_dns_queries=HARD_MAX_DNS_QUERIES,
+        advanced_max_ports=HARD_MAX_PORTS,
+        max_deadline_seconds=settings.discovery_job_timeout_minutes * 60,
     )
 
 
@@ -750,7 +782,13 @@ class SensorService:
     # --- discovery por sensor -----------------------------------------------------------------
 
     def create_discovery(
-        self, target: str, site_public: uuid.UUID, sensor_public: uuid.UUID, actor: Actor, via: str
+        self,
+        target: str,
+        site_public: uuid.UUID,
+        sensor_public: uuid.UUID,
+        actor: Actor,
+        via: str,
+        profile: ResolvedProfile | None = None,
     ) -> uuid.UUID:
         """Crea el discovery (en cola) y su job para el sensor indicado. Devuelve su public_id.
 
@@ -776,9 +814,14 @@ class SensorService:
             raise SiteConflictError("sensor_not_available", f"Sensor is {sensor.status}")
         if _version_status(sensor, settings) == "unsupported":
             raise SiteConflictError("sensor_not_available", "Sensor version is no longer supported")
-        if REQUIRED_CAPABILITY[DISCOVERY_BASIC] not in (sensor.capabilities or []):
+        job_type = DISCOVERY_BASIC if profile is None else DISCOVERY_ADVANCED
+        if REQUIRED_CAPABILITY[job_type] not in (sensor.capabilities or []):
+            # Fase 6A: un sensor 0.1.x solo declara discovery_basic; nunca recibe un job
+            # avanzado que no sabe validar ni ejecutar.
             raise SiteConflictError(
-                "sensor_not_available", "Sensor did not declare network discovery capability"
+                "sensor_not_available",
+                "Sensor did not declare the capability for this discovery type",
+                [{"required_capability": REQUIRED_CAPABILITY[job_type]}],
             )
         try:
             network = validate_network(
@@ -792,6 +835,15 @@ class SensorService:
             raise DiscoveryTargetError(
                 f"{network} is outside the enabled networks of site {site.name!r}: refused"
             )
+        hosts_total = sum(1 for _ in network.hosts())
+        if profile is not None:
+            try:
+                check_scope(profile, hosts_total)
+            except ProfileError as exc:
+                raise DiscoveryOptionsError(exc.code, str(exc), exc.details) from exc
+            parameters = profile.parameters(str(network), for_sensor=True)
+        else:
+            parameters = _job_parameters(settings, network)
         now = datetime.now(UTC)
         sweep(session, now, sensor.id)
         discovery = DiscoveryJob(
@@ -805,9 +857,10 @@ class SensorService:
             started_at=now,
             heartbeat_at=now,
             requested_via=via,
-            hosts_total=sum(1 for _ in network.hosts()),
+            hosts_total=hosts_total,
             progress={"phase": "queued"},
-            parameters=_job_parameters(settings, network),
+            parameters=parameters,
+            profile=profile.name if profile is not None else None,
             hosts_scanned=0,
             hosts_alive=0,
             hosts_new=0,
@@ -828,8 +881,8 @@ class SensorService:
         job = SensorJob(
             site_id=site.id,
             sensor_id=sensor.id,
-            job_type=DISCOVERY_BASIC,
-            parameters=_job_parameters(settings, network),
+            job_type=job_type,
+            parameters=dict(parameters),
             status="pending",
             created_by=actor.name,
             created_at=now,
@@ -847,7 +900,8 @@ class SensorService:
             target_type="sensor_job",
             target_id=job.public_id,
             details={
-                "job_type": DISCOVERY_BASIC,
+                "job_type": job_type,
+                "profile": profile.name if profile is not None else None,
                 "target": str(network),
                 "site_id": str(site.public_id),
                 "sensor_id": str(sensor.public_id),
@@ -864,7 +918,16 @@ class SensorService:
 
 def _payload_sha256(observations: list[ObservationIn]) -> str:
     """Huella canónica del contenido de un lote (orden de claves fijo)."""
-    data = [obs.model_dump(mode="json") for obs in observations]
+    data = []
+    for obs in observations:
+        item = obs.model_dump(mode="json")
+        # Fase 6A: los campos nuevos solo entran en la huella si vienen con valor. Así un
+        # lote de un sensor 0.1.x reenviado tras actualizar el servidor conserva su huella y
+        # sigue contando como duplicado inocuo, no como conflicto 409.
+        for key in ("rtt_ms", "forward_dns_match"):
+            if item.get(key) is None:
+                item.pop(key, None)
+        data.append(item)
     raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
 
@@ -1136,6 +1199,17 @@ class SensorProtocol:
         )
 
     def _job(self, sensor: Sensor, public_id: uuid.UUID) -> SensorJob:
+        # Orden de bloqueo fijo: discovery y después job de sensor, el mismo que usa la
+        # cancelación del operador (request_cancel → request_sensor_cancel). Al revés, un
+        # complete y un cancel simultáneos se bloqueaban mutuamente (deadlock → 503).
+        # discovery_job_id no cambia nunca, así que leerlo sin bloqueo es seguro.
+        discovery_id = self._session.scalar(
+            select(SensorJob.discovery_job_id).where(SensorJob.public_id == public_id)
+        )
+        if discovery_id is not None:
+            self._session.execute(
+                select(DiscoveryJob.id).where(DiscoveryJob.id == discovery_id).with_for_update()
+            )
         job = self._session.scalar(
             select(SensorJob).where(SensorJob.public_id == public_id).with_for_update()
         )
@@ -1274,6 +1348,8 @@ class SensorProtocol:
                         reverse_dns=obs.reverse_dns,
                         ports=ports,
                         sources=sorted(set(obs.sources)),
+                        rtt_ms=obs.rtt_ms,
+                        forward_dns_match=obs.forward_dns_match,
                         observed_at=obs.observed_at,
                         received_at=now,
                     )
@@ -1284,6 +1360,9 @@ class SensorProtocol:
                 row.mac = row.mac or obs.mac
                 row.hostname = obs.hostname or row.hostname
                 row.reverse_dns = obs.reverse_dns or row.reverse_dns
+                row.rtt_ms = _min_rtt(row.rtt_ms, obs.rtt_ms)
+                if obs.forward_dns_match is not None:
+                    row.forward_dns_match = obs.forward_dns_match
                 row.observed_at = max(row.observed_at, obs.observed_at)
                 row.received_at = now
         session.add(
@@ -1448,6 +1527,8 @@ class SensorProtocol:
                     mac=row.mac,
                     reverse_dns=row.reverse_dns,
                     ports={int(port): PortState(state) for port, state in row.ports.items()},
+                    rtt_ms=row.rtt_ms,
+                    forward_dns_match=row.forward_dns_match,
                 )
             )
         incomplete = missing_batches > 0 and body.outcome == "completed"
@@ -1487,9 +1568,15 @@ class SensorProtocol:
             )
         baseline = is_baseline(session, str(network), job.site_id)
         # Sin pasarelas: las del servidor no son las de la red remota del sensor.
-        return ResultApplier(session, config, thresholds, set(), site_id=job.site_id).apply(
-            discovery.id, network, result, baseline, stop_reason
-        )
+        return ResultApplier(
+            session,
+            config,
+            thresholds,
+            set(),
+            site_id=job.site_id,
+            executor="sensor",
+            sensor_id=job.sensor_id,
+        ).apply(discovery.id, network, result, baseline, stop_reason)
 
 
 def _merge_ports(current: dict[str, str], new: dict[str, str]) -> dict[str, str]:
@@ -1498,6 +1585,12 @@ def _merge_ports(current: dict[str, str], new: dict[str, str]) -> dict[str, str]
         if _PORT_RANK.get(state, 0) >= _PORT_RANK.get(merged.get(port, "filtered"), 0):
             merged[port] = state
     return merged
+
+
+def _min_rtt(current: int | None, new: int | None) -> int | None:
+    if current is None:
+        return new
+    return current if new is None else min(current, new)
 
 
 def _merge_in(first: ObservationIn, second: ObservationIn) -> ObservationIn:
@@ -1514,6 +1607,10 @@ def _merge_in(first: ObservationIn, second: ObservationIn) -> ObservationIn:
                 PortObservation(port=int(port), state=state) for port, state in ports.items()
             ],
             "sources": sorted(set(first.sources) | set(second.sources)),
+            "rtt_ms": _min_rtt(first.rtt_ms, second.rtt_ms),
+            "forward_dns_match": second.forward_dns_match
+            if second.forward_dns_match is not None
+            else first.forward_dns_match,
             "observed_at": max(first.observed_at, second.observed_at),
         }
     )

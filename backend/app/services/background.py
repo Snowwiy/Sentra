@@ -237,6 +237,7 @@ def purge_old_data() -> None:
                 "alerts": result.alerts,
                 "detections": result.detections,
                 "risk_snapshots": result.risk_snapshots,
+                "discovery_observations": result.discovery_observations,
             },
         )
 

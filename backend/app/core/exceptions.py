@@ -396,3 +396,22 @@ def register_exception_handlers(app: FastAPI) -> None:
     app.add_exception_handler(OperationalError, _database_unavailable_handler)
     app.add_exception_handler(PoolTimeoutError, _database_unavailable_handler)
     app.add_exception_handler(Exception, _unhandled_error_handler)
+
+
+# --- Fase 6A: Advanced Network Discovery ----------------------------------------------------
+
+
+class DiscoveryOptionsError(SentraError):
+    """Perfil, puertos o límites de un discovery avanzado no válidos (422, código concreto)."""
+
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, code: str, message: str, details: list[dict[str, Any]] | None = None):
+        super().__init__(message, details)
+        self.code = code
+
+
+class DiscoveryTuneForbiddenError(ForbiddenError):
+    # Límites o puertos fuera del perfil sin el permiso discovery:tune. Se rechaza en lugar
+    # de recortar en silencio: el operador creería que el scan usó sus valores.
+    code = "discovery_tune_forbidden"

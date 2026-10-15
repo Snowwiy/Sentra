@@ -14,15 +14,21 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Row, select
+from sqlalchemy import Row, func, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
 from app.core.exceptions import NotFoundError
 from app.discovery.ports import SENSITIVE_PORTS, parse_ports
+from app.discovery.profiles import PROFILE_NAMES
 from app.models.asset import Asset
 from app.models.change import AssetChange
-from app.models.discovery import ACTIVE_JOB_STATUSES, DiscoveryJob, DiscoveryTrigger
+from app.models.discovery import (
+    ACTIVE_JOB_STATUSES,
+    DiscoveryJob,
+    DiscoveryObservation,
+    DiscoveryTrigger,
+)
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
@@ -263,6 +269,8 @@ class _JobRefs:
 
     sites: dict[int, SiteRef]
     sensors: dict[int, tuple[UUID, str]]
+    # Fase 6A: job → (observaciones, de ellas "no_response"), en una consulta agrupada.
+    observations: dict[int, tuple[int, int]]
 
     @classmethod
     def load(cls, session: Session, jobs: Sequence[DiscoveryJob]) -> "_JobRefs":
@@ -279,7 +287,26 @@ class _JobRefs:
             if sensor_ids
             else {}
         )
-        return cls(site_refs(session), sensors)
+        job_ids = [job.id for job in jobs]
+        observations = (
+            {
+                int(row.job_id): (int(row.total), int(row.unresponsive))
+                for row in session.execute(
+                    select(
+                        DiscoveryObservation.job_id,
+                        func.count().label("total"),
+                        func.count()
+                        .filter(DiscoveryObservation.reachability == "no_response")
+                        .label("unresponsive"),
+                    )
+                    .where(DiscoveryObservation.job_id.in_(job_ids))
+                    .group_by(DiscoveryObservation.job_id)
+                )
+            }
+            if job_ids
+            else {}
+        )
+        return cls(site_refs(session), sensors, observations)
 
 
 def _job_read(job: DiscoveryJob, refs: _JobRefs) -> DiscoveryJobRead:
@@ -316,4 +343,8 @@ def _job_read(job: DiscoveryJob, refs: _JobRefs) -> DiscoveryJobRead:
         execution_target="sensor" if job.execution_target == "sensor" else "local",
         sensor_id=refs.sensors[job.sensor_id][0] if job.sensor_id in refs.sensors else None,
         sensor_name=refs.sensors[job.sensor_id][1] if job.sensor_id in refs.sensors else None,
+        profile=job.profile if job.profile in PROFILE_NAMES else None,
+        job_type="discovery_advanced" if job.profile else "discovery_basic",
+        observations_total=refs.observations.get(job.id, (0, 0))[0],
+        hosts_unresponsive=refs.observations.get(job.id, (0, 0))[1],
     )

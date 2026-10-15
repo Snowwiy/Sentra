@@ -43,6 +43,7 @@ from app.detection.recorder import SignalRecorder
 from app.discovery import probes
 from app.discovery.names import IdentityProber
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS, parse_ports
+from app.discovery.profiles import ResolvedProfile, check_scope, scan_config
 from app.discovery.scanner import (
     HostObservation,
     NetworkScanner,
@@ -65,6 +66,7 @@ from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.discovery_observations import ObservationRecorder
 from app.services.identification import oui_database, record_observation, refresh_identity
 from app.services.reconciliation import interface_identity
 from app.services.site_service import default_site_id
@@ -277,14 +279,20 @@ class DiscoveryService:
 
     # --- jobs pedidos desde el dashboard (DiscoveryRunner) -------------------------------------
 
-    def enqueue(self, target: str, via: str) -> tuple[int, uuid.UUID]:
+    def enqueue(
+        self, target: str, via: str, profile: ResolvedProfile | None = None
+    ) -> tuple[int, uuid.UUID]:
         """Crea un job en cola para `target` y devuelve (id interno, public_id).
 
         Valida el target con la misma allowlist que la CLI y el scheduler (TargetError si
         está fuera); la red queda reservada desde ahora por el índice único parcial.
+        Fase 6A: con `profile` el job es avanzado y guarda sus parámetros resueltos; una red
+        mayor que su max_hosts se rechaza (ProfileError) antes de crear nada.
         """
         [network] = self._config.scope.resolve(target)
         hosts_total = sum(1 for _ in self._config.scope.hosts(network))
+        if profile is not None:
+            check_scope(profile, hosts_total)
         now = datetime.now(UTC)
         with self._sessions() as session:
             expire_stale_jobs(session, now)
@@ -298,7 +306,10 @@ class DiscoveryService:
                 requested_via=via,
                 hosts_total=hosts_total,
                 progress={"phase": "queued"},
-                parameters=self._parameters(),
+                parameters=self._parameters()
+                if profile is None
+                else profile.parameters(str(network)),
+                profile=profile.name if profile is not None else None,
                 **_ZERO_COUNTERS,
             )
             session.add(job)
@@ -332,6 +343,13 @@ class DiscoveryService:
                 session.commit()
                 return None
             baseline = self._is_baseline(session, job.target)
+            # Fase 6A: un job avanzado usa SUS parámetros (validados al crearlo), nunca los
+            # que el proceso tenga en memoria.
+            scan = (
+                scan_config(job.parameters or {}, self._config.scan)
+                if job.profile is not None
+                else None
+            )
             job.status = DiscoveryJobStatus.RUNNING
             # Desde aquí cuenta la duración; mientras estaba en cola era la hora de la petición.
             job.started_at = now
@@ -339,7 +357,7 @@ class DiscoveryService:
             job.baseline = baseline
             job.progress = {"phase": "pending"}
             session.commit()
-        return self._execute(job_id, network, baseline)
+        return self._execute(job_id, network, baseline, scan)
 
     def touch(self, job_ids: Sequence[int]) -> None:
         """Latido de jobs en cola de este proceso, para que no se tomen por huérfanos."""
@@ -395,7 +413,9 @@ class DiscoveryService:
     def _is_baseline(session: Session, target: str, site_id: int | None = None) -> bool:
         return is_baseline(session, target, site_id)
 
-    def _execute(self, job_id: int, network: IPNetwork, baseline: bool) -> JobSummary:
+    def _execute(
+        self, job_id: int, network: IPNetwork, baseline: bool, scan: ScanConfig | None = None
+    ) -> JobSummary:
         target = str(network)
         hosts = list(self._config.scope.hosts(network))
         logger.info(
@@ -407,7 +427,7 @@ class DiscoveryService:
             prober = self._prober_factory() if self._prober_factory else None
             identity = self._identity_factory() if self._identity_factory else None
             scanner = NetworkScanner(
-                self._config.scan, prober, _AnySet(self._cancel, operator_cancel), identity
+                scan or self._config.scan, prober, _AnySet(self._cancel, operator_cancel), identity
             )
             reporter = _ProgressReporter(
                 self._sessions, job_id, scanner, operator_cancel, self._config.progress_interval
@@ -658,8 +678,14 @@ class ResultApplier:
         thresholds: AlertThresholds,
         gateways: set[str],
         site_id: int | None = None,
+        *,
+        executor: str = "local",
+        sensor_id: int | None = None,
     ) -> None:
         self._session = session
+        # Fase 6A: procedencia de la evidencia (servidor local o sensor concreto).
+        self._executor = executor
+        self._sensor_id = sensor_id
         self._config = config
         # Fase 5F: site del scan (None = el site por defecto, discovery del propio servidor).
         self._site_id = site_id if site_id is not None else default_site_id(session)
@@ -690,24 +716,32 @@ class ResultApplier:
         self._ports_closed = 0
         new_asset_ids: list[str] = []
         index = AssetIndex(self._session, self._site_id)
+        recorder = ObservationRecorder(
+            self._session, job, self._site_id, self._executor, self._sensor_id
+        )
         seen: set[int] = set()
         new_assets = 0
         open_total = 0
-        matched: list[tuple[HostObservation, Asset, bool]] = []
+        matched: list[tuple[HostObservation, Asset, bool, bool]] = []
         for obs in result.observations:
             asset = index.match(obs.address, obs.mac)
             created = asset is None
+            by_mac = (
+                bool(obs.mac) and asset is not None and index.by_mac.get(obs.mac or "") is asset
+            )
             if asset is None:
                 asset = self._create(obs, now)
                 index.add(asset)
                 new_assets += 1
                 if len(new_asset_ids) < MAX_NEW_ASSET_IDS:
                     new_asset_ids.append(str(asset.public_id))
-            matched.append((obs, asset, created))
+            matched.append((obs, asset, created, by_mac))
         # Existing port rows of every matched asset, in batches (not one query per host).
-        ports_by_asset = self._load_ports([asset.id for _, asset, _ in matched])
-        for obs, asset, created in matched:
+        ports_by_asset = self._load_ports([asset.id for _, asset, _, _ in matched])
+        recorder.load_previous([asset.id for _, asset, created, _ in matched if not created])
+        for obs, asset, created, by_mac in matched:
             seen.add(asset.id)
+            recorder.observed(obs, asset, created, by_mac, now)
             self._update_presence(asset, obs, network, now)
             rows = ports_by_asset.setdefault(asset.id, {})
             open_ports = self._update_ports(asset, obs, rows, result.complete, now)
@@ -720,7 +754,7 @@ class ResultApplier:
         # puerto cerrado). Un scan cancelado, con timeout o fallido no sondeó todo, así que
         # no ver un host no prueba que se haya ido.
         if result.complete:
-            self._mark_missing(network, seen, now, result.unprobed)
+            self._mark_missing(network, seen, now, result.unprobed, recorder)
 
         if result.timed_out:
             job.status = DiscoveryJobStatus.CANCELLED
@@ -980,6 +1014,7 @@ class ResultApplier:
         seen: set[int],
         now: datetime,
         unprobed: frozenset[str] = frozenset(),
+        recorder: ObservationRecorder | None = None,
     ) -> None:
         """Cuenta un scan perdido a los activos de esta red que no se vieron.
 
@@ -1013,6 +1048,9 @@ class ResultApplier:
                 continue
             if asset.primary_ip in unprobed:
                 continue
+            if recorder is not None:
+                # Fase 6A: evidencia "no respondió en esta ejecución" (no "desaparecido").
+                recorder.unanswered(asset, now)
             asset.network_misses += 1
             if (
                 asset.network_misses >= self._config.offline_after_misses

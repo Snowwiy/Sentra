@@ -12,7 +12,9 @@ from sqlalchemy import (
     Index,
     Integer,
     String,
+    UniqueConstraint,
     Uuid,
+    func,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -140,6 +142,9 @@ class DiscoveryJob(Base):
     progress: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # public_id de los activos creados por este job (acotado), para "Ver dispositivos".
     new_asset_ids: Mapped[list[str] | None] = mapped_column(JSONB)
+    # Fase 6A: perfil de Advanced Discovery (quick/standard/deep). Null = discovery básico
+    # (comportamiento y parámetros anteriores a 6A, sin cambios).
+    profile: Mapped[str | None] = mapped_column(String(16))
 
     @property
     def duration_seconds(self) -> float | None:
@@ -147,3 +152,70 @@ class DiscoveryJob(Base):
         if self.completed_at is None or self.status == DiscoveryJobStatus.QUEUED:
             return None
         return round((self.completed_at - self.started_at).total_seconds(), 3)
+
+
+# Fase 6A: estado de reachability de una observación. "unknown" = no hay evidencia suficiente
+# (nunca se convierte en "no existe").
+REACHABILITY_VALUES = ("responded", "no_response", "unknown")
+OBSERVATION_CHANGE_KINDS = (
+    "new_host",
+    "host_unresponsive",
+    "port_new",
+    "port_unresponsive",
+    "hostname_changed",
+    "address_changed",
+)
+
+
+class DiscoveryObservation(Base):
+    """Lo que UN job vio (o no vio) en UNA dirección, con procedencia (Fase 6A).
+
+    Mismo formato para el discovery del servidor y para el de un sensor: el servidor sigue
+    siendo la autoridad sobre identidad (asset_id lo decide ResultApplier) y esto es solo
+    evidencia auditable. Una fila "no_response" registra que un activo conocido no respondió
+    en un scan COMPLETO; no es una desaparición (eso sigue siendo network_misses y la política
+    de ciclo de vida) ni dice nada de compromiso o vulnerabilidad.
+
+    (job, address) único: un reintento del mismo job nunca duplica la evidencia.
+    """
+
+    __tablename__ = "discovery_observations"
+    __table_args__ = (
+        UniqueConstraint("job_id", "address", name="uq_discovery_observations_job_address"),
+        # Vista de red (última observación por site e IP) y filtros por site.
+        Index("ix_discovery_observations_site_address", "site_id", "address", "observed_at"),
+        Index("ix_discovery_observations_asset", "asset_id", "observed_at"),
+        Index("ix_discovery_observations_sensor", "sensor_id"),
+        Index("ix_discovery_observations_observed", "observed_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    public_id: Mapped[uuid.UUID] = mapped_column(Uuid, unique=True, default=uuid.uuid4)
+    job_id: Mapped[int] = mapped_column(ForeignKey("discovery_jobs.id", ondelete="CASCADE"))
+    site_id: Mapped[int] = mapped_column(ForeignKey("sites.id", ondelete="RESTRICT"))
+    # "local" (el propio servidor) o "sensor". sensor_id se conserva aunque el sensor se
+    # revoque; SET NULL solo si alguna vez se borra la fila del sensor.
+    executor: Mapped[str] = mapped_column(String(16))
+    sensor_id: Mapped[int | None] = mapped_column(ForeignKey("sensors.id", ondelete="SET NULL"))
+    # Activo al que el servidor asoció la observación. SET NULL: borrar un activo descubierto
+    # (limpieza 5C.2) no borra la evidencia histórica de lo que se vio en la red.
+    asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"))
+    address: Mapped[str] = mapped_column(String(45))
+    mac: Mapped[str | None] = mapped_column(String(17))
+    hostname: Mapped[str | None] = mapped_column(String(255))
+    reverse_dns: Mapped[str | None] = mapped_column(String(255))
+    forward_dns_match: Mapped[bool | None] = mapped_column(Boolean)
+    open_ports: Mapped[list[int]] = mapped_column(JSONB)
+    # Métodos que aportaron evidencia: icmp, tcp, arp, dns.
+    methods: Mapped[list[str]] = mapped_column(JSONB)
+    reachability: Mapped[str] = mapped_column(String(16))
+    rtt_ms: Mapped[int | None] = mapped_column(Integer)
+    confidence: Mapped[str] = mapped_column(String(8))
+    # [{"field", "value", "method", "state": "observed"|"inferred"}], acotado.
+    evidence: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    # [{"kind", "previous", "current", "state"}]: diferencias con la observación anterior del
+    # mismo activo. Evidencia de cambio, no el motor de Network Change Detection (Fase 6E).
+    changes: Mapped[list[dict[str, Any]]] = mapped_column(JSONB)
+    profile: Mapped[str | None] = mapped_column(String(16))
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -46,6 +46,8 @@ def test_heartbeat_payload_is_safe(config: LocalConfig, server: FakeServer) -> N
     }
     assert body["capabilities"] == [
         "network.discovery.basic",
+        "network.discovery.advanced",
+        "network.dns",
         "network.tcp",
         "network.icmp",
         "network.arp",

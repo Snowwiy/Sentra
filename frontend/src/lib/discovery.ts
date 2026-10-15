@@ -1,4 +1,15 @@
-import type { DiscoveryJob, DiscoveryJobStatus } from "../api/types";
+import type {
+  DiscoveryJob,
+  DiscoveryJobStatus,
+  DiscoveryLimits,
+  DiscoveryProfileName,
+  DiscoveryTunableLimit,
+  EvidenceState,
+  ObservationChangeKind,
+  ObservationMethod,
+  ObservationReachability,
+  Sensor,
+} from "../api/types";
 
 /** Nombres de estado tal como los define la especificación de Fase 4D. */
 export const JOB_STATUS_LABELS: Record<DiscoveryJobStatus, string> = {
@@ -109,4 +120,134 @@ export const PHASE_LABELS: Record<string, string> = {
 export function executionLabel(job: Pick<DiscoveryJob, "execution_target" | "sensor_name" | "sensor_id">): string {
   if (job.execution_target !== "sensor") return "Servidor local";
   return `Sensor ${job.sensor_name ?? job.sensor_id?.slice(0, 8) ?? "desconocido"}`;
+}
+
+// --- Fase 6A: descubrimiento avanzado ---------------------------------------------------------
+
+/** Capacidad que debe declarar un sensor para recibir perfiles avanzados. */
+export const ADVANCED_CAPABILITY = "network.discovery.advanced";
+
+export function sensorSupportsAdvanced(sensor: Pick<Sensor, "capabilities"> | undefined): boolean {
+  return Boolean(sensor?.capabilities?.includes(ADVANCED_CAPABILITY));
+}
+
+export const BASIC_PROFILE_LABEL = "Básico";
+
+export const PROFILE_LABELS: Record<DiscoveryProfileName, string> = {
+  quick: "Quick",
+  standard: "Standard",
+  deep: "Deep",
+};
+
+/** Nombre del perfil de un job: el avanzado elegido o "Básico" (jobs anteriores incluidos). */
+export function jobProfileName(job: Pick<DiscoveryJob, "profile">): string {
+  return job.profile ? (PROFILE_LABELS[job.profile] ?? job.profile) : BASIC_PROFILE_LABEL;
+}
+
+export function jobTypeLabel(job: Pick<DiscoveryJob, "job_type" | "profile">): string {
+  const advanced = job.job_type ? job.job_type === "discovery_advanced" : Boolean(job.profile);
+  return advanced ? "Avanzado" : "Básico";
+}
+
+/** Límites editables con discovery:tune, en el orden del formulario. */
+export const TUNABLE_LIMITS: { key: DiscoveryTunableLimit; label: string; unit: string; min: number }[] = [
+  { key: "timeout_ms", label: "Timeout por sonda", unit: "ms", min: 1 },
+  { key: "dns_timeout_ms", label: "Timeout DNS", unit: "ms", min: 1 },
+  { key: "concurrency", label: "Concurrencia", unit: "sondas", min: 1 },
+  { key: "max_probes_per_second", label: "Sondas por segundo", unit: "sondas/s", min: 1 },
+  { key: "tcp_retries", label: "Reintentos TCP", unit: "", min: 0 },
+  { key: "max_hosts", label: "Máximo de hosts", unit: "hosts", min: 1 },
+  { key: "deadline_minutes", label: "Duración máxima", unit: "min", min: 1 },
+];
+
+export type LimitDraft = Record<DiscoveryTunableLimit, string>;
+
+export function limitDraft(limits: DiscoveryLimits): LimitDraft {
+  const draft = {} as LimitDraft;
+  for (const { key } of TUNABLE_LIMITS) draft[key] = String(limits[key]);
+  return draft;
+}
+
+export interface LimitCheck {
+  /** Solo las claves que cambian respecto al perfil (lo que se envía al servidor). */
+  changed: Partial<Record<DiscoveryTunableLimit, number>>;
+  errors: Partial<Record<DiscoveryTunableLimit, string>>;
+}
+
+/**
+ * Validación en cliente de los límites contra `caps`. Es solo una ayuda: el servidor vuelve a
+ * validar y responde 422 discovery_limit_exceeded si algo supera sus topes.
+ */
+export function checkLimits(draft: LimitDraft, profile: DiscoveryLimits, caps: DiscoveryLimits): LimitCheck {
+  const result: LimitCheck = { changed: {}, errors: {} };
+  for (const { key, min } of TUNABLE_LIMITS) {
+    const raw = draft[key].trim();
+    if (!/^\d+$/.test(raw)) {
+      result.errors[key] = "Debe ser un número entero.";
+      continue;
+    }
+    const value = Number(raw);
+    if (value < min) result.errors[key] = `Mínimo ${min}.`;
+    else if (value > caps[key]) result.errors[key] = `Máximo ${caps[key]} (tope del servidor).`;
+    else if (value !== profile[key]) result.changed[key] = value;
+  }
+  return result;
+}
+
+/** "22, 8080 443" → puertos válidos y únicos, o un mensaje de error. */
+export function parsePorts(text: string): { ports: number[]; error?: string } {
+  const parts = text.split(/[\s,;]+/).filter(Boolean);
+  const ports: number[] = [];
+  for (const part of parts) {
+    if (!/^\d+$/.test(part)) return { ports: [], error: `«${part}» no es un puerto.` };
+    const port = Number(part);
+    if (port < 1 || port > 65535) return { ports: [], error: `${port} está fuera de 1–65535.` };
+    if (!ports.includes(port)) ports.push(port);
+  }
+  return { ports };
+}
+
+export const METHOD_NAMES: Record<ObservationMethod, string> = {
+  icmp: "ICMP",
+  tcp: "TCP",
+  arp: "ARP",
+  dns: "DNS",
+};
+
+export const REACHABILITY_LABELS: Record<ObservationReachability, string> = {
+  responded: "Respondió",
+  no_response: "Sin respuesta",
+  unknown: "Desconocido",
+};
+
+export const REACHABILITY_CLASS: Record<ObservationReachability, string> = {
+  responded: "badge badge--ok",
+  no_response: "badge badge--warn",
+  unknown: "badge",
+};
+
+export const CONFIDENCE_LABELS: Record<string, string> = {
+  low: "Baja",
+  medium: "Media",
+  high: "Alta",
+};
+
+export const EVIDENCE_STATE_LABELS: Record<EvidenceState, string> = {
+  observed: "observado",
+  inferred: "inferido",
+};
+
+export const OBSERVATION_CHANGE_LABELS: Record<ObservationChangeKind, string> = {
+  new_host: "host nuevo",
+  host_unresponsive: "host sin respuesta",
+  port_new: "puerto nuevo",
+  port_unresponsive: "puerto sin respuesta",
+  hostname_changed: "hostname cambiado",
+  address_changed: "dirección cambiada",
+};
+
+/** Fuente de una observación: "Servidor local" o el nombre del sensor. */
+export function observationSource(o: { executor: string; sensor_name: string | null; sensor_id: string | null }): string {
+  if (o.executor !== "sensor") return "Servidor local";
+  return `Sensor ${o.sensor_name ?? o.sensor_id?.slice(0, 8) ?? "desconocido"}`;
 }

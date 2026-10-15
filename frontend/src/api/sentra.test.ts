@@ -159,6 +159,52 @@ describe("site scope", () => {
     });
   });
 
+  // Fase 6A: perfil, puertos y límites solo viajan con perfil.
+  it("sends discovery profile, ports and limits only with a profile", async () => {
+    await consoleApi.startDiscovery("10.0.0.0/24", { ports: [22], limits: { concurrency: 4 } });
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ target: "10.0.0.0/24" });
+    await consoleApi.startDiscovery("10.0.0.0/24", { profile: "quick", ports: [], limits: {} });
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ target: "10.0.0.0/24", profile: "quick" });
+    await consoleApi.startDiscovery("10.0.0.0/24", {
+      siteId: SITE,
+      executionTarget: "sensor",
+      sensorId: "s1",
+      profile: "deep",
+      ports: [22, 80],
+      limits: { concurrency: 16, deadline_minutes: 15 },
+    });
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({
+      target: "10.0.0.0/24",
+      site_id: SITE,
+      execution_target: "sensor",
+      sensor_id: "s1",
+      profile: "deep",
+      ports: [22, 80],
+      limits: { concurrency: 16, deadline_minutes: 15 },
+    });
+  });
+
+  it("reads discovery profiles and paginated observations with server-side filters", async () => {
+    await sentraApi.discoveryProfiles();
+    expect(lastPath()).toBe("/api/v1/discovery/profiles");
+    await sentraApi.discoveryObservations({ jobId: "j1", limit: 50, offset: 0 });
+    expect(lastPath()).toBe("/api/v1/discovery/observations?job_id=j1&limit=50");
+    await sentraApi.discoveryObservations({
+      latest: true,
+      siteId: SITE,
+      network: "10.0.0.0/24",
+      sensorId: "s1",
+      method: "arp",
+      reachability: "responded",
+      q: "printer",
+      limit: 50,
+      offset: 100,
+    });
+    expect(lastPath()).toBe(
+      `/api/v1/discovery/observations?site_id=${SITE}&network=10.0.0.0%2F24&sensor_id=s1&method=arp&reachability=responded&q=printer&latest=true&limit=50&offset=100`,
+    );
+  });
+
   it("deletes a site with its version in the query", async () => {
     await sitesApi.remove(SITE, 3);
     expect(lastPath()).toBe(`/api/v1/sites/${SITE}?version=3`);

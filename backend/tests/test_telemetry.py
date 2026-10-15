@@ -1,3 +1,4 @@
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
@@ -75,7 +76,9 @@ def test_telemetry_from_unknown_agent_is_unauthorized(client: TestClient) -> Non
         {"uptime_seconds": 2**63},
         {"timestamp": "2026-01-01T10:00:00"},  # no timezone offset
         {"timestamp": "not-a-date"},
-        {"timestamp": (datetime.now(UTC) + timedelta(hours=1)).isoformat()},
+        # Se calcula al ejecutar el test, no al recopilarlo: en una suite larga (más de una
+        # hora en Windows) un valor fijado en la recopilación ya estaría en el pasado.
+        lambda: {"timestamp": (datetime.now(UTC) + timedelta(hours=1)).isoformat()},
         {"extra": True},
     ],
 )
@@ -83,13 +86,17 @@ def test_invalid_telemetry_is_rejected(
     client: TestClient,
     engine: Engine,
     registered_agent: dict[str, Any],
-    overrides: dict[str, Any],
+    overrides: dict[str, Any] | Callable[[], dict[str, Any]],
 ) -> None:
     agent_id = registered_agent["payload"]["agent_id"]
+    values = overrides() if callable(overrides) else overrides
 
-    response = client.post("/api/v1/telemetry", json=telemetry_payload(agent_id, **overrides))
+    response = client.post("/api/v1/telemetry", json=telemetry_payload(agent_id, **values))
 
     assert response.status_code == 422
+    if callable(overrides):
+        # Rechazado por futuro, no por otro motivo del payload.
+        assert "too far in the future" in response.text
     with engine.connect() as connection:
         assert connection.execute(text("SELECT count(*) FROM telemetry_samples")).scalar() == 0
 

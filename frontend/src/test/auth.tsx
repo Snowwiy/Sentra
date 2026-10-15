@@ -34,6 +34,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "assets:manage",
     "assets:duplicates_read",
     "discovery:run",
+    "discovery:tune",
     "agents:manage",
     "enrollment:manage",
     "users:manage",

@@ -908,6 +908,13 @@ export interface DiscoveryJob {
   execution_target: DiscoveryExecutionTarget;
   sensor_id: string | null;
   sensor_name: string | null;
+  /** Fase 6A: perfil avanzado del job; null = descubrimiento básico de siempre. */
+  profile?: DiscoveryProfileName | null;
+  job_type?: DiscoveryJobType;
+  /** Filas de observación del job, incluidas las de hosts que no respondieron. */
+  observations_total?: number;
+  /** Activos conocidos de la red que no respondieron en un scan completo. */
+  hosts_unresponsive?: number;
 }
 
 /** Fase 5F: el servidor local solo en el site por defecto; el resto, con un sensor. */
@@ -957,6 +964,122 @@ export interface DiscoverySchedule {
 
 export interface DiscoveryJobList {
   items: DiscoveryJob[];
+}
+
+// --- Fase 6A: descubrimiento avanzado -------------------------------------------------------
+
+export type DiscoveryProfileName = "quick" | "standard" | "deep";
+export type DiscoveryJobType = "discovery_basic" | "discovery_advanced";
+
+/** Límites de un scan avanzado. `caps` son los topes del servidor con la misma forma. */
+export interface DiscoveryLimits {
+  timeout_ms: number;
+  dns_timeout_ms: number;
+  concurrency: number;
+  max_probes_per_second: number;
+  tcp_retries: number;
+  max_hosts: number;
+  max_ports: number;
+  deadline_minutes: number;
+  max_dns_queries: number;
+}
+
+/** Claves de `limits` que se pueden enviar al iniciar un job (solo con discovery:tune). */
+export type DiscoveryTunableLimit =
+  | "timeout_ms"
+  | "dns_timeout_ms"
+  | "concurrency"
+  | "max_probes_per_second"
+  | "tcp_retries"
+  | "max_hosts"
+  | "deadline_minutes";
+
+export interface DiscoveryProfile {
+  name: DiscoveryProfileName;
+  label: string;
+  description: string;
+  ports: number[];
+  icmp: boolean;
+  tcp: boolean;
+  arp: boolean;
+  reverse_dns: boolean;
+  forward_dns: boolean;
+  /** Ya recortados a `caps` por el servidor. */
+  limits: DiscoveryLimits;
+}
+
+export interface DiscoveryProfileCatalog {
+  default_profile: DiscoveryProfileName;
+  /** El usuario actual tiene discovery:tune. */
+  can_tune: boolean;
+  caps: DiscoveryLimits;
+  profiles: DiscoveryProfile[];
+}
+
+export type ObservationMethod = "icmp" | "tcp" | "arp" | "dns";
+export type ObservationReachability = "responded" | "no_response" | "unknown";
+/** observed = evidencia directa; inferred = deducción parcial (nunca un hecho confirmado). */
+export type EvidenceState = "observed" | "inferred";
+export type ObservationChangeKind =
+  | "new_host"
+  | "host_unresponsive"
+  | "port_new"
+  | "port_unresponsive"
+  | "hostname_changed"
+  | "address_changed";
+
+export interface ObservationPortHint {
+  port: number;
+  hint: string;
+  state: EvidenceState;
+}
+
+export interface ObservationEvidence {
+  field: string;
+  value: string;
+  method: string;
+  state: EvidenceState;
+}
+
+export interface ObservationChange {
+  kind: ObservationChangeKind;
+  previous: string | null;
+  current: string | null;
+  state: EvidenceState;
+}
+
+export interface Observation {
+  observation_id: string;
+  job_id: string;
+  site_id: string;
+  site_name: string;
+  executor: DiscoveryExecutionTarget;
+  sensor_id: string | null;
+  sensor_name: string | null;
+  asset_id: string | null;
+  address: string;
+  mac: string | null;
+  hostname: string | null;
+  reverse_dns: string | null;
+  forward_dns_match: boolean | null;
+  open_ports: number[];
+  port_hints: ObservationPortHint[];
+  methods: ObservationMethod[];
+  reachability: ObservationReachability;
+  /** null = no se midió. */
+  rtt_ms: number | null;
+  confidence: "low" | "medium" | "high";
+  evidence: ObservationEvidence[];
+  changes: ObservationChange[];
+  profile: DiscoveryProfileName | null;
+  observed_at: IsoDateTime;
+}
+
+export interface ObservationList {
+  items: Observation[];
+  total: number;
+  limit: number;
+  offset: number;
 }
 
 /** The agent's view of who listens on a port. */
@@ -1112,6 +1235,7 @@ export type Permission =
   | "assets:manage"
   | "assets:duplicates_read"
   | "discovery:run"
+  | "discovery:tune"
   | "agents:manage"
   | "enrollment:manage"
   | "users:manage"
@@ -3458,7 +3582,7 @@ export interface SensorJob {
   job_id: string;
   site_id: string;
   sensor_id: string;
-  job_type: "discovery_basic";
+  job_type: DiscoveryJobType;
   status: SensorJobStatus;
   attempt: number;
   max_attempts: number;
