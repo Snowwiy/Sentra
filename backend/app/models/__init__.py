@@ -51,6 +51,7 @@ from app.models.incident import (
 from app.models.inventory import AssetInventory
 from app.models.process import AssetProcessSnapshot
 from app.models.rate_limit import RateLimitHit
+from app.models.report import Report, ReportArtifact
 from app.models.response import (
     AgentCommand,
     Playbook,
@@ -150,6 +151,8 @@ __all__ = [
     "PlaybookVersion",
     "PortStateValue",
     "RateLimitHit",
+    "Report",
+    "ReportArtifact",
     "ResponseExecution",
     "RiskConfidence",
     "RiskContributionRecord",

@@ -260,6 +260,14 @@ INTERFACES = {
     "PlaybookRunStep": "PlaybookRunStepOut",
     "PlaybookRun": "PlaybookRunOut",
     "PlaybookRunList": "PlaybookRunList",
+    # Fase 5E: Reporting.
+    "ReportTypeInfo": "ReportTypeOut",
+    "ReportCatalog": "ReportCatalog",
+    "ReportWarning": "ReportWarning",
+    "ReportPreview": "ReportPreview",
+    "ReportArtifact": "ReportArtifactOut",
+    "Report": "ReportOut",
+    "ReportList": "ReportList",
 }
 ENUMS = [
     "AssetStatus",

@@ -3,6 +3,7 @@ import { Link, useParams } from "react-router-dom";
 import { aiApi, detectionsApi } from "../api/sentra";
 import type { DetectionDetail, DetectionEvidence } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { config } from "../config";
 import {
   CATEGORY_LABELS,
@@ -164,6 +165,7 @@ export function DetectionDetailPage() {
           playbookKeys={["investigate_detection"]}
           targets={[{ assetId: d.asset_id, label: d.hostname }]}
         />
+        <GenerateReportLink type="detection" ids={{ detection_id: d.detection_id }} />
       </div>
       {error && (
         <div className="banner banner--warn" role="alert">

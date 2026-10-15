@@ -1,4 +1,5 @@
 import os
+import tempfile
 
 # Must run before the app (and its cached settings) is imported: tests drive background jobs
 # explicitly, and a live sweeper thread would race with assertions.
@@ -35,6 +36,20 @@ os.environ["RESPONSE_RESULT_MAX_KB"] = "64"
 os.environ["RESPONSE_OFFLINE_AGENT_POLICY"] = "block"
 os.environ["RESPONSE_MAX_ACTIVE_PER_ASSET"] = "10"
 os.environ["RESPONSE_SWEEP_INTERVAL_SECONDS"] = "15"
+# Fase 5E: Reporting con sus valores por defecto, por la misma razón. Los artefactos van a
+# una carpeta temporal propia de la sesión de tests (fuera del repositorio, como exige el
+# almacenamiento), nunca a la carpeta de informes real del desarrollador.
+os.environ["REPORT_ENABLED"] = "true"
+os.environ["REPORT_OUTPUT_DIR"] = tempfile.mkdtemp(prefix="sentra-reports-test-")
+os.environ["REPORT_MAX_RANGE_DAYS"] = "365"
+os.environ["REPORT_MAX_ASSETS"] = "100"
+os.environ["REPORT_MAX_ROWS"] = "500"
+os.environ["REPORT_RETENTION_DAYS"] = ""
+os.environ["REPORT_JOB_TIMEOUT_SECONDS"] = "300"
+os.environ["REPORT_MAX_CONCURRENT"] = "3"
+os.environ["REPORT_MAX_QUEUED_TOTAL"] = "20"
+os.environ["REPORT_MAX_ARTIFACT_MB"] = "25"
+os.environ["REPORT_WORKER_INTERVAL_SECONDS"] = "5"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -183,7 +198,8 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
-                " detection_rules, detection_rule_stats, vulnerability_sources, playbooks"
+                " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"
+                " reports"
                 " RESTART IDENTITY CASCADE"
             )
         )

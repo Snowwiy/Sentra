@@ -22,6 +22,7 @@ from app.api.v1.routes import (
     inventory,
     metrics,
     processes,
+    reports,
     response,
     risk,
     telemetry,
@@ -53,6 +54,7 @@ api_router.include_router(detection_rules.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(incidents.router, responses=_COMMON)
 api_router.include_router(response.router, responses=_COMMON)
+api_router.include_router(reports.router, responses=_COMMON)
 api_router.include_router(vulnerabilities.router, responses=_COMMON)
 api_router.include_router(threat_intel.router, responses=_COMMON)
 api_router.include_router(ai.router, responses=_COMMON)

@@ -3,6 +3,7 @@ import { Link, useSearchParams } from "react-router-dom";
 import { responseApi } from "../api/sentra";
 import { config } from "../config";
 import { ActionsCatalog } from "../components/response/ActionsCatalog";
+import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { ExecutionsTable } from "../components/response/HistoryTables";
 import { usePolling } from "../lib/usePolling";
 
@@ -44,6 +45,9 @@ export function ResponsePage() {
             comprueba con la política del servidor y queda auditada. Ver también los{" "}
             <Link to="/playbooks">playbooks</Link>.
           </p>
+        </div>
+        <div className="actions">
+          <GenerateReportLink type="response_activity" label="Exportar actividad" />
         </div>
       </div>
       <nav className="tabs" role="tablist" aria-label="Secciones de response">

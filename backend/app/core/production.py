@@ -249,6 +249,19 @@ def config_findings(settings: Settings) -> list[Finding]:
     if settings.ai_api_key is not None and _placeholder(settings.ai_api_key.get_secret_value()):
         f.append(Finding("FAIL", "ai_api_key", "AI_API_KEY is an example value"))
 
+    # Fase 5E: sin REPORT_OUTPUT_DIR los informes van a la carpeta de datos del usuario del
+    # servicio; en producción conviene una ruta explícita (copias de seguridad, ACL, disco).
+    if settings.report_enabled and not settings.report_output_dir:
+        f.append(
+            Finding(
+                "WARN",
+                "report_output_dir",
+                "REPORT_OUTPUT_DIR unset; reports go to the service user's app data folder",
+            )
+        )
+    elif settings.report_enabled:
+        f.append(Finding("PASS", "report_output_dir", "REPORT_OUTPUT_DIR set"))
+
     if (
         parse_name_list(settings.discovery_allowed_networks)
         and settings.discovery_allow_public_networks

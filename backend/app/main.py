@@ -29,6 +29,7 @@ from app.services.background import (
     purge_old_data,
     run_asset_cleanup,
     run_detection_engine,
+    run_report_worker,
     run_response_engine,
     run_risk_engine,
     run_threat_intel,
@@ -118,6 +119,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     run_response_engine,
                 )
             )
+        # Fase 5E: cola de informes. La petición HTTP solo crea el trabajo; aquí se genera.
+        if settings.report_enabled:
+            jobs.append(
+                PeriodicJob(
+                    "report-worker",
+                    settings.report_worker_interval_seconds,
+                    run_report_worker,
+                )
+            )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:
             jobs.append(
@@ -192,6 +202,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             allow_methods=["GET", "POST", "PATCH", "DELETE"],
             # X-CSRF-Token: token anti-CSRF de las peticiones mutables (api/auth.py).
             allow_headers=["Content-Type", "X-Request-ID", "X-CSRF-Token"],
+            # Fase 5E: la UI verifica el SHA-256 de la descarga con esta cabecera.
+            expose_headers=["X-Sentra-SHA256"],
         )
     if settings.allowed_host_list:
         # Rechaza cabeceras Host desconocidas (DNS rebinding, enlaces generados con un Host

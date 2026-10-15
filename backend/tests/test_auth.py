@@ -187,6 +187,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "incidents:read", "incidents:manage", "rules:read", "rules:test",
         "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
         "threat_intel:triage", "assets:duplicates_read", "response:read", "response:execute",
+        "reports:read", "reports:generate",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -457,11 +458,12 @@ def test_role_permissions_are_least_privilege() -> None:
     # incidents:read (Fase 4K) solo lectura de casos; rules:read (Fase 5A) solo el catálogo;
     # vulnerabilities:read (Fase 5B) solo findings, exposición y catálogo; threat_intel:read
     # (Fase 5C) solo fuentes, indicadores y coincidencias; response:read (Fase 5D) solo el
-    # catálogo, las vistas previas y el historial de ejecuciones.
+    # catálogo, las vistas previas y el historial de ejecuciones; reports:read (Fase 5E) solo
+    # el catálogo, el historial y la descarga de informes ya generados.
     reads = {
         Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
         Permission.RULES_READ, Permission.VULNERABILITIES_READ, Permission.THREAT_INTEL_READ,
-        Permission.RESPONSE_READ,
+        Permission.RESPONSE_READ, Permission.REPORTS_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -474,7 +476,10 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.VULNERABILITIES_READ, Permission.VULNERABILITIES_MANAGE,
         Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
         Permission.RESPONSE_READ, Permission.RESPONSE_EXECUTE,
+        Permission.REPORTS_READ, Permission.REPORTS_GENERATE,
     }  # fmt: skip
+    # Resumen ejecutivo, técnico global, cancelar ajenos y borrar informes: solo admin (5E).
+    assert Permission.REPORTS_ADMIN not in ROLE_PERMISSIONS[Role.ANALYST]
     # Acciones MEDIUM, gestión de playbooks y cancelación (response:manage): solo admin (5D).
     assert Permission.RESPONSE_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Fuentes, importación de IOCs y reevaluación (threat_intel:manage): solo admin (Fase 5C).
@@ -543,6 +548,18 @@ def _matrix_requests(
             Permission.VULNERABILITIES_ADMIN,
         ),
         ("POST", f"{API}/vulnerabilities/evaluate", {}, Permission.VULNERABILITIES_ADMIN),
+        # Fase 5E: informe inexistente -> 404 con permiso, 403 sin él.
+        ("GET", f"{API}/reports/catalog", None, Permission.REPORTS_READ),
+        ("GET", f"{API}/reports", None, Permission.REPORTS_READ),
+        ("GET", f"{API}/reports/{uuid4()}/artifact", None, Permission.REPORTS_READ),
+        (
+            "POST",
+            f"{API}/reports/preview",
+            {"report_type": "risk", "format": "pdf"},
+            Permission.REPORTS_GENERATE,
+        ),
+        ("POST", f"{API}/reports/{uuid4()}/cancel", None, Permission.REPORTS_GENERATE),
+        ("DELETE", f"{API}/reports/{uuid4()}", None, Permission.REPORTS_ADMIN),
     ]
 
 
@@ -610,7 +627,7 @@ def _concrete(path: str) -> str:
     for name in (
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
         "model_id", "benchmark_id", "incident_id", "finding_id", "indicator_id", "match_id",
-        "execution_id", "playbook_id", "run_id", "request_id",
+        "execution_id", "playbook_id", "run_id", "request_id", "report_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.
