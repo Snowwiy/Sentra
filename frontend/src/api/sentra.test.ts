@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { responseApi, sentraApi } from "./sentra";
+import { consoleApi, detectionsApi, incidentsApi, responseApi, riskApi, sensorsApi, sentraApi, sitesApi, vulnerabilitiesApi } from "./sentra";
 
 let requested: string[];
 let inits: RequestInit[];
@@ -109,5 +109,59 @@ describe("responseApi (Fase 5D)", () => {
     await responseApi.cancelRun("r1", 2);
     expect(lastPath()).toBe("/api/v1/response/runs/r1/cancel");
     expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ version: 2, reason: null });
+  });
+});
+
+// Fase 5F: el alcance de site viaja como site_id solo cuando hay uno elegido.
+describe("site scope", () => {
+  const SITE = "00000000-0000-0000-0000-0000000b0001";
+
+  it("adds site_id to every scoped list only when a site is chosen", async () => {
+    await sentraApi.dashboardSummary(undefined, undefined);
+    expect(lastPath()).toBe("/api/v1/dashboard/summary");
+    await sentraApi.dashboardSummary(undefined, SITE);
+    expect(lastPath()).toBe(`/api/v1/dashboard/summary?site_id=${SITE}`);
+    await sentraApi.listAssets(undefined, { siteId: SITE, limit: 5 });
+    expect(lastPath()).toBe(`/api/v1/assets?limit=5&site_id=${SITE}`);
+    await sentraApi.listAgents(undefined, SITE);
+    expect(lastPath()).toBe(`/api/v1/agents?site_id=${SITE}`);
+    await sentraApi.listAlerts({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/alerts?site_id=${SITE}`);
+    await sentraApi.discoveryJobs(10, undefined, SITE);
+    expect(lastPath()).toBe(`/api/v1/discovery/jobs?limit=10&site_id=${SITE}`);
+    await detectionsApi.list({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/detections?site_id=${SITE}`);
+    await incidentsApi.list({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/incidents?site_id=${SITE}`);
+    await vulnerabilitiesApi.list({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/vulnerabilities/findings?site_id=${SITE}`);
+    await riskApi.list({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/risk/assets?site_id=${SITE}`);
+    await responseApi.executions({ siteId: SITE });
+    expect(lastPath()).toBe(`/api/v1/response/executions?site_id=${SITE}`);
+    await sensorsApi.list(SITE);
+    expect(lastPath()).toBe(`/api/v1/sensors?site_id=${SITE}`);
+    await sensorsApi.enrollments();
+    expect(lastPath()).toBe("/api/v1/sensors/enrollment-tokens");
+  });
+
+  it("sends discovery site, target and sensor only when given", async () => {
+    await consoleApi.startDiscovery("10.0.0.0/24");
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ target: "10.0.0.0/24" });
+    await consoleApi.startDiscovery("10.0.0.0/24", { siteId: SITE, executionTarget: "local", sensorId: "ignored" });
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({ target: "10.0.0.0/24", site_id: SITE, execution_target: "local" });
+    await consoleApi.startDiscovery("10.0.0.0/24", { siteId: SITE, executionTarget: "sensor", sensorId: "s1" });
+    expect(JSON.parse(String(inits.at(-1)?.body))).toEqual({
+      target: "10.0.0.0/24",
+      site_id: SITE,
+      execution_target: "sensor",
+      sensor_id: "s1",
+    });
+  });
+
+  it("deletes a site with its version in the query", async () => {
+    await sitesApi.remove(SITE, 3);
+    expect(lastPath()).toBe(`/api/v1/sites/${SITE}?version=3`);
+    expect(inits.at(-1)?.method).toBe("DELETE");
   });
 });

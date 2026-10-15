@@ -35,6 +35,8 @@ function agent(overrides: Partial<Agent>): Agent {
     asset_state: "active",
     archived_at: null,
     lifecycle_version: 0,
+    site_id: "00000000-0000-0000-0000-00000000d5f1",
+    site_name: "Principal",
     ...overrides,
   };
 }
@@ -64,6 +66,8 @@ function tokenRow(overrides: Partial<EnrollmentToken> = {}): EnrollmentToken {
     note: null,
     created_via: "dashboard",
     last_asset_id: null,
+    site_id: null,
+    site_name: null,
     ...overrides,
   };
 }

@@ -222,6 +222,15 @@ export function AssetDetailPage() {
           <p className="muted small">
             <span className="mono">{asset.primary_ip}</span> · {typeWithConfidence(asset)}
             {asset.device_vendor && ` · ${asset.device_vendor}`}
+            {/* Fase 5F: site del activo. */}
+            {asset.site_name && (
+              <>
+                {" · "}
+                <span className="badge badge--info" title="Site del activo">
+                  Site: {asset.site_name}
+                </span>
+              </>
+            )}
           </p>
           <p className="muted small mono">{asset.asset_id}</p>
         </div>

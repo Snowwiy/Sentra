@@ -28,6 +28,11 @@ function job(overrides: Partial<DiscoveryJob>): DiscoveryJob {
     stop_reason: null,
     progress: { phase: "liveness", details_total: 0, details_done: 0 },
     parameters: null,
+    site_id: "00000000-0000-0000-0000-00000000d5f1",
+    site_name: "Principal",
+    execution_target: "local",
+    sensor_id: null,
+    sensor_name: null,
     ...overrides,
   };
 }

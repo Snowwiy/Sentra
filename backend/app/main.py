@@ -32,6 +32,7 @@ from app.services.background import (
     run_report_worker,
     run_response_engine,
     run_risk_engine,
+    run_sensor_maintenance,
     run_threat_intel,
     run_vulnerability_engine,
     sweep_offline_assets,
@@ -128,6 +129,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     run_report_worker,
                 )
             )
+        # Fase 5F: plazos y leases de los jobs de sensor (sin sensores no hay nada que hacer;
+        # el poll de cada sensor también lo aplica de forma perezosa).
+        jobs.append(
+            PeriodicJob(
+                "sensor-maintenance",
+                settings.sensor_sweep_interval_seconds,
+                run_sensor_maintenance,
+            )
+        )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:
             jobs.append(
@@ -214,7 +224,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Después del proxy de confianza (que fija el esquema real) y antes que todo lo demás.
         app.add_middleware(HttpsRequiredMiddleware)
     # Oversized bodies are refused before any other work.
-    app.add_middleware(BodySizeLimitMiddleware, max_bytes=settings.max_request_bytes)
+    # Fase 5F: el protocolo de sensores tiene su propio tope (SENSOR_MAX_REQUEST_KB).
+    app.add_middleware(
+        BodySizeLimitMiddleware,
+        max_bytes=settings.max_request_bytes,
+        prefix_limits=(("/api/v1/sensor/", settings.sensor_max_request_kb * 1024),),
+    )
     # Added last so it runs first (Fase 4M): IP del cliente y esquema reales solo desde
     # TRUSTED_PROXIES; el resto de capas (logs, rate limiting, CSRF, HTTPS) ya los ven.
     app.add_middleware(TrustedProxyMiddleware, networks=settings.trusted_proxy_networks)
@@ -234,6 +249,16 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         searches=make_limiter(
             backend, "api_searches", settings.api_searches_per_user_per_minute, 60, get_engine
         ),
+    )
+    # Fase 5F: enrolamiento de sensores por IP; heartbeat y poll por sensor.
+    app.state.sensor_enroll_limiter = make_limiter(
+        backend, "sensor_enroll", settings.sensor_enroll_max_per_minute, 60, get_engine
+    )
+    app.state.sensor_heartbeat_limiter = make_limiter(
+        backend, "sensor_heartbeat", settings.sensor_heartbeat_max_per_minute, 60, get_engine
+    )
+    app.state.sensor_poll_limiter = make_limiter(
+        backend, "sensor_poll", settings.sensor_poll_max_per_minute, 60, get_engine
     )
     # Fase 5A: pruebas históricas de reglas por usuario (además del lock global de 1 a la vez).
     app.state.rule_test_limiter = make_limiter(

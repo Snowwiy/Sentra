@@ -6,6 +6,7 @@ import { ActionsCatalog } from "../components/response/ActionsCatalog";
 import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { ExecutionsTable } from "../components/response/HistoryTables";
 import { usePolling } from "../lib/usePolling";
+import { SiteScopeChip } from "../site/SiteSelector";
 
 const TABS = [
   { key: "actions", label: "Acciones" },
@@ -22,11 +23,16 @@ function ExecutionsTab() {
     .filter((a) => a.availability === "available")
     .map((a) => ({ value: a.id, label: a.name }));
   return (
-    <ExecutionsTable
-      actionOptions={actionOptions}
-      selected={params.get("execution") ?? undefined}
-      onSelect={(id) => setParams(id ? { tab: "executions", execution: id } : { tab: "executions" }, { replace: true })}
-    />
+    <div className="stack">
+      <div>
+        <SiteScopeChip />
+      </div>
+      <ExecutionsTable
+        actionOptions={actionOptions}
+        selected={params.get("execution") ?? undefined}
+        onSelect={(id) => setParams(id ? { tab: "executions", execution: id } : { tab: "executions" }, { replace: true })}
+      />
+    </div>
   );
 }
 

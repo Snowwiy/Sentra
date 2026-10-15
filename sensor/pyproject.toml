@@ -1,0 +1,39 @@
+[project]
+name = "sentra-sensor"
+version = "0.1.0"
+description = "Sentra distributed sensor: authorized network discovery inside a remote site"
+requires-python = ">=3.12"
+# Solo biblioteca estándar: menos superficie de ataque y despliegue trivial en sites remotos.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=9.1,<10", "ruff>=0.16,<1", "mypy>=2.4,<3"]
+
+[project.scripts]
+sentra-sensor = "sentra_sensor.__main__:main"
+
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+include = ["sentra_sensor*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "N", "RUF"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["S101", "S105", "S106", "S108"]  # tokens y rutas falsos en tests
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+files = ["sentra_sensor", "tests"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"

@@ -36,6 +36,8 @@ class ReportFilters(RequestModel):
     risk_levels: list[str] = Field(default_factory=list, max_length=10)
     platforms: list[str] = Field(default_factory=list, max_length=5)
     include_archived: bool = False
+    # Fase 5F: limita las secciones basadas en activos a los de un site (cualquier tipo).
+    site_id: UUID | None = None
 
 
 class ReportRequest(RequestModel):

@@ -23,6 +23,8 @@ import { ipSortKey } from "../lib/net";
 import { useConsole } from "../lib/useConsole";
 import { useListState } from "../lib/useListState";
 import { usePolling } from "../lib/usePolling";
+import { useSite } from "../site/SiteContext";
+import { SiteScopeChip } from "../site/SiteSelector";
 
 type Key = "name" | "ip" | "os" | "version" | "state" | "last" | "enrolled";
 
@@ -45,7 +47,10 @@ const CARDS: { key: AgentState | ""; label: string; className: string }[] = [
 ];
 
 export function AgentsPage() {
-  const fetchAgents = useCallback((signal: AbortSignal) => sentraApi.listAgents(signal), []);
+  const { scopeId, sites } = useSite();
+  // Columna Site solo con "Todos los sites" y más de un site (con uno solo no aporta nada).
+  const showSite = !scopeId && sites.length > 1;
+  const fetchAgents = useCallback((signal: AbortSignal) => sentraApi.listAgents(signal, scopeId), [scopeId]);
   const agents = usePolling(fetchAgents, config.refreshIntervalMs);
   const consoleState = useConsole();
   const fetchTokens = useCallback(
@@ -72,7 +77,7 @@ export function AgentsPage() {
     filter: (a) =>
       (showArchived || a.asset_state !== "archived") &&
       (!list.filters.state || agentState(a) === list.filters.state) &&
-      matchesText(list.query, a.hostname, a.display_name, a.primary_ip, a.agent_id, a.os_name),
+      matchesText(list.query, a.hostname, a.display_name, a.primary_ip, a.agent_id, a.os_name, a.site_name),
     compare: compareBy(SORTERS[list.sort.key], list.sort.dir),
     page: list.page,
     pageSize: 100,
@@ -94,7 +99,8 @@ export function AgentsPage() {
       <div className="page__header">
         <div>
           <h1>Agentes</h1>
-          <p className="muted small">
+          <p className="muted small page__scope">
+            <SiteScopeChip />
             Equipos con Sentra Agent: estado, credencial y tokens de instalación.
             {agents.updatedAt && ` Actualizado ${formatRelative(agents.updatedAt.toISOString())}.`}
           </p>
@@ -166,6 +172,7 @@ export function AgentsPage() {
                   {header("Hostname", "name")}
                   {header("IP", "ip")}
                   {header("OS", "os")}
+                  {showSite && <th>Site</th>}
                   <th>Plataforma</th>
                   {header("Versión", "version")}
                   {header("Estado", "state")}
@@ -198,6 +205,7 @@ export function AgentsPage() {
                     <td title={[agent.os_name, agent.os_version, agent.architecture].filter(Boolean).join(" ")}>
                       {agent.os_name ?? "—"}
                     </td>
+                    {showSite && <td className="small">{agent.site_name}</td>}
                     <td>{PLATFORM_LABELS[agent.platform]}</td>
                     <td className="mono small">{agent.agent_version ?? "—"}</td>
                     <td>

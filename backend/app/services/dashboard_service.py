@@ -7,6 +7,7 @@ sobre índices existentes: el coste no depende de serializar filas.
 
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import String, cast, func, select
 from sqlalchemy.orm import Session
@@ -16,7 +17,7 @@ from app.models.alert import Alert
 from app.models.asset import Asset, AssetStatus, MonitoringMethod
 from app.models.detection import Detection, DetectionSeverity, DetectionStatus
 from app.models.incident import ACTIVE_STATUSES as INCIDENT_ACTIVE
-from app.models.incident import Incident, IncidentLevel
+from app.models.incident import Incident, IncidentAsset, IncidentLevel
 from app.models.risk import AssetRisk, RiskLevel
 from app.models.vulnerability import VulnerabilityFinding
 from app.repositories.asset_repository import effective_status_expr
@@ -38,18 +39,25 @@ DETECTION_ACTIVE = (DetectionStatus.OPEN, DetectionStatus.ACKNOWLEDGED)
 CURRENT = Asset.archived_at.is_(None)
 
 
-def _current_assets(column: Any) -> Any:
-    """Condición: la fila pertenece a un activo no archivado (subconsulta, sin JOIN)."""
-    return column.in_(select(Asset.id).where(CURRENT))
-
-
 class DashboardService:
-    def __init__(self, session: Session, heartbeat_timeout: timedelta) -> None:
+    def __init__(
+        self, session: Session, heartbeat_timeout: timedelta, site_id: int | None = None
+    ) -> None:
         self._session = session
         self._timeout = heartbeat_timeout
+        # Fase 5F: con site, cada contador se limita a los activos de ese site (y a lo que
+        # cuelga de ellos: alertas, detecciones, riesgo, findings, incidentes).
+        self._site_id = site_id
+        self._current = CURRENT if site_id is None else CURRENT & (Asset.site_id == site_id)
+
+    def _current_assets(self, column: Any) -> Any:
+        return column.in_(select(Asset.id).where(self._current))
 
     def summary(
-        self, include_incidents: bool, include_vulnerabilities: bool = False
+        self,
+        include_incidents: bool,
+        include_vulnerabilities: bool = False,
+        site_public_id: UUID | None = None,
     ) -> DashboardSummary:
         now = datetime.now(UTC)
         assets = self.asset_summary(now)
@@ -62,10 +70,11 @@ class DashboardService:
             active_alerts=self._session.scalar(
                 select(func.count())
                 .select_from(Alert)
-                .where(Alert.status.in_(ALERT_ACTIVE), _current_assets(Alert.asset_id))
+                .where(Alert.status.in_(ALERT_ACTIVE), self._current_assets(Alert.asset_id))
             )
             or 0,
             vulnerabilities=self._vulnerabilities() if include_vulnerabilities else None,
+            site_id=site_public_id,
         )
 
     def asset_summary(self, now: datetime) -> DashboardAssets:
@@ -75,7 +84,7 @@ class DashboardService:
         # Una sola pasada: estado efectivo x método.
         for state, method, count in self._session.execute(
             select(status, Asset.monitoring_method, func.count())
-            .where(CURRENT)
+            .where(self._current)
             .group_by(status, Asset.monitoring_method)
         ):
             by_status[str(state)] = by_status.get(str(state), 0) + count
@@ -84,7 +93,7 @@ class DashboardService:
         by_type = {
             str(kind): count
             for kind, count in self._session.execute(
-                select(device, func.count()).where(CURRENT).group_by(device)
+                select(device, func.count()).where(self._current).group_by(device)
             )
         }
         return DashboardAssets(
@@ -100,7 +109,7 @@ class DashboardService:
         levels = {level.value: 0 for level in RiskLevel}
         for level, count in self._session.execute(
             select(cast(AssetRisk.level, String), func.count())
-            .where(AssetRisk.calculated_at.is_not(None), _current_assets(AssetRisk.asset_id))
+            .where(AssetRisk.calculated_at.is_not(None), self._current_assets(AssetRisk.asset_id))
             .group_by(AssetRisk.level)
         ):
             levels[str(level)] = count
@@ -112,24 +121,37 @@ class DashboardService:
                 func.count(),
                 func.count().filter(Incident.severity == IncidentLevel.CRITICAL),
                 func.count().filter(Incident.owner_user_id.is_(None)),
-            ).where(Incident.status.in_(INCIDENT_ACTIVE))
+            ).where(Incident.status.in_(INCIDENT_ACTIVE), *self._incident_site())
         ).one()
         return DashboardIncidents(active=active, critical=critical or 0, unassigned=unassigned or 0)
+
+    def _incident_site(self) -> list[Any]:
+        if self._site_id is None:
+            return []
+        # Casos con algún activo del site (los casos sin activos solo cuentan en "todos").
+        return [
+            Incident.id.in_(
+                select(IncidentAsset.incident_id).where(
+                    IncidentAsset.asset_id.in_(
+                        select(Asset.id).where(Asset.site_id == self._site_id)
+                    )
+                )
+            )
+        ]
 
     def _detections(self) -> DashboardDetections:
         severities = {s.value: 0 for s in DetectionSeverity}
         for severity, count in self._session.execute(
             select(cast(Detection.severity, String), func.count())
-            .where(Detection.status.in_(DETECTION_ACTIVE), _current_assets(Detection.asset_id))
+            .where(Detection.status.in_(DETECTION_ACTIVE), self._current_assets(Detection.asset_id))
             .group_by(Detection.severity)
         ):
             severities[str(severity)] = count
         return DashboardDetections(active=sum(severities.values()), by_severity=severities)
 
     def _vulnerabilities(self) -> DashboardVulnerabilities:
-        active = VulnerabilityFinding.status.in_(sorted(VULNERABILITY_ACTIVE)) & _current_assets(
-            VulnerabilityFinding.asset_id
-        )
+        current = self._current_assets(VulnerabilityFinding.asset_id)
+        active = VulnerabilityFinding.status.in_(sorted(VULNERABILITY_ACTIVE)) & current
         evidenced = VulnerabilityFinding.match_state.in_(("confirmed", "probable"))
         severities = {s: 0 for s in SEVERITIES}
         for severity, count in self._session.execute(

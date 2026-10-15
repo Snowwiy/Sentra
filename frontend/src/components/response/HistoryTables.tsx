@@ -1,4 +1,6 @@
 import { useCallback, useState } from "react";
+import { useSite } from "../../site/SiteContext";
+import { useScopedPage } from "../../site/useScopedPage";
 import { Link } from "react-router-dom";
 import { responseApi } from "../../api/sentra";
 import type { ExecutionStatus, PlaybookRun, PlaybookRunStatus, ResponseExecution } from "../../api/types";
@@ -80,7 +82,10 @@ export function ExecutionsTable({
 }) {
   const [status, setStatus] = useState("");
   const [actionId, setActionId] = useState("");
-  const [page, setPage] = useState(1);
+  const [page, setPage] = useScopedPage();
+  // Fase 5F: el historial general sigue el alcance de site; el de un activo o incidente, no.
+  const site = useSite();
+  const siteId = assetId || incidentId ? undefined : site.scopeId;
   const [localSelected, setLocalSelected] = useState<string>();
   const open = onSelect ? selected : localSelected;
   const select = onSelect ?? setLocalSelected;
@@ -94,12 +99,13 @@ export function ExecutionsTable({
           actionId: actionId || undefined,
           assetId,
           incidentId,
+          siteId,
           limit,
           offset: (page - 1) * limit,
         },
         signal,
       ),
-    [status, actionId, assetId, incidentId, limit, page],
+    [status, actionId, assetId, incidentId, siteId, limit, page],
   );
   const { data, error, loading, refresh } = usePolling(fetcher, config.refreshIntervalMs, true, true);
 

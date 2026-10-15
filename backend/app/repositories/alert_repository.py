@@ -23,6 +23,8 @@ class AlertFilter:
     asset_id: int | None = None
     # Case-insensitive substring of the message or the hostname.
     search: str | None = None
+    # Fase 5F: id interno del site del activo (None = todos).
+    site_id: int | None = None
 
 
 class AlertRepository:
@@ -68,6 +70,9 @@ class AlertRepository:
             stmt = stmt.where(Alert.rule == f.rule)
         if f.asset_id is not None:
             stmt = stmt.where(Alert.asset_id == f.asset_id)
+        if f.site_id is not None:
+            # La consulta ya une Asset: el site es el de su activo.
+            stmt = stmt.where(Asset.site_id == f.site_id)
         if f.search:
             pattern = f"%{escape_like(f.search)}%"
             stmt = stmt.where(

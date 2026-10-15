@@ -11,7 +11,7 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, Query, Request
 
 from app.api.auth import READ
-from app.api.deps import get_exposure_service
+from app.api.deps import DbSession, get_exposure_service
 from app.api.responses import error_responses
 from app.schemas.discovery import (
     DiscoveryJobDetail,
@@ -21,6 +21,7 @@ from app.schemas.discovery import (
 )
 from app.services.background import PeriodicJob
 from app.services.exposure_service import ExposureService
+from app.services.site_service import resolve_site
 
 router = APIRouter(prefix="/discovery", tags=["discovery"], dependencies=[READ])
 Service = Annotated[ExposureService, Depends(get_exposure_service)]
@@ -41,9 +42,12 @@ def get_schedule(request: Request, service: Service) -> DiscoveryScheduleRead:
 
 @router.get("/jobs", response_model=DiscoveryJobList)
 def list_jobs(
-    service: Service, limit: Annotated[int, Query(ge=1, le=200)] = 20
+    service: Service,
+    session: DbSession,
+    limit: Annotated[int, Query(ge=1, le=200)] = 20,
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> DiscoveryJobList:
-    return service.jobs(limit)
+    return service.jobs(limit, resolve_site(session, site_id))
 
 
 @router.get("/jobs/{job_id}", response_model=DiscoveryJobDetail, responses=error_responses(404))

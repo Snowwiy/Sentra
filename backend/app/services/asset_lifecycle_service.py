@@ -360,6 +360,10 @@ def assess(
         result.blockers.append("target_agent_online")
     if len(platforms) > 1:
         result.blockers.append("platform_mismatch")
+    if source.site_id != target.site_id:
+        # Fase 5F: nunca se reconcilia entre sites (misma IP o MAC en otra sede no prueba que
+        # sea el mismo equipo). Si de verdad se trasladó, un admin lo mueve de site antes.
+        result.blockers.append("different_site")
     if "machine_id_mismatch" in result.conflicts:
         result.warnings.append("machine_id_mismatch")
     if result.confidence not in ("high", "medium"):
@@ -840,7 +844,8 @@ class AssetLifecycleService:
             conditions.append(Asset.agent_id.in_(agents))
         return self._session.scalars(
             select(Asset)
-            .where(Asset.id != asset.id, or_(*conditions))
+            # Fase 5F: los posibles duplicados se buscan solo dentro del mismo site.
+            .where(Asset.id != asset.id, Asset.site_id == asset.site_id, or_(*conditions))
             .order_by(Asset.last_seen_at.desc().nulls_last(), Asset.id)
             .limit(MAX_CANDIDATES * 3)
         ).all()
@@ -892,6 +897,7 @@ class AssetLifecycleService:
             select(a.c.id, b.c.id)
             .where(
                 a.c.id < b.c.id,
+                a.c.site_id == b.c.site_id,
                 or_(a.c.agent_id.is_not(None), b.c.agent_id.is_not(None)),
                 or_(
                     (a.c.machine_id_hash.is_not(None))

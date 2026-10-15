@@ -242,6 +242,14 @@ class AgentService:
                     agent_installation_method=data.installation_method,
                     machine_id_hash=data.machine_id_hash,
                     ever_managed=True,
+                    # Fase 5F: el site del token (si lo tiene); si no, el site por defecto
+                    # (valor por defecto de la columna). Re-enrolar NUNCA cambia de site un
+                    # activo existente: moverlo es una acción explícita de un admin.
+                    **(
+                        {"site_id": bootstrap.site_id}
+                        if bootstrap is not None and bootstrap.site_id is not None
+                        else {}
+                    ),
                     # Registration alone does not prove the agent keeps running; it becomes
                     # online with its first heartbeat or telemetry sample.
                     status=AssetStatus.UNKNOWN,

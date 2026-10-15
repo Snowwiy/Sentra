@@ -280,6 +280,15 @@ def run_response_engine() -> None:
         logger.info("response sweep", extra={f"response_{k}": v for k, v in counts.items()})
 
 
+def run_sensor_maintenance() -> None:
+    """Fase 5F: caduca jobs de sensor sin empezar, devuelve a la cola leases no confirmados
+    y falla (sin conclusiones negativas) los jobs cuyo sensor dejó de responder."""
+    from app.services.sensor_service import run_sensor_maintenance as sweep_sensors
+
+    with get_sessionmaker()() as session:
+        sweep_sensors(session)
+
+
 def run_report_worker() -> None:
     """Fase 5E: genera los informes pendientes (acotado por vuelta) y aplica la retención.
 

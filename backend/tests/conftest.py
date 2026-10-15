@@ -50,6 +50,28 @@ os.environ["REPORT_MAX_CONCURRENT"] = "3"
 os.environ["REPORT_MAX_QUEUED_TOTAL"] = "20"
 os.environ["REPORT_MAX_ARTIFACT_MB"] = "25"
 os.environ["REPORT_WORKER_INTERVAL_SECONDS"] = "5"
+# Fase 5F: sites y sensores con sus valores por defecto, por la misma razón (el .env del
+# desarrollador no debe cambiar plazos, límites ni versiones mínimas de los tests).
+os.environ["SENSOR_ENROLLMENT_TOKEN_TTL_MINUTES"] = "60"
+os.environ["SENSOR_ENROLL_MAX_PER_MINUTE"] = "10"
+os.environ["SENSOR_HEARTBEAT_MAX_PER_MINUTE"] = "30"
+os.environ["SENSOR_POLL_MAX_PER_MINUTE"] = "30"
+os.environ["SENSOR_HEARTBEAT_INTERVAL_SECONDS"] = "30"
+os.environ["SENSOR_POLL_INTERVAL_SECONDS"] = "30"
+os.environ["SENSOR_OFFLINE_AFTER_SECONDS"] = "180"
+os.environ["SENSOR_STALE_AFTER_SECONDS"] = "86400"
+os.environ["SENSOR_JOB_TTL_MINUTES"] = "60"
+os.environ["SENSOR_JOB_LEASE_SECONDS"] = "120"
+os.environ["SENSOR_RESULT_GRACE_SECONDS"] = "14400"
+os.environ["SENSOR_JOB_MAX_ATTEMPTS"] = "2"
+os.environ["SENSOR_MAX_REQUEST_KB"] = "1024"
+os.environ["SENSOR_MAX_OBSERVATIONS_PER_BATCH"] = "500"
+os.environ["SENSOR_MAX_PORTS_PER_OBSERVATION"] = "256"
+os.environ["SENSOR_MAX_BATCHES_PER_JOB"] = "1000"
+os.environ["SENSOR_MAX_CLOCK_SKEW_SECONDS"] = "300"
+os.environ["SENSOR_MIN_VERSION"] = "0.1.0"
+os.environ["SENSOR_RECOMMENDED_VERSION"] = "0.1.0"
+os.environ["SENSOR_SWEEP_INTERVAL_SECONDS"] = "30"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -199,8 +221,18 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
                 " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"
-                " reports"
+                " reports, site_networks, sensor_enrollment_tokens, sensors"
                 " RESTART IDENTITY CASCADE"
+            )
+        )
+        # Fase 5F: el site por defecto lo crea la migración y no se borra (la función
+        # sentra_default_site_id() lo necesita); se devuelve a su estado inicial.
+        connection.execute(text("DELETE FROM sites WHERE NOT is_default"))
+        connection.execute(
+            text(
+                "UPDATE sites SET name = 'Local', slug = 'local', status = 'active',"
+                " description = NULL, location_label = NULL, timezone = 'UTC', version = 1,"
+                " archived_at = NULL, archive_reason = NULL WHERE is_default"
             )
         )
 

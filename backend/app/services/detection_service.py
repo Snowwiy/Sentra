@@ -37,6 +37,7 @@ from app.schemas.detection import (
 )
 from app.services.asset_context_service import context_values
 from app.services.detection_rule_service import rule_text
+from app.services.site_service import in_site
 
 # Timeline del detalle: la evidencia está acotada a 100 por detección (engine.MAX_EVIDENCE).
 EVIDENCE_LIMIT = 100
@@ -58,6 +59,8 @@ class DetectionFilter:
     until: datetime | None = None
     # Texto en título, resumen o activo.
     search: str | None = None
+    # Fase 5F: id interno del site del activo (None = todos).
+    site_id: int | None = None
 
 
 class DetectionService:
@@ -98,6 +101,9 @@ class DetectionService:
             if asset is None:
                 raise NotFoundError("Asset not found")
             stmt = stmt.where(Detection.asset_id == asset.id)
+        site_condition = in_site(Detection.asset_id, f.site_id)
+        if site_condition is not None:
+            stmt = stmt.where(site_condition)
         if f.since is not None:
             stmt = stmt.where(Detection.last_seen_at >= f.since)
         if f.until is not None:

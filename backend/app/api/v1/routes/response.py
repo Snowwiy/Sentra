@@ -39,6 +39,7 @@ from app.schemas.response import (
 from app.services.auth_service import AuthContext
 from app.services.discovery_runner import DiscoveryRunner, get_discovery_runner
 from app.services.response_service import Operator, ResponseService
+from app.services.site_service import resolve_site
 
 router = APIRouter(prefix="/response", tags=["response"], responses=error_responses(401, 403))
 
@@ -96,6 +97,7 @@ def execute(body: ExecutionRequest, ctx: Executor, service: Service) -> Executio
 def list_executions(
     _: Reader,
     service: Service,
+    session: DbSession,
     status: ExecutionStatus | None = None,
     action_id: Annotated[str | None, Query(max_length=64, pattern=r"^[a-z0-9_]+$")] = None,
     asset_id: UUID | None = None,
@@ -103,8 +105,11 @@ def list_executions(
     run_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: solo ejecuciones sobre activos de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> ExecutionList:
     return service.list_executions(
+        site_id=resolve_site(session, site_id),
         status=status,
         action_id=action_id,
         asset_public_id=asset_id,

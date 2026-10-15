@@ -95,6 +95,7 @@ from app.schemas.response import (
 from app.services import audit_service
 from app.services.agent_service import authenticate_agent, record_contact
 from app.services.audit_service import Actor
+from app.services.site_service import in_site
 
 logger = logging.getLogger(__name__)
 SYSTEM = Actor("system")
@@ -767,8 +768,13 @@ class ResponseService:
         run_public_id: UUID | None = None,
         limit: int = 50,
         offset: int = 0,
+        site_id: int | None = None,
     ) -> ExecutionList:
         where: list[Any] = []
+        site_condition = in_site(ResponseExecution.asset_id, site_id)
+        if site_condition is not None:
+            # Fase 5F: ejecuciones sobre activos del site (las que no tienen activo, no).
+            where.append(site_condition)
         if status:
             where.append(ResponseExecution.status == status)
         if action_id:

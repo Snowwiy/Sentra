@@ -249,6 +249,59 @@ class DiscoveryTargetError(SentraError):
     code = "discovery_target_refused"
 
 
+# --- Fase 5F: sites y sensores ------------------------------------------------------------
+# Un código concreto por motivo (site_conflict, sensor_job_expired...) sin una clase por
+# cada uno: el status HTTP lo fija la clase y el código lo da quien la lanza.
+
+
+class SiteConflictError(ConflictError):
+    def __init__(self, code: str, message: str, details: list[dict[str, Any]] | None = None):
+        super().__init__(message, details)
+        self.code = code
+
+
+class SiteValidationError(SentraError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, code: str, message: str, details: list[dict[str, Any]] | None = None):
+        super().__init__(message, details)
+        self.code = code
+
+
+class SiteNotFoundError(NotFoundError):
+    code = "site_not_found"
+
+
+class SiteNetworkNotFoundError(NotFoundError):
+    code = "site_network_not_found"
+
+
+class SensorNotFoundError(NotFoundError):
+    code = "sensor_not_found"
+
+
+class SensorUnauthorizedError(UnauthorizedError):
+    # Credencial de sensor ausente, desconocida o mal formada: mismo 401 para todo.
+    code = "sensor_unauthorized"
+
+
+class SensorJobNotFoundError(NotFoundError):
+    # También para el job de OTRO sensor: no se confirma que exista.
+    code = "sensor_job_not_found"
+
+
+class SensorEnrollmentInvalidError(UnauthorizedError):
+    # Mismo 401 para token desconocido, caducado, usado, revocado o de un site inactivo.
+    code = "sensor_enrollment_invalid"
+
+
+class SensorForbiddenError(ForbiddenError):
+    # sensor_revoked / sensor_disabled: el sensor deja de pedir trabajo (no reintenta enrolar).
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 def _error(
     status_code: int,
     code: str,

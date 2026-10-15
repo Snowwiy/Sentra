@@ -1,4 +1,6 @@
 import { Fragment, useCallback, useState } from "react";
+import { useSite } from "../site/SiteContext";
+import { useScopedPage } from "../site/useScopedPage";
 import { Link } from "react-router-dom";
 import { alertsApi, sentraApi } from "../api/sentra";
 import { useAuth } from "../auth/AuthContext";
@@ -131,7 +133,10 @@ export function AlertsView({ assetId }: { assetId?: string }) {
   const [severity, setSeverity] = useState("");
   const [rule, setRule] = useState("");
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+  // Fase 5F: en la vista de un activo el activo ya fija el site; si no, el alcance global.
+  const site = useSite();
+  const siteId = assetId ? undefined : site.scopeId;
+  const [page, setPage] = useScopedPage();
   const [expanded, setExpanded] = useState<string | null>(null);
   const q = useDebounced(query);
 
@@ -140,6 +145,7 @@ export function AlertsView({ assetId }: { assetId?: string }) {
       sentraApi.listAlerts(
         {
           assetId,
+          siteId,
           active: status === "active",
           status: status === "active" || status === "all" ? undefined : status,
           severity: (severity || undefined) as AlertSeverity | undefined,
@@ -150,7 +156,7 @@ export function AlertsView({ assetId }: { assetId?: string }) {
         },
         signal,
       ),
-    [assetId, status, severity, rule, q, page],
+    [assetId, siteId, status, severity, rule, q, page],
   );
   const { data, error, loading, refresh } = usePolling(fetchAlerts, config.refreshIntervalMs);
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));

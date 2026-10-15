@@ -97,6 +97,8 @@ class RiskFilter:
     criticality: AssetCriticality | None = None
     min_score: int | None = None
     search: str | None = None
+    # Fase 5F: id interno del site (None = todos).
+    site_id: int | None = None
 
 
 class RiskService:
@@ -171,6 +173,8 @@ class RiskService:
             )
         if f.criticality is not None:
             stmt = stmt.where(Asset.criticality == f.criticality)
+        if f.site_id is not None:
+            stmt = stmt.where(Asset.site_id == f.site_id)
         if f.status is not None:
             stmt = stmt.where(self._status_expr(now) == f.status.value)
         if f.search:

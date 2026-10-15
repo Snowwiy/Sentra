@@ -1,4 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
+import { useSite } from "../site/SiteContext";
+import { SiteScopeChip } from "../site/SiteSelector";
+import { useScopedPage } from "../site/useScopedPage";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { detectionsApi } from "../api/sentra";
 import type {
@@ -58,7 +61,8 @@ export function DetectionsPage() {
   const [rule, setRule] = useState("");
   const [range, setRange] = useState("");
   const [query, setQuery] = useState("");
-  const [page, setPage] = useState(1);
+  const { scopeId } = useSite();
+  const [page, setPage] = useScopedPage();
   const [rules, setRules] = useState<DetectionRule[]>([]);
   const [assetQuery, setAssetQuery] = useState("");
   const assets = useAssetOptions(assetQuery, assetId);
@@ -84,6 +88,7 @@ export function DetectionsPage() {
           confidence: (confidence || undefined) as DetectionConfidence | undefined,
           ruleId: rule || undefined,
           assetId: assetId || undefined,
+          siteId: scopeId,
           // El instante se redondea al minuto para no cambiar la petición en cada render.
           since: range
             ? new Date(Math.floor(Date.now() / 60_000) * 60_000 - Number(range) * 3_600_000).toISOString()
@@ -94,7 +99,7 @@ export function DetectionsPage() {
         },
         signal,
       ),
-    [status, severity, confidence, rule, assetId, range, q, page],
+    [status, severity, confidence, rule, assetId, range, q, page, scopeId],
   );
   const { data, error, loading, refresh } = usePolling(fetchDetections, config.refreshIntervalMs);
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
@@ -116,6 +121,7 @@ export function DetectionsPage() {
     <div className="page">
       <div className="page__header">
         <h1>Detecciones</h1>
+        <SiteScopeChip />
         <Link to="/detections/rules" className="button">
           Reglas
         </Link>

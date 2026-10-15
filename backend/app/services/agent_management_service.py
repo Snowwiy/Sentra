@@ -29,6 +29,7 @@ from app.schemas.agent_management import (
 )
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.asset_service import effective_status
+from app.services.site_service import SiteRef, site_refs
 
 logger = logging.getLogger(__name__)
 
@@ -55,12 +56,14 @@ class AgentManagementService:
         self._session = session
         self._assets = AssetRepository(session)
         self._timeout = heartbeat_timeout
+        self._sites: dict[int, SiteRef] | None = None
 
-    def list_agents(self) -> AgentList:
+    def list_agents(self, site_id: int | None = None) -> AgentList:
         now = datetime.now(UTC)
-        rows = self._session.scalars(
-            select(Asset).where(Asset.agent_id.is_not(None)).order_by(Asset.first_seen_at.desc())
-        ).all()
+        query = select(Asset).where(Asset.agent_id.is_not(None))
+        if site_id is not None:
+            query = query.where(Asset.site_id == site_id)
+        rows = self._session.scalars(query.order_by(Asset.first_seen_at.desc())).all()
         items = [self._read(asset, now) for asset in rows]
         current = sum(1 for agent in items if agent.asset_state == "active")
         summary = AgentSummary(total=current, online=0, offline=0, pending=0, revoked=0)
@@ -133,7 +136,14 @@ class AgentManagementService:
             asset_state="archived" if asset.archived_at is not None else "active",
             archived_at=asset.archived_at,
             lifecycle_version=asset.lifecycle_version,
+            site_id=self._site(asset.site_id).public_id,
+            site_name=self._site(asset.site_id).name,
         )
+
+    def _site(self, site_id: int) -> SiteRef:
+        if self._sites is None or site_id not in self._sites:
+            self._sites = site_refs(self._session)
+        return self._sites[site_id]
 
 
 def local_ipv4_addresses() -> list[str]:

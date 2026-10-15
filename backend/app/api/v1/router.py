@@ -25,6 +25,9 @@ from app.api.v1.routes import (
     reports,
     response,
     risk,
+    sensor_protocol,
+    sensors,
+    sites,
     telemetry,
     threat_intel,
     users,
@@ -66,3 +69,6 @@ api_router.include_router(discovery.router, responses=_COMMON)
 api_router.include_router(enrollment_tokens.router, responses=_COMMON)
 api_router.include_router(console.router, responses=_COMMON)
 api_router.include_router(console_discovery.router, responses=_COMMON)
+api_router.include_router(sites.router, responses=_COMMON)
+api_router.include_router(sensors.router, responses=_COMMON)
+api_router.include_router(sensor_protocol.router, responses=_COMMON)

@@ -13,6 +13,7 @@ import {
   originLabel,
   profileLabel,
   stopReasonLabel,
+  executionLabel,
 } from "../../lib/discovery";
 import { errorMessage, formatDateTime } from "../../lib/format";
 import { deviceTypeLabel } from "../../lib/identity";
@@ -27,7 +28,8 @@ export interface JobActions {
   /** Navegar a la tabla Red filtrada por la red del job. */
   onShowDevices: (target: string) => void;
   /** Lanzar otro descubrimiento de la misma red. */
-  onRunAgain: (target: string) => void;
+  /** Repite el job con la misma red, site y destino de ejecución. */
+  onRunAgain: (job: DiscoveryJob) => void;
   /** El job cambió de estado (para refrescar historial y activos). */
   onChanged: (job: DiscoveryJob) => void;
   /** Si este navegador puede iniciar/cancelar (consola local). */
@@ -114,6 +116,16 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
             )}
           </dd>
         </div>
+        {data.site_name && (
+          <div className="field">
+            <dt>Site</dt>
+            <dd>{data.site_name}</dd>
+          </div>
+        )}
+        <div className="field">
+          <dt>Ejecución</dt>
+          <dd>{executionLabel(data)}</dd>
+        </div>
         <div className="field">
           <dt>Origen</dt>
           <dd>{originLabel(data)}</dd>
@@ -171,7 +183,7 @@ export function DiscoveryJobView({ jobId, actions }: { jobId: string; actions: J
               <button
                 type="button"
                 className="button button--primary"
-                onClick={() => actions.onRunAgain(data.target)}
+                onClick={() => actions.onRunAgain(data)}
                 title={actions.adminReason}
               >
                 Ejecutar nuevamente

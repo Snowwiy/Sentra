@@ -101,6 +101,9 @@ class AssetRead(ResponseModel):
     # Scans de discovery completos y exitosos seguidos que no lo vieron.
     missed_discovery_scans: int = 0
     last_activity_at: datetime | None = None
+    # Fase 5F: site del activo. La misma IP en dos sites son dos activos distintos.
+    site_id: UUID
+    site_name: str
 
 
 class AssetList(ResponseModel):

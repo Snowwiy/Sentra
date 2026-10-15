@@ -1,4 +1,5 @@
 from datetime import datetime
+from uuid import UUID
 
 from app.schemas.common import ResponseModel
 
@@ -57,3 +58,5 @@ class DashboardSummary(ResponseModel):
     active_alerts: int
     # None si el rol no puede leer vulnerabilidades (vulnerabilities:read).
     vulnerabilities: DashboardVulnerabilities | None = None
+    # Fase 5F: site al que se limita el resumen (null = todos los sites).
+    site_id: UUID | None = None

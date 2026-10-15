@@ -80,6 +80,7 @@ from app.services.incident_service import (
     risk_assets,
     summarize,
 )
+from app.services.site_service import in_site
 
 IncidentSort = Literal["last_activity", "created_at", "severity", "priority", "status", "number"]
 
@@ -126,6 +127,9 @@ class IncidentFilter:
     since: datetime | None = None
     until: datetime | None = None
     search: str | None = None
+    # Fase 5F: casos con al menos un activo de este site (id interno; None = todos). Un caso
+    # sin activos no pertenece a ningún site y solo aparece sin filtro.
+    site_id: int | None = None
 
 
 class IncidentQueries:
@@ -209,6 +213,11 @@ class IncidentQueries:
                 Incident.id.in_(
                     select(IncidentAsset.incident_id).where(IncidentAsset.asset_id == asset)
                 )
+            )
+        site_condition = in_site(IncidentAsset.asset_id, f.site_id)
+        if site_condition is not None:
+            stmt = stmt.where(
+                Incident.id.in_(select(IncidentAsset.incident_id).where(site_condition))
             )
         if f.since is not None:
             stmt = stmt.where(Incident.created_at >= f.since)

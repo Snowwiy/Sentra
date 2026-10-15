@@ -6,6 +6,7 @@ import {
   jobElapsedSeconds,
   originLabel,
   profileLabel,
+  executionLabel,
 } from "../../lib/discovery";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
@@ -120,11 +121,14 @@ export function JobsPanel({
   loading,
   error,
   onOpen,
+  showSite = false,
 }: {
   jobs: DiscoveryJob[] | undefined;
   loading: boolean;
   error: Error | undefined;
   onOpen: (job: DiscoveryJob) => void;
+  /** Fase 5F: columna Site cuando el alcance es "Todos los sites". */
+  showSite?: boolean;
 }) {
   return (
     <section className="panel" aria-label="Ejecuciones recientes">
@@ -138,6 +142,8 @@ export function JobsPanel({
               <tr>
                 <th>Fecha/hora</th>
                 <th>Red</th>
+                {showSite && <th>Site</th>}
+                <th>Ejecución</th>
                 <th>Estado</th>
                 <th>Encontrados</th>
                 <th>Nuevos</th>
@@ -164,6 +170,8 @@ export function JobsPanel({
                     </button>
                   </td>
                   <td className="mono">{job.target}</td>
+                  {showSite && <td className="small">{job.site_name ?? "—"}</td>}
+                  <td className="small">{executionLabel(job)}</td>
                   <td>
                     <span className={JOB_STATUS_CLASS[job.status]} title={job.errors.join("\n") || undefined}>
                       {JOB_STATUS_LABELS[job.status]}

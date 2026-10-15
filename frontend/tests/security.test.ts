@@ -58,6 +58,19 @@ describe("frontend security", () => {
     }
   });
 
+  // Fase 5F: el token de enrollment de sensor solo vive en memoria; la gestión de sensores y
+  // sites no persiste ni registra nada (el selector de site guarda solo un id, en src/site).
+  it("sensor and site management code never persists or logs anything", () => {
+    const files = sources(SRC).filter((f) => /components[\\/]sensors|SensorsPage|SitesPage/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(4);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /localStorage|sessionStorage|indexedDB|document\.cookie|console\.(log|info|debug|warn|error)|history\.(push|replace)State/,
+      );
+    }
+  });
+
   // Fase 4G: la sesión vive solo en una cookie HttpOnly; el frontend no guarda ni registra
   // contraseñas, IDs de sesión ni el token CSRF, y no queda rastro de la consola local.
   it("auth code never persists, logs or reads cookies", () => {

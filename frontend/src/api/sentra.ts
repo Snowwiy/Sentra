@@ -170,9 +170,24 @@ import type {
   ResponseExecution,
   ResponseExecutionList,
   ResponsePreview,
+  DiscoveryExecutionTarget,
+  Sensor,
+  SensorEnrollment,
+  SensorEnrollmentCreated,
+  SensorEnrollmentList,
+  SensorJobList,
+  SensorList,
+  Site,
+  SiteCreate,
+  SiteList,
+  SiteNetwork,
+  SiteNetworkList,
+  SiteUpdate,
 } from "./types";
 
 export interface AlertQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   status?: AlertStatus;
   /** Open or acknowledged; ignored when `status` is set. */
   active?: boolean;
@@ -186,6 +201,8 @@ export interface AlertQuery {
 }
 
 export interface DetectionQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   status?: DetectionStatus;
   /** Abiertas o reconocidas; se ignora si se indica `status`. */
   active?: boolean;
@@ -204,6 +221,8 @@ export interface DetectionQuery {
 export type RiskSortKey = "score" | "changed_at" | "last_seen" | "name" | "criticality";
 
 export interface RiskQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   level?: RiskLevel;
   confidence?: RiskConfidence;
   /** Un tipo de dispositivo o "unknown". */
@@ -218,6 +237,8 @@ export interface RiskQuery {
 }
 
 export interface AssetQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   method?: MonitoringMethod;
   status?: AssetStatus;
   /** A device type, or "unknown". */
@@ -283,8 +304,8 @@ export const sentraApi = {
   // /health/ready answers 503 with a valid body when not ready; that is data, not a failure.
   readiness: (signal?: AbortSignal) =>
     apiGet<Readiness>("/health/ready", { signal, acceptStatuses: [503] }),
-  dashboardSummary: (signal?: AbortSignal) =>
-    apiGet<DashboardSummary>("/dashboard/summary", { signal }),
+  dashboardSummary: (signal?: AbortSignal, siteId?: string) =>
+    apiGet<DashboardSummary>(`/dashboard/summary${queryString({ site_id: siteId })}`, { signal }),
   listAssets: (signal?: AbortSignal, query: AssetQuery = {}) =>
     apiGet<AssetList>(
       `/assets${queryString({
@@ -306,6 +327,7 @@ export const sentraApi = {
         order: query.order,
         limit: query.limit,
         offset: query.offset,
+        site_id: query.siteId,
       })}`,
       { signal },
     ),
@@ -347,25 +369,26 @@ export const sentraApi = {
       { signal },
     ),
   listAlerts: (
-    { status, active, severity, rule, assetId, q, limit, offset }: AlertQuery,
+    { status, active, severity, rule, assetId, q, limit, offset, siteId }: AlertQuery,
     signal?: AbortSignal,
   ) =>
     apiGet<AlertList>(
-      `/alerts${queryString({ status, active, severity, rule, asset_id: assetId, q, limit, offset })}`,
+      `/alerts${queryString({ status, active, severity, rule, asset_id: assetId, q, limit, offset, site_id: siteId })}`,
       { signal },
     ),
   getExposure: (assetId: string, signal?: AbortSignal) =>
     apiGet<Exposure>(`/assets/${encodeURIComponent(assetId)}/exposure`, { signal }),
   discoveryScope: (signal?: AbortSignal) => apiGet<DiscoveryScope>("/discovery/scope", { signal }),
-  discoveryJobs: (limit: number, signal?: AbortSignal) =>
-    apiGet<DiscoveryJobList>(`/discovery/jobs${queryString({ limit })}`, { signal }),
+  discoveryJobs: (limit: number, signal?: AbortSignal, siteId?: string) =>
+    apiGet<DiscoveryJobList>(`/discovery/jobs${queryString({ limit, site_id: siteId })}`, { signal }),
   discoveryJob: (jobId: string, signal?: AbortSignal) =>
     apiGet<DiscoveryJobDetail>(`/discovery/jobs/${encodeURIComponent(jobId)}`, { signal }),
   discoverySchedule: (signal?: AbortSignal) =>
     apiGet<DiscoverySchedule>("/discovery/schedule", { signal }),
   getAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<Alert>(`/alerts/${encodeURIComponent(alertId)}`, { signal }),
-  listAgents: (signal?: AbortSignal) => apiGet<AgentList>("/agents", { signal }),
+  listAgents: (signal?: AbortSignal, siteId?: string) =>
+    apiGet<AgentList>(`/agents${queryString({ site_id: siteId })}`, { signal }),
   getAssetAgent: (assetId: string, signal?: AbortSignal) =>
     apiGet<Agent>(`/assets/${encodeURIComponent(assetId)}/agent`, { signal }),
 };
@@ -376,6 +399,12 @@ export const sentraApi = {
  * administración en el frontend. El token de `createEnrollmentToken` solo existe en esa
  * respuesta: nunca se guarda ni se registra.
  */
+export interface DiscoveryStartOptions {
+  siteId?: string;
+  executionTarget?: DiscoveryExecutionTarget;
+  sensorId?: string;
+}
+
 export const consoleApi = {
   info: (signal?: AbortSignal) => apiGet<ConsoleInfo>("/console", { signal }),
   listEnrollmentTokens: (signal?: AbortSignal) =>
@@ -390,8 +419,15 @@ export const consoleApi = {
     apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`),
   // Descubrimiento de red: el backend vuelve a validar el target contra
   // DISCOVERY_ALLOWED_NETWORKS; la lista del frontend es solo una comodidad.
-  startDiscovery: (target: string) =>
-    apiPost<DiscoveryJobDetail>("/console/discovery/jobs", { target }),
+  // Fase 5F: site y destino de ejecución (local solo en el site por defecto; sensor del mismo
+  // site). Sin site_id el servidor usa el comportamiento histórico (local, site por defecto).
+  startDiscovery: (target: string, options: DiscoveryStartOptions = {}) =>
+    apiPost<DiscoveryJobDetail>("/console/discovery/jobs", {
+      target,
+      ...(options.siteId ? { site_id: options.siteId } : {}),
+      ...(options.executionTarget ? { execution_target: options.executionTarget } : {}),
+      ...(options.executionTarget === "sensor" && options.sensorId ? { sensor_id: options.sensorId } : {}),
+    }),
   cancelDiscovery: (jobId: string) =>
     apiPost<DiscoveryJobDetail>(`/console/discovery/jobs/${encodeURIComponent(jobId)}/cancel`),
 };
@@ -476,6 +512,7 @@ export const detectionsApi = {
         q: query.q,
         limit: query.limit,
         offset: query.offset,
+        site_id: query.siteId,
       })}`,
       { signal },
     ),
@@ -588,6 +625,7 @@ export const riskApi = {
   list: (query: RiskQuery, signal?: AbortSignal) =>
     apiGet<RiskAssetList>(
       `/risk/assets${queryString({
+        site_id: query.siteId,
         level: query.level,
         confidence: query.confidence,
         device_type: query.deviceType,
@@ -763,6 +801,8 @@ export const localAiApi = {
 };
 
 export interface IncidentQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   status?: IncidentStatus;
   /** Solo casos vivos (open, triage, investigating, contained); se ignora con `status`. */
   active?: boolean;
@@ -808,6 +848,7 @@ export const incidentsApi = {
   list: (query: IncidentQuery, signal?: AbortSignal) =>
     apiGet<IncidentList>(
       `/incidents${queryString({
+        site_id: query.siteId,
         status: query.status,
         active: query.active,
         severity: query.severity,
@@ -879,6 +920,8 @@ export const incidentsApi = {
 // --- Fase 5B: vulnerabilidades y exposición ------------------------------------------------------
 
 export interface FindingQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   status?: FindingStatus;
   /** Solo los que necesitan trabajo (open, acknowledged, mitigating); se ignora con `status`. */
   active?: boolean;
@@ -929,6 +972,7 @@ export const vulnerabilitiesApi = {
   list: (query: FindingQuery, signal?: AbortSignal) =>
     apiGet<FindingList>(
       `/vulnerabilities/findings${queryString({
+        site_id: query.siteId,
         status: query.status,
         active: query.active,
         severity: query.severity,
@@ -1176,6 +1220,8 @@ export interface PlaybookInput {
 }
 
 export interface ExecutionQuery {
+  /** Fase 5F: alcance de site (ausente = todos los sites). */
+  siteId?: string;
   status?: ExecutionStatus;
   actionId?: string;
   assetId?: string;
@@ -1211,6 +1257,7 @@ export const responseApi = {
   executions: (query: ExecutionQuery = {}, signal?: AbortSignal) =>
     apiGet<ResponseExecutionList>(
       `/response/executions${queryString({
+        site_id: query.siteId,
         status: query.status,
         action_id: query.actionId,
         asset_id: query.assetId,
@@ -1295,4 +1342,58 @@ export const reportsApi = {
   remove: (reportId: string) => apiDelete<Report>(reportPath(reportId)),
   /** Artefacto binario; nunca se renderiza en la app, solo se guarda como fichero. */
   download: (reportId: string, signal?: AbortSignal) => apiDownload(`${reportPath(reportId)}/artifact`, { signal }),
+};
+
+// --- Fase 5F: sites y sensores distribuidos -------------------------------------------------
+
+const sitePath = (siteId: string) => `/sites/${encodeURIComponent(siteId)}`;
+const sensorPath = (sensorId: string) => `/sensors/${encodeURIComponent(sensorId)}`;
+
+/**
+ * Sites (Fase 5F). Lectura con monitoring:read; crear, editar, archivar y gestionar redes exige
+ * sites:manage (el servidor lo comprueba en cada petición). Toda edición manda la `version`
+ * leída: si otro admin cambió el site, 409 site_conflict y la UI recarga.
+ */
+export const sitesApi = {
+  list: (signal?: AbortSignal) => apiGet<SiteList>("/sites", { signal }),
+  get: (siteId: string, signal?: AbortSignal) => apiGet<Site>(sitePath(siteId), { signal }),
+  create: (input: SiteCreate) => apiPost<Site>("/sites", input),
+  update: (siteId: string, input: SiteUpdate) => apiPatch<Site>(sitePath(siteId), input),
+  archive: (siteId: string, version: number, reason: string) =>
+    apiPost<Site>(`${sitePath(siteId)}/archive`, { version, reason }),
+  restore: (siteId: string, version: number) => apiPost<Site>(`${sitePath(siteId)}/restore`, { version }),
+  remove: (siteId: string, version: number) =>
+    apiDelete<void>(`${sitePath(siteId)}${queryString({ version: String(version) })}`),
+  networks: (siteId: string, signal?: AbortSignal) =>
+    apiGet<SiteNetworkList>(`${sitePath(siteId)}/networks`, { signal }),
+  addNetwork: (siteId: string, input: { cidr: string; name?: string; enabled?: boolean }) =>
+    apiPost<SiteNetwork>(`${sitePath(siteId)}/networks`, input),
+  updateNetwork: (siteId: string, networkId: string, input: { name?: string; enabled?: boolean }) =>
+    apiPatch<SiteNetwork>(`${sitePath(siteId)}/networks/${encodeURIComponent(networkId)}`, input),
+  removeNetwork: (siteId: string, networkId: string) =>
+    apiDelete<void>(`${sitePath(siteId)}/networks/${encodeURIComponent(networkId)}`),
+};
+
+/**
+ * Sensores distribuidos (Fase 5F). El token de enrollment solo existe en la respuesta de
+ * `createEnrollment`: nunca se guarda ni se registra. Las acciones exigen sensors:manage.
+ */
+export const sensorsApi = {
+  list: (siteId?: string, signal?: AbortSignal) =>
+    apiGet<SensorList>(`/sensors${queryString({ site_id: siteId })}`, { signal }),
+  get: (sensorId: string, signal?: AbortSignal) => apiGet<Sensor>(sensorPath(sensorId), { signal }),
+  jobs: (sensorId: string, limit = 20, signal?: AbortSignal) =>
+    apiGet<SensorJobList>(`${sensorPath(sensorId)}/jobs${queryString({ limit })}`, { signal }),
+  revoke: (sensorId: string, version: number, reason: string) =>
+    apiPost<Sensor>(`${sensorPath(sensorId)}/revoke`, { version, reason }),
+  disable: (sensorId: string, version: number) => apiPost<Sensor>(`${sensorPath(sensorId)}/disable`, { version }),
+  enable: (sensorId: string, version: number) => apiPost<Sensor>(`${sensorPath(sensorId)}/enable`, { version }),
+  rotateCredential: (sensorId: string, version: number) =>
+    apiPost<Sensor>(`${sensorPath(sensorId)}/rotate-credential`, { version }),
+  enrollments: (siteId?: string, signal?: AbortSignal) =>
+    apiGet<SensorEnrollmentList>(`/sensors/enrollment-tokens${queryString({ site_id: siteId })}`, { signal }),
+  createEnrollment: (input: { site_id: string; name: string; ttl_minutes?: number }) =>
+    apiPost<SensorEnrollmentCreated>("/sensors/enrollment-tokens", input),
+  revokeEnrollment: (enrollmentId: string) =>
+    apiPost<SensorEnrollment>(`/sensors/enrollment-tokens/${encodeURIComponent(enrollmentId)}/revoke`),
 };

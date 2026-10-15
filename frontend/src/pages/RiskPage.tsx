@@ -1,4 +1,7 @@
 import { useCallback, useState } from "react";
+import { useSite } from "../site/SiteContext";
+import { ScopeNote } from "../site/SiteSelector";
+import { useScopedPage } from "../site/useScopedPage";
 import { Link, useNavigate } from "react-router-dom";
 import { riskApi, type RiskSortKey } from "../api/sentra";
 import type { AssetCriticality, AssetStatus, RiskConfidence, RiskLevel } from "../api/types";
@@ -53,7 +56,8 @@ export function RiskPage() {
   const [criticality, setCriticality] = useState("");
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortState<RiskSortKey>>({ key: "score", dir: "desc" });
-  const [page, setPage] = useState(1);
+  const { scopeId } = useSite();
+  const [page, setPage] = useScopedPage();
   const q = useDebounced(query);
 
   const fetchOverview = useCallback((signal: AbortSignal) => riskApi.overview(signal), []);
@@ -68,6 +72,7 @@ export function RiskPage() {
           deviceType: deviceType || undefined,
           status: (status || undefined) as AssetStatus | undefined,
           criticality: (criticality || undefined) as AssetCriticality | undefined,
+          siteId: scopeId,
           q,
           sort: sort.key,
           order: sort.dir,
@@ -76,7 +81,7 @@ export function RiskPage() {
         },
         signal,
       ),
-    [level, confidence, deviceType, status, criticality, q, sort, page],
+    [level, confidence, deviceType, status, criticality, q, sort, page, scopeId],
   );
   const list = usePolling(fetchList, config.refreshIntervalMs);
   const pages = Math.max(1, Math.ceil((list.data?.total ?? 0) / PAGE_SIZE));
@@ -94,7 +99,10 @@ export function RiskPage() {
   return (
     <div className="page">
       <div className="page__header">
-        <h1>Riesgo</h1>
+        <div>
+          <h1>Riesgo</h1>
+          <ScopeNote />
+        </div>
         {data?.last_calculated_at && (
           <span className="muted small" title={formatDateTime(data.last_calculated_at)}>
             Último cálculo {formatRelative(data.last_calculated_at)}

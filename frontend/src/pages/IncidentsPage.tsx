@@ -1,4 +1,7 @@
 import { useCallback, useState } from "react";
+import { useSite } from "../site/SiteContext";
+import { ScopeNote } from "../site/SiteSelector";
+import { useScopedPage } from "../site/useScopedPage";
 import { Link, useNavigate } from "react-router-dom";
 import { incidentsApi } from "../api/sentra";
 import type { IncidentLevel, IncidentSort, IncidentStatus } from "../api/types";
@@ -69,7 +72,8 @@ export function IncidentsPage() {
   const [filters, setFilters] = useState<Filters>(DEFAULT_FILTERS);
   const [query, setQuery] = useState("");
   const [sort, setSort] = useState<SortState<IncidentSort>>({ key: "last_activity", dir: "desc" });
-  const [page, setPage] = useState(1);
+  const { scopeId } = useSite();
+  const [page, setPage] = useScopedPage();
   const [creating, setCreating] = useState(false);
   const q = useDebounced(query);
 
@@ -85,6 +89,7 @@ export function IncidentsPage() {
           severity: (filters.severity || undefined) as IncidentLevel | undefined,
           priority: (filters.priority || undefined) as IncidentLevel | undefined,
           owner: filters.owner || undefined,
+          siteId: scopeId,
           q,
           sort: sort.key,
           order: sort.dir,
@@ -93,7 +98,7 @@ export function IncidentsPage() {
         },
         signal,
       ),
-    [filters, q, sort, page],
+    [filters, q, sort, page, scopeId],
   );
   const { data, error, loading, refresh } = usePolling(fetchIncidents, config.refreshIntervalMs);
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
@@ -124,6 +129,7 @@ export function IncidentsPage() {
       <div className="page__header">
         <div>
           <h1>Incidentes</h1>
+          <ScopeNote />
           {overview.data && (
             <p className="muted small">
               Edad media de los casos activos: {formatDuration(overview.data.mean_age_seconds)} (dato observado, no

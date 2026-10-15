@@ -54,6 +54,7 @@ from app.services.incident_service import (
     detail,
     get_incident,
 )
+from app.services.site_service import resolve_site
 
 router = APIRouter(tags=["incidents"], responses=error_responses(401, 403))
 
@@ -123,6 +124,8 @@ def list_incidents(
     order: Literal["asc", "desc"] = "desc",
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     offset: Annotated[int, Query(ge=0, le=100_000)] = 0,
+    # Fase 5F: casos con algún activo de este site.
+    site_id: Annotated[UUID | None, Query()] = None,
 ) -> IncidentList:
     return IncidentQueries(session, ctx.user).find(
         IncidentFilter(
@@ -135,6 +138,7 @@ def list_incidents(
             since=since,
             until=until,
             search=q.strip() if q and q.strip() else None,
+            site_id=resolve_site(session, site_id),
         ),
         sort,
         order == "desc",

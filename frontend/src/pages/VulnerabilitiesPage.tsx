@@ -1,4 +1,7 @@
 import { useCallback, useState } from "react";
+import { useSite } from "../site/SiteContext";
+import { ScopeNote } from "../site/SiteSelector";
+import { useScopedPage } from "../site/useScopedPage";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import { vulnerabilitiesApi } from "../api/sentra";
 import type {
@@ -110,7 +113,8 @@ export function VulnerabilitiesPage() {
   // ?q= permite enlazar desde el catálogo (findings de un CVE).
   const [query, setQuery] = useState(() => params.get("q") ?? "");
   const [sort, setSort] = useState<SortState<FindingSort>>({ key: "priority", dir: "desc" });
-  const [page, setPage] = useState(1);
+  const { scopeId } = useSite();
+  const [page, setPage] = useScopedPage();
   const q = useDebounced(query);
 
   const fetchOverview = useCallback((signal: AbortSignal) => vulnerabilitiesApi.overview(signal), []);
@@ -129,6 +133,7 @@ export function VulnerabilitiesPage() {
           stale: (filters.stale || undefined) as "true" | "false" | undefined,
           kev: filters.kev === "true" || undefined,
           epssMin: filters.epss ? Number(filters.epss) : undefined,
+          siteId: scopeId,
           q,
           sort: sort.key,
           order: sort.dir,
@@ -137,7 +142,7 @@ export function VulnerabilitiesPage() {
         },
         signal,
       ),
-    [filters, q, sort, page],
+    [filters, q, sort, page, scopeId],
   );
   const { data, error, loading, refresh } = usePolling(fetchFindings, config.refreshIntervalMs);
   const pages = Math.max(1, Math.ceil((data?.total ?? 0) / PAGE_SIZE));
@@ -169,6 +174,7 @@ export function VulnerabilitiesPage() {
       <div className="page__header">
         <div>
           <h1>Vulnerabilidades</h1>
+          <ScopeNote />
           {o && (
             <p className="muted small">
               {SEVERITY_ORDER.filter((s) => s !== "informational")

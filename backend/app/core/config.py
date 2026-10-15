@@ -591,6 +591,46 @@ class Settings(BaseSettings):
     # Cada cuánto el job report-worker atiende la cola (latencia hasta empezar a generar).
     report_worker_interval_seconds: int = Field(default=5, ge=1, le=300)
 
+    # --- Fase 5F: sites y sensores distribuidos (docs/distributed-sensors.md) --------------
+    # Sin sensores enrolados nada de esto tiene efecto: la instalación sigue siendo de un
+    # único site local. Todos los límites protegen al servidor de un sensor comprometido.
+    # El comando de ejemplo de enrolamiento usa AGENT_SERVER_URL (la URL pública del
+    # servidor); sin valor muestra un marcador para completarlo a mano: nunca localhost fijo.
+    # Vida del token de enrolamiento de un solo uso (minutos).
+    sensor_enrollment_token_ttl_minutes: int = Field(default=60, ge=5, le=1440)
+    # Intentos de enrolamiento por dirección y minuto (prueba masiva de tokens).
+    sensor_enroll_max_per_minute: int = Field(default=10, ge=1, le=1000)
+    # Peticiones de un sensor por minuto a heartbeat y a poll (cada una con su propio límite).
+    sensor_heartbeat_max_per_minute: int = Field(default=30, ge=1, le=6000)
+    sensor_poll_max_per_minute: int = Field(default=30, ge=1, le=6000)
+    # Intervalos que el servidor ordena al sensor (el sensor no decide su propio ritmo).
+    sensor_heartbeat_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    sensor_poll_interval_seconds: int = Field(default=30, ge=5, le=3600)
+    # Sin heartbeat durante este tiempo el sensor se muestra offline, y stale tras el segundo.
+    sensor_offline_after_seconds: int = Field(default=180, ge=30, le=86_400)
+    sensor_stale_after_seconds: int = Field(default=86_400, ge=60, le=2_592_000)
+    # Plazo para que el sensor EMPIECE un job; después caduca (expired).
+    sensor_job_ttl_minutes: int = Field(default=60, ge=1, le=10_080)
+    # Lease de un job recogido pero no empezado: si vence, vuelve a la cola (o falla).
+    sensor_job_lease_seconds: int = Field(default=120, ge=30, le=3600)
+    # Margen para entregar resultados de un job en curso además de su duración máxima
+    # (DISCOVERY_JOB_TIMEOUT_MINUTES): cubre caídas del enlace del site sin perder el scan.
+    sensor_result_grace_seconds: int = Field(default=14_400, ge=60, le=604_800)
+    sensor_job_max_attempts: int = Field(default=2, ge=1, le=5)
+    # Límites de los resultados. Lo que los supera se rechaza antes de procesarlo.
+    sensor_max_request_kb: int = Field(default=1024, ge=16, le=16_384)
+    sensor_max_observations_per_batch: int = Field(default=500, ge=1, le=5000)
+    sensor_max_ports_per_observation: int = Field(default=256, ge=1, le=1024)
+    sensor_max_batches_per_job: int = Field(default=1000, ge=1, le=100_000)
+    # Desfase de reloj tolerado en observed_at y en el heartbeat (no exige sincronía exacta).
+    sensor_max_clock_skew_seconds: int = Field(default=300, ge=5, le=86_400)
+    # Versiones: por debajo de la mínima el sensor es "unsupported" (sin jobs); por debajo
+    # de la recomendada, "outdated". Nunca hay auto-update remoto.
+    sensor_min_version: str = Field(default="0.1.0", pattern=r"^\d+\.\d+\.\d+$")
+    sensor_recommended_version: str = Field(default="0.1.0", pattern=r"^\d+\.\d+\.\d+$")
+    # Cada cuánto el job sensor-maintenance caduca jobs y recupera leases vencidos.
+    sensor_sweep_interval_seconds: int = Field(default=30, ge=5, le=3600)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en

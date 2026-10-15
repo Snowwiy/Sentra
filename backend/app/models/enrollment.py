@@ -49,6 +49,11 @@ class AgentEnrollmentToken(Base):
     last_asset_id: Mapped[int | None] = mapped_column(
         ForeignKey("assets.id", ondelete="SET NULL"), index=True
     )
+    # Fase 5F: site en el que quedará el agente que enrole con este token (null: el site por
+    # defecto). Lo decide el admin al crear el token, nunca el agente.
+    site_id: Mapped[int | None] = mapped_column(
+        ForeignKey("sites.id", ondelete="RESTRICT"), index=True
+    )
 
     def state(self, now: datetime) -> EnrollmentTokenState:
         if self.revoked_at is not None:

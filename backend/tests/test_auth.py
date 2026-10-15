@@ -610,6 +610,14 @@ NON_SESSION_ROUTES = {
     ("GET", "/api/v1/agent-enrollment-tokens"),  # X-Admin-Key (legacy)
     ("POST", "/api/v1/agent-enrollment-tokens"),
     ("POST", "/api/v1/agent-enrollment-tokens/{token_id}/revoke"),
+    # Fase 5F: protocolo de sensores (token de enrolamiento o credencial Bearer propia).
+    ("POST", "/api/v1/sensor/enroll"),
+    ("POST", "/api/v1/sensor/heartbeat"),
+    ("POST", "/api/v1/sensor/jobs/poll"),
+    ("POST", "/api/v1/sensor/jobs/{job_id}/start"),
+    ("POST", "/api/v1/sensor/jobs/{job_id}/results"),
+    ("POST", "/api/v1/sensor/jobs/{job_id}/complete"),
+    ("POST", "/api/v1/sensor/credential/rotate"),
 }
 
 
@@ -628,6 +636,7 @@ def _concrete(path: str) -> str:
         "asset_id", "alert_id", "job_id", "token_id", "user_id", "detection_id", "insight_id",
         "model_id", "benchmark_id", "incident_id", "finding_id", "indicator_id", "match_id",
         "execution_id", "playbook_id", "run_id", "request_id", "report_id",
+        "site_id", "network_id", "sensor_id", "enrollment_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.

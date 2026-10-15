@@ -66,6 +66,15 @@ from app.models.risk import (
     RiskLevel,
     RiskSnapshot,
 )
+from app.models.site import (
+    Sensor,
+    SensorEnrollmentToken,
+    SensorJob,
+    SensorJobBatch,
+    SensorObservation,
+    Site,
+    SiteNetwork,
+)
 from app.models.telemetry import TelemetrySample
 from app.models.threat_intel import (
     ThreatIndicator,
@@ -160,6 +169,13 @@ __all__ = [
     "RiskSnapshot",
     "RuleSource",
     "RuleStatus",
+    "Sensor",
+    "SensorEnrollmentToken",
+    "SensorJob",
+    "SensorJobBatch",
+    "SensorObservation",
+    "Site",
+    "SiteNetwork",
     "SystemEvent",
     "TelemetrySample",
     "ThreatIndicator",

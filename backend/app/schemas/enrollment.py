@@ -18,6 +18,9 @@ class EnrollmentTokenCreate(RequestModel):
     expected_platform: Platform | None = None
     expected_hostname: str | None = Field(default=None, min_length=1, max_length=255)
     note: str | None = Field(default=None, max_length=200)
+    # Fase 5F: site en el que quedará el agente que se enrole con el token (sin valor: el
+    # site por defecto). Lo decide el admin al crear el token, nunca el host que se enrola.
+    site_id: UUID | None = None
 
 
 class EnrollmentTokenRead(ResponseModel):
@@ -38,6 +41,9 @@ class EnrollmentTokenRead(ResponseModel):
     created_via: str
     # Asset of the agent that used it last (null until used, or if that asset was deleted).
     last_asset_id: UUID | None
+    # Fase 5F: null = site por defecto.
+    site_id: UUID | None
+    site_name: str | None
 
 
 class EnrollmentTokenCreated(EnrollmentTokenRead):
