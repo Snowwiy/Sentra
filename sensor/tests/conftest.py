@@ -2,7 +2,7 @@
 
 import json
 import uuid
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -13,6 +13,7 @@ from sentra_sensor.client import HttpResponse, TransportError
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.credentials import CredentialStore, SensorIdentity
 from sentra_sensor.runner import ProberSet, SensorRunner
+from sentra_sensor.spool import Spool
 
 SENSOR_ID = "11111111-1111-4111-8111-111111111111"
 SITE_ID = "22222222-2222-4222-8222-222222222222"
@@ -106,6 +107,8 @@ class FakeServer:
         self.lose_response_for: set[str] = set()
         self.rotations = 0
         self.max_body_seen = 0
+        # Fase 6B: credencial que devuelve el start de un job snmp_inventory.
+        self.start_credentials: dict[str, Any] | None = None
 
     # --- utilidades de test ---------------------------------------------------------
     def paths(self) -> list[str]:
@@ -194,7 +197,14 @@ class FakeServer:
         job_id, action = parts[3], parts[4]
         if action == "start":
             self.started.append(job_id)
-            return _json(200, {"job_id": job_id, "status": "running", "lease_expires_at": None})
+            started: dict[str, Any] = {
+                "job_id": job_id,
+                "status": "running",
+                "lease_expires_at": None,
+            }
+            if self.start_credentials is not None:
+                started["credentials"] = self.start_credentials
+            return _json(200, started)
         if job_id in self.finished_jobs:
             return _error(409, "sensor_job_finished")
         if action == "results":
@@ -203,8 +213,9 @@ class FakeServer:
             if not duplicate:
                 self.batches[batch_id] = payload
                 self.batch_jobs[batch_id] = job_id
+            items = "records" if "records" in payload else "observations"
             total = sum(
-                len(b["observations"])
+                len(b.get(items, []))
                 for bid, b in self.batches.items()
                 if self.batch_jobs[bid] == job_id
             )
@@ -213,7 +224,7 @@ class FakeServer:
                 {
                     "job_id": job_id,
                     "batch_id": batch_id,
-                    "accepted": len(payload["observations"]),
+                    "accepted": len(payload[items]),
                     "duplicate": duplicate,
                     "observations_total": total,
                     "cancel_requested": job_id in self.cancel_requested,
@@ -241,7 +252,15 @@ class FakeServer:
             o
             for bid, b in self.batches.items()
             if self.batch_jobs[bid] == job_id
-            for o in b["observations"]
+            for o in b.get("observations", [])
+        ]
+
+    def records_for(self, job_id: str) -> list[dict[str, Any]]:
+        return [
+            r
+            for bid, b in self.batches.items()
+            if self.batch_jobs[bid] == job_id
+            for r in b.get("records", [])
         ]
 
 
@@ -264,6 +283,26 @@ class FakeTcp:
     async def probe(self, address: str, port: int, timeout: float) -> str:
         self.calls.append((address, port))
         return self.states.get((address, port), "filtered")
+
+
+# Objetos con conexión SQLite (runners y spools) creados por los helpers de test. El spool
+# mantiene una conexión abierta toda su vida; si un test no lo cierra, la conexión llega viva
+# al GC, que la cierra con un ResourceWarning en un momento cualquiera (Python >= 3.13), a
+# menudo durante otro test. Se cierran aquí al terminar cada test.
+_OPEN_RESOURCES: list[Any] = []
+
+
+def track_resource[R: (SensorRunner, Spool)](resource: R) -> R:
+    """Registra un objeto con close() para cerrarlo al terminar el test actual."""
+    _OPEN_RESOURCES.append(resource)
+    return resource
+
+
+@pytest.fixture(autouse=True)
+def _close_tracked_resources() -> Iterator[None]:
+    yield
+    while _OPEN_RESOURCES:
+        _OPEN_RESOURCES.pop().close()
 
 
 @pytest.fixture
@@ -305,15 +344,18 @@ def make_runner(
     clock: FakeClock | None = None,
     tcp: FakeTcp | None = None,
     threaded: bool = False,
+    snmp_transport: Any = None,
     **prober_kwargs: Any,
 ) -> SensorRunner:
     enroll_identity(config)
     tcp = tcp or FakeTcp({("10.0.0.1", 22): "open", ("10.0.0.2", 80): "closed"})
     clock = clock or FakeClock()
-    return SensorRunner(
+    runner = SensorRunner(
         config,
         server,
         probers=lambda: ProberSet(tcp=tcp, **prober_kwargs),
         clock=clock,
         threaded_jobs=threaded,
+        snmp_transport=snmp_transport,
     )
+    return track_resource(runner)

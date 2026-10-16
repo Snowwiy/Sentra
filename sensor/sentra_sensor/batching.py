@@ -33,6 +33,7 @@ class BatchBuilder:
         max_observations: int,
         max_bytes: int,
         on_enqueue: Callable[[], None] | None = None,
+        items_key: str = "observations",
     ) -> None:
         self._spool = spool
         self._job_id = job_id
@@ -40,11 +41,13 @@ class BatchBuilder:
         self._max_observations = max_observations
         self._max_bytes = max_bytes
         self._on_enqueue = on_enqueue
+        # Fase 6B: los jobs SNMP envían "records" en lugar de "observations".
+        self._items_key = items_key
         self._current: list[dict[str, Any]] = []
         self._current_bytes = 0
         # Tamaño del sobre vacío con un batch_id real (36 caracteres) y el attempt de verdad.
         self._overhead = len(
-            _dumps({"batch_id": str(uuid.UUID(int=0)), "attempt": attempt, "observations": []})
+            _dumps({"batch_id": str(uuid.UUID(int=0)), "attempt": attempt, items_key: []})
         )
         self._lock = threading.Lock()
         self.batches_enqueued = 0
@@ -57,7 +60,8 @@ class BatchBuilder:
                 size = len(_dumps(observation).encode())
                 if self._overhead + size > self._max_bytes:
                     # Una sola observación no cabe ni sola: se descarta en vez de bloquear el job.
-                    self.errors.append(f"observation too large: {observation.get('address')}")
+                    label = observation.get("address") or observation.get("kind")
+                    self.errors.append(f"item too large: {label}")
                     continue
                 extra = size + (1 if self._current else 0)  # coma separadora
                 if self._current and (
@@ -77,7 +81,7 @@ class BatchBuilder:
         if not self._current:
             return
         batch_id = str(uuid.uuid4())
-        payload = {"batch_id": batch_id, "attempt": self._attempt, "observations": self._current}
+        payload = {"batch_id": batch_id, "attempt": self._attempt, self._items_key: self._current}
         if self._spool.enqueue(self._job_id, KIND_RESULTS, payload, batch_id) is not None:
             self.batches_enqueued += 1
             self.observations_enqueued += len(self._current)
@@ -99,6 +103,7 @@ def enqueue_complete(
     unprobed: list[str] | None = None,
     errors: list[str] | None = None,
     batches_sent: int = 0,
+    snmp: dict[str, Any] | None = None,
 ) -> int | None:
     # Límites del contrato: unprobed ≤ 4096 y errors ≤ 50 (cada error, corto).
     payload = {
@@ -111,4 +116,6 @@ def enqueue_complete(
         "errors": [e[:200] for e in (errors or [])][:50],
         "batches_sent": batches_sent,
     }
+    if snmp is not None:
+        payload["snmp"] = snmp
     return spool.enqueue(job_id, KIND_COMPLETE, payload)

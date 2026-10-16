@@ -71,6 +71,22 @@ describe("frontend security", () => {
     }
   });
 
+  // Fase 6B: los secretos SNMP (passwords v3, comunidad v2c) solo viven en el estado del
+  // formulario hasta el envío; la UI de infraestructura no persiste, registra ni pone en la URL
+  // nada, y nunca interpreta como HTML lo que informan los equipos (sysDescr, LLDP...).
+  it("infrastructure and SNMP code never persists, logs or renders HTML", () => {
+    const files = sources(SRC).filter((f) => /components[\\/]infrastructure|InfrastructurePage|InfrastructureDevicePage|lib[\\/]network\.ts/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(6);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /localStorage|sessionStorage|indexedDB|document\.cookie|console\.(log|info|debug|warn|error)|history\.(push|replace)State|dangerouslySetInnerHTML|innerHTML/,
+      );
+      // Los secretos nunca viajan en la URL.
+      expect(text, relative(FRONTEND, file)).not.toMatch(/[?&](community|auth_password|priv_password)=/i);
+    }
+  });
+
   // Fase 4G: la sesión vive solo en una cookie HttpOnly; el frontend no guarda ni registra
   // contraseñas, IDs de sesión ni el token CSRF, y no queda rastro de la consola local.
   it("auth code never persists, logs or reads cookies", () => {

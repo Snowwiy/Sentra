@@ -29,6 +29,7 @@ export function Layout() {
             <Link to="/">Activos</Link>
             <Link to="/agents">Agentes</Link>
             <Link to="/network">Red</Link>
+            {auth.can("monitoring:read") && <Link to="/infrastructure">Infraestructura</Link>}
             <Link to="/risk">Riesgo</Link>
             {auth.can("vulnerabilities:read") && <Link to="/vulnerabilities">Vulnerabilidades</Link>}
             {auth.can("threat_intel:read") && <Link to="/threat-intel">Inteligencia</Link>}

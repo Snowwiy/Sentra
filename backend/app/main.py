@@ -29,6 +29,7 @@ from app.services.background import (
     purge_old_data,
     run_asset_cleanup,
     run_detection_engine,
+    run_network_maintenance,
     run_report_worker,
     run_response_engine,
     run_risk_engine,
@@ -44,6 +45,9 @@ from app.services.retention_service import RetentionPolicy
 logger = logging.getLogger(__name__)
 
 DISCOVERY_FIRST_RUN_SECONDS = 60
+# Fase 6B: cada cuánto se buscan equipos con la consulta periódica vencida. El intervalo real
+# de cada equipo es SNMP_POLL_INTERVAL_MINUTES; esto solo fija la granularidad.
+NETWORK_MAINTENANCE_SECONDS = 60
 
 
 def _log_schema_state() -> None:
@@ -138,6 +142,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_sensor_maintenance,
             )
         )
+        # Fase 6B: solo si hay consultas periódicas o retención del historial de red (opt-in).
+        if settings.snmp_poll_interval_minutes or settings.snmp_history_retention_days:
+            jobs.append(
+                PeriodicJob(
+                    "network-maintenance", NETWORK_MAINTENANCE_SECONDS, run_network_maintenance
+                )
+            )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:
             jobs.append(

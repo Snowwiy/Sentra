@@ -32,4 +32,7 @@ def test_configure_logging_rotates(tmp_path: Path) -> None:
     assert log_file.parent.is_dir()
     assert getattr(handler, "maxBytes", 0) == 1_000_000
     assert getattr(handler, "backupCount", 0) == 5
+    # Se cierran antes de quitarlos: el fichero de log abierto quedaba vivo hasta el GC.
+    for installed in logging.getLogger().handlers:
+        installed.close()
     logging.getLogger().handlers = []

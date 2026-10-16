@@ -111,6 +111,27 @@ const SITE_MESSAGES: Record<string, string> = {
   discovery_local_default_site_only: "El servidor local solo descubre redes del site por defecto: usa un sensor del site.",
 };
 
+// Infraestructura de red: SNMP / LLDP / CDP (Fase 6B). *_conflict: otro admin cambió el perfil o
+// el equipo; la UI recarga antes de reintentar (nunca se sobrescribe en silencio).
+const NETWORK_MESSAGES: Record<string, string> = {
+  snmp_profile_not_found: "El perfil SNMP no existe o ya no está disponible.",
+  snmp_profile_conflict: "Otro administrador ha modificado este perfil SNMP. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  snmp_profile_revoked: "El perfil SNMP está revocado: no admite más cambios ni puede asignarse.",
+  snmp_profile_name_taken: "Ya existe un perfil SNMP con ese nombre en este site.",
+  snmp_v2c_disabled: "SNMPv2c está deshabilitado en este servidor: usa SNMPv3 (authPriv).",
+  snmp_profile_site_mismatch: "El perfil SNMP pertenece a otro site: elige uno del mismo site que el equipo.",
+  snmp_secret_store_unavailable:
+    "El servidor no tiene configurado el almacén cifrado de secretos: no se pueden guardar credenciales SNMP.",
+  network_device_not_found: "El equipo de red no existe o ya no está disponible.",
+  network_device_conflict: "Otro administrador ha modificado este equipo. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  network_device_exists: "Ya hay un equipo registrado con esa dirección de gestión en este site.",
+  network_device_archived: "El equipo está archivado: no admite cambios ni consultas.",
+  network_poll_not_found: "La consulta no existe o ya no está disponible.",
+  network_poll_unavailable: "No se puede consultar el equipo ahora mismo.",
+  network_poll_busy: "Ya hay una consulta en curso para este equipo. Espera a que termine o cancélala.",
+  network_poll_finished: "La consulta ya ha terminado y no se puede cancelar.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -143,6 +164,9 @@ function translate(code: string, message: string): string {
   if (RESPONSE_MESSAGES[code]) return RESPONSE_MESSAGES[code];
   if (REPORT_MESSAGES[code]) return REPORT_MESSAGES[code];
   if (SITE_MESSAGES[code]) return SITE_MESSAGES[code];
+  if (NETWORK_MESSAGES[code]) return NETWORK_MESSAGES[code];
+  // Dirección fuera de las redes del site: el detalle (inglés) dice qué dirección y por qué.
+  if (code === "network_address_out_of_scope") return `Dirección fuera de las redes autorizadas del site: ${message}`;
   // CIDR rechazado: el detalle (inglés) dice el motivo (host bits, /0, multicast, tamaño...).
   if (code === "site_network_invalid") return `Red no válida: ${message}`;
   if (code === "discovery_target_refused") return `Destino de descubrimiento no válido: ${message}`;

@@ -75,6 +75,30 @@ os.environ["SENSOR_SWEEP_INTERVAL_SECONDS"] = "30"
 # Fase 6A: retención de observaciones de discovery con su valor por defecto (sin purga), por
 # la misma razón: un .env de desarrollo con otra retención no debe cambiar los tests.
 os.environ["DISCOVERY_OBSERVATION_RETENTION_DAYS"] = ""
+# Fase 6B: ajustes SNMP fijados para que un .env de desarrollo no cambie los tests. El fichero
+# de claves es temporal (0600) y su clave es aleatoria en cada ejecución: ningún secreto de
+# prueba queda en el repositorio.
+_SNMP_KEY_DIR = tempfile.mkdtemp(prefix="sentra-snmp-keys-test-")
+_SNMP_KEY_FILE = os.path.join(_SNMP_KEY_DIR, "snmp.keys")
+with os.fdopen(os.open(_SNMP_KEY_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600), "w") as _fh:
+    import base64 as _b64
+    import secrets as _secrets
+
+    _fh.write("test1:" + _b64.b64encode(_secrets.token_bytes(32)).decode() + "\n")
+os.environ["SNMP_CREDENTIAL_KEY_FILE"] = _SNMP_KEY_FILE
+os.environ["SNMP_CREDENTIAL_KEY_READERS"] = ""
+os.environ["SNMP_ALLOW_V2C"] = "false"
+os.environ["SNMP_POLL_INTERVAL_MINUTES"] = ""
+os.environ["SNMP_TIMEOUT_MS"] = "2000"
+os.environ["SNMP_RETRIES"] = "1"
+os.environ["SNMP_MAX_VARBINDS_PER_JOB"] = "50000"
+os.environ["SNMP_MAX_ROWS_PER_TABLE"] = "10000"
+os.environ["SNMP_JOB_DEADLINE_SECONDS"] = "300"
+os.environ["SNMP_EDGE_PORT_MAX_MACS"] = "3"
+os.environ["SNMP_HISTORY_RETENTION_DAYS"] = ""
+# test_viewer_cannot_mutate_anything recorre todas las rutas mutables con un mismo usuario y
+# desde 6B son más de 120 (el límite por defecto por minuto): sin esto respondería 429.
+os.environ["API_MUTATIONS_PER_USER_PER_MINUTE"] = "1000"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -224,7 +248,8 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
                 " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"
-                " reports, site_networks, sensor_enrollment_tokens, sensors"
+                " reports, site_networks, sensor_enrollment_tokens, sensors,"
+                " network_devices, snmp_credential_profiles"
                 " RESTART IDENTITY CASCADE"
             )
         )

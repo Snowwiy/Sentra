@@ -4,12 +4,14 @@ import asyncio
 import ipaddress
 import json
 import logging
+import sqlite3
 import threading
 import time
 from typing import Any
 
 import pytest
 
+from sentra_sensor import snmp
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.state import MODE_ACTIVE, MODE_DISABLED, MODE_REVOKED, load_state
 from tests.conftest import (
@@ -51,6 +53,8 @@ def test_heartbeat_payload_is_safe(config: LocalConfig, server: FakeServer) -> N
         "network.tcp",
         "network.icmp",
         "network.arp",
+        # Fase 6B: solo si el extra snmp está instalado en esta máquina.
+        *snmp.capabilities(),
     ]
     dumped = json.dumps(body).lower()
     assert CREDENTIAL.lower() not in dumped
@@ -404,3 +408,47 @@ def test_run_and_stop_thread(config: LocalConfig, server: FakeServer) -> None:
     thread.join(5)
     assert not thread.is_alive()
     assert "/sensor/heartbeat" in server.paths()
+
+
+def test_runner_closes_its_spool_if_startup_fails(
+    config: LocalConfig, server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fix 2: si el arranque falla después de abrir el spool, la conexión SQLite se cierra
+    # en el acto (antes quedaba viva hasta el GC).
+    from sentra_sensor.spool import Spool
+
+    opened: list[Any] = []
+    real_spool = Spool
+
+    def recording_spool(*args: Any, **kwargs: Any) -> Any:
+        spool = real_spool(*args, **kwargs)
+        opened.append(spool)
+        return spool
+
+    def broken_state(path: Any) -> Any:
+        raise OSError("state unreadable")
+
+    monkeypatch.setattr("sentra_sensor.runner.Spool", recording_spool)
+    monkeypatch.setattr("sentra_sensor.runner.load_state", broken_state)
+    with pytest.raises(OSError, match="state unreadable"):
+        make_runner(config, server)
+    (spool,) = opened
+    with pytest.raises(sqlite3.ProgrammingError):
+        spool._db.execute("SELECT 1")
+
+
+def test_shutdown_closes_the_spool_even_if_the_last_flush_fails(
+    config: LocalConfig, server: FakeServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    runner = make_runner(config, server)
+    runner._server_reachable = True
+
+    def failing_flush() -> int:
+        raise RuntimeError("network down")
+
+    monkeypatch.setattr(runner, "flush", failing_flush)
+    with pytest.raises(RuntimeError, match="network down"):
+        runner._shutdown()
+    with pytest.raises(sqlite3.ProgrammingError):
+        runner.spool._db.execute("SELECT 1")
+    runner.close()  # idempotente: el teardown del test vuelve a cerrarlo

@@ -93,6 +93,8 @@ from app.models.site import (
     SensorObservation,
     Site,
 )
+from app.network.catalog import SNMP_JOB_TYPE
+from app.schemas.network_protocol import SnmpJobCredentials, SnmpRecord
 from app.schemas.site import (
     ObservationIn,
     PortObservation,
@@ -185,6 +187,31 @@ def _inside_site(network: IPNetwork, allowed: Sequence[str]) -> bool:
     return False
 
 
+def inside_site_networks(address: str, allowed: Sequence[str]) -> bool:
+    """La dirección (o red) está dentro de alguna red habilitada del site."""
+    try:
+        network = parse_network(address)
+    except TargetError:
+        return False
+    return _inside_site(network, allowed)
+
+
+def _required_capabilities(job: SensorJob) -> set[str]:
+    """Capacidades imprescindibles para recibir el job (SNMP depende de versión y módulos)."""
+    from app.services import network_jobs
+
+    if network_jobs.is_snmp_job(job):
+        return network_jobs.required_capabilities(job)
+    return {REQUIRED_CAPABILITY[job.job_type]}
+
+
+def _finish_job(session: Session, job: SensorJob, now: datetime) -> None:
+    """Cierra lo que cuelga de un job terminado sin cierre del sensor (consulta SNMP)."""
+    from app.services import network_jobs
+
+    network_jobs.finish_poll_for_job(session, job, now)
+
+
 def _finish_discovery(
     discovery: DiscoveryJob | None,
     status: DiscoveryJobStatus,
@@ -245,6 +272,7 @@ def cancel_jobs(session: Session, ids: Sequence[int], reason: str) -> int:
         if discovery is not None and discovery.status in ACTIVE_JOB_STATUSES:
             discovery.cancel_requested_at = discovery.cancel_requested_at or now
             _finish_discovery(discovery, DiscoveryJobStatus.CANCELLED, reason[:32], now)
+        _finish_job(session, job, now)
     return len(jobs)
 
 
@@ -343,6 +371,8 @@ def sweep(session: Session, now: datetime, sensor_id: int | None = None) -> dict
                 "the sensor stopped reporting before completing this job",
             )
             counts["lost"] += 1
+        if job.status in TERMINAL_JOB_STATUSES:
+            _finish_job(session, job, now)
     return counts
 
 
@@ -1158,7 +1188,7 @@ class SensorProtocol:
                     # nunca se entrega; se falla para que no quede en cola.
                     self._fail(job, "job_type_unknown", now)
                     continue
-                if REQUIRED_CAPABILITY.get(job.job_type) not in capabilities:
+                if not _required_capabilities(job) <= capabilities:
                     # Se queda en cola (caducará si el sensor no la adquiere): no se entrega
                     # trabajo a quien no declara poder hacerlo.
                     continue
@@ -1197,6 +1227,7 @@ class SensorProtocol:
         _finish_discovery(
             discovery, DiscoveryJobStatus.FAILED, DiscoveryStopReason.ERROR, now, code
         )
+        _finish_job(self._session, job, now)
 
     def _job(self, sensor: Sensor, public_id: uuid.UUID) -> SensorJob:
         # Orden de bloqueo fijo: discovery y después job de sensor, el mismo que usa la
@@ -1232,10 +1263,16 @@ class SensorProtocol:
         now = datetime.now(UTC)
         job = self._job(sensor, public_id)
         if job.status == "running" and job.attempt == body.attempt:
-            # Reintento del mismo start (respuesta perdida): misma respuesta.
+            # Reintento del mismo start (respuesta perdida): misma respuesta. En SNMP la
+            # credencial se vuelve a validar y entregar (el sensor no la guarda en disco).
             assert job.lease_expires_at is not None  # noqa: S101
+            credentials = self._snmp_credentials(sensor, job, now)
+            session.commit()
             return SensorJobStarted(
-                job_id=job.public_id, status="running", lease_expires_at=job.lease_expires_at
+                job_id=job.public_id,
+                status="running",
+                lease_expires_at=job.lease_expires_at,
+                credentials=credentials,
             )
         self._check_open(job, body.attempt, ("leased",))
         if job.lease_expires_at is None or job.lease_expires_at <= now:
@@ -1245,6 +1282,7 @@ class SensorProtocol:
             self._fail(job, "network_not_authorized", now)
             session.commit()
             raise SiteConflictError("sensor_job_finished", "Sensor job is no longer authorized")
+        credentials = self._snmp_credentials(sensor, job, now)
         deadline = int(job.parameters.get("deadline_seconds") or 0)
         job.status = "running"
         job.started_at = now
@@ -1259,8 +1297,37 @@ class SensorProtocol:
             discovery.progress = {"phase": "liveness"}
         session.commit()
         return SensorJobStarted(
-            job_id=job.public_id, status="running", lease_expires_at=job.lease_expires_at
+            job_id=job.public_id,
+            status="running",
+            lease_expires_at=job.lease_expires_at,
+            credentials=credentials,
         )
+
+    def _snmp_credentials(
+        self, sensor: Sensor, job: SensorJob, now: datetime
+    ) -> SnmpJobCredentials | None:
+        """Credencial de un job snmp_inventory; None para el resto de tipos.
+
+        Si ya no se puede entregar (perfil revocado, reasignado, v2c deshabilitado, almacén
+        de secretos ilegible), el job se falla y el sensor recibe 409 sensor_job_finished.
+        """
+        from app.services import network_jobs
+        from app.services.snmp_profile_service import CredentialsUnavailableError
+
+        if not network_jobs.is_snmp_job(job):
+            return None
+        try:
+            return network_jobs.start_credentials(self._session, self._settings, sensor, job, now)
+        except CredentialsUnavailableError as exc:
+            logger.warning(
+                "snmp credentials not delivered",
+                extra={"job": str(job.public_id), "reason": exc.reason},
+            )
+            self._fail(job, "credentials_unavailable", now)
+            self._session.commit()
+            raise SiteConflictError(
+                "sensor_job_finished", "The SNMP credentials of this job are no longer available"
+            ) from exc
 
     def results(
         self, sensor: Sensor, public_id: uuid.UUID, body: SensorResultsRequest
@@ -1269,7 +1336,14 @@ class SensorProtocol:
         settings = self._settings
         now = datetime.now(UTC)
         job = self._job(sensor, public_id)
-        digest = _payload_sha256(body.observations)
+        snmp = job.job_type == SNMP_JOB_TYPE
+        # Cada tipo de job entrega su lista y solo esa: unos registros SNMP colados en un
+        # discovery (o al revés) indican un sensor defectuoso o manipulado.
+        if (snmp and body.observations) or (not snmp and body.records):
+            raise SiteValidationError(
+                "sensor_batch_invalid", "This job type does not accept that kind of result"
+            )
+        digest = _records_sha256(body.records) if snmp else _payload_sha256(body.observations)
         existing = session.scalar(
             select(SensorJobBatch).where(
                 SensorJobBatch.job_id == job.id, SensorJobBatch.batch_id == body.batch_id
@@ -1290,6 +1364,8 @@ class SensorProtocol:
                 cancel_requested=job.cancel_requested_at is not None,
             )
         self._check_open(job, body.attempt, ("running",))
+        if snmp:
+            return self._snmp_results(sensor, job, body, digest, now)
         if len(body.observations) > settings.sensor_max_observations_per_batch:
             raise SiteValidationError(
                 "sensor_batch_too_large",
@@ -1400,6 +1476,45 @@ class SensorProtocol:
             cancel_requested=job.cancel_requested_at is not None,
         )
 
+    def _snmp_results(
+        self,
+        sensor: Sensor,
+        job: SensorJob,
+        body: SensorResultsRequest,
+        digest: str,
+        now: datetime,
+    ) -> SensorResultsResponse:
+        from app.services import network_jobs
+
+        session = self._session
+        settings = self._settings
+        if job.batches_received >= settings.sensor_max_batches_per_job:
+            raise SiteConflictError("sensor_batch_limit", "Too many batches for this job")
+        total = network_jobs.stage_records(session, settings, job, body.records)
+        session.add(
+            SensorJobBatch(
+                job_id=job.id,
+                batch_id=body.batch_id,
+                payload_sha256=digest,
+                observation_count=len(body.records),
+                attempt=body.attempt,
+                received_at=now,
+            )
+        )
+        session.flush()
+        job.batches_received += 1
+        job.observations_received = total
+        sensor.last_seen_at = now
+        session.commit()
+        return SensorResultsResponse(
+            job_id=job.public_id,
+            batch_id=body.batch_id,
+            accepted=len(body.records),
+            duplicate=False,
+            observations_total=total,
+            cancel_requested=job.cancel_requested_at is not None,
+        )
+
     def complete(
         self,
         sensor: Sensor,
@@ -1441,7 +1556,9 @@ class SensorProtocol:
         # negativas (ni hosts desaparecidos ni puertos cerrados) con datos incompletos.
         missing = max(body.batches_sent - job.batches_received, 0)
         hosts_alive = hosts_new = open_ports = 0
-        if body.outcome == "failed":
+        if job.job_type == SNMP_JOB_TYPE:
+            self._complete_snmp(job, body, missing, now)
+        elif body.outcome == "failed":
             job.status = "failed"
             job.error_code = "sensor_failed"
             job.error_message = (body.errors[0] if body.errors else "sensor reported failure")[:300]
@@ -1466,6 +1583,17 @@ class SensorProtocol:
             job.status = "cancelled" if body.outcome == "cancelled" else "succeeded"
         job.finished_at = now
         job.lease_expires_at = None
+        if job.job_type == SNMP_JOB_TYPE:
+            session.commit()
+            return SensorJobCompleted(
+                job_id=job.public_id,
+                status=job.status,
+                duplicate=False,
+                discovery_job_id=None,
+                hosts_alive=0,
+                hosts_new=0,
+                open_ports=0,
+            )
         job.result_summary = {
             "attempt": body.attempt,
             "outcome": body.outcome,
@@ -1496,6 +1624,29 @@ class SensorProtocol:
             hosts_new=hosts_new,
             open_ports=open_ports,
         )
+
+    def _complete_snmp(
+        self, job: SensorJob, body: SensorJobComplete, missing: int, now: datetime
+    ) -> None:
+        """Cierre de un job snmp_inventory: aplica los registros y resume el job (sin datos)."""
+        from app.services import network_jobs
+
+        poll = network_jobs.complete_poll(
+            self._session, self._settings, job, body.outcome, body.snmp, body.errors, missing, now
+        )
+        if body.outcome == "failed":
+            job.status = "failed"
+            job.error_code = "sensor_failed"
+            job.error_message = (body.errors[0] if body.errors else "sensor reported failure")[:300]
+        else:
+            job.status = "cancelled" if body.outcome == "cancelled" else "succeeded"
+        job.result_summary = {
+            "attempt": body.attempt,
+            "outcome": body.outcome,
+            "poll_status": poll.status if poll is not None else None,
+            "records": job.observations_received,
+            "error_code": body.snmp.error_code if body.snmp is not None else None,
+        }
 
     def _apply(
         self,
@@ -1577,6 +1728,13 @@ class SensorProtocol:
             executor="sensor",
             sensor_id=job.sensor_id,
         ).apply(discovery.id, network, result, baseline, stop_reason)
+
+
+def _records_sha256(records: Sequence[SnmpRecord]) -> str:
+    """Huella canónica de un lote SNMP (sin campos nulos, claves ordenadas)."""
+    data = [record.model_dump(mode="json", exclude_none=True) for record in records]
+    raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
 
 
 def _merge_ports(current: dict[str, str], new: dict[str, str]) -> dict[str, str]:

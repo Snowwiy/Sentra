@@ -49,22 +49,48 @@ def test_parse_events_maps_levels_times_and_messages() -> None:
     assert events[0]["message"] == ""
 
 
+# Contrato de niveles (docs/agent-protocol.md): los canales filtrados por nivel de Windows
+# solo aportan warning/error/critical (Level 1-3); "info" existe en el contrato del servidor
+# (EventLevel.INFO) pero el agente solo lo asigna a Security 4624 de logons interactivos (2),
+# RDP (10) y con credenciales en caché (11), que el motor de detección necesita para CORR-001.
+# No basta con aceptar "info": un "info" de otro canal, de otro evento o de otro tipo de logon
+# indicaría que el filtro de la consulta ha dejado pasar ruido informativo.
+_WINDOWS_LEVELS = {"warning", "error", "critical"}
+_INTERACTIVE_LOGON_TYPES = {"2", "10", "11"}
+
+
+def _assert_level_contract(event: dict[str, object]) -> None:
+    if event["level"] == "info":
+        assert (event["channel"], event["event_code"]) == ("Security", 4624), event
+        data = event.get("data")
+        assert isinstance(data, dict), event
+        assert data.get("LogonType") in _INTERACTIVE_LOGON_TYPES, event
+    else:
+        assert event["level"] in _WINDOWS_LEVELS, event
+
+
 @pytest.mark.skipif(sys.platform != "win32", reason="reads the real Windows Event Log")
 def test_real_event_log_reads_and_cursor_prevents_resending(tmp_path: Path) -> None:
+    # Prueba de integración con el registro real: el equipo puede tener cualquier evento
+    # legítimo (también logons correctos), así que se comprueba el contrato, no una lista fija.
     collector = EventCollector(tmp_path)
 
     events, cursor = collector.pending()
     collector.commit(cursor)
     again, _ = collector.pending()
 
-    for event in events:
-        assert event["level"] in {"warning", "error", "critical"}
-        assert datetime.fromisoformat(event["occurred_at"]).utcoffset() is not None
-        assert len(event["message"]) <= 4000
+    for event in [*events, *again]:
+        _assert_level_contract(event)
+        assert datetime.fromisoformat(str(event["occurred_at"])).utcoffset() is not None
+        assert len(str(event["message"])) <= 4000
     # Record ids are per channel: the identity of an event is (channel, record id).
     assert {(e["channel"], e["record_id"]) for e in again}.isdisjoint(
         {(e["channel"], e["record_id"]) for e in events}
     )
+    # Lo que llega en la segunda lectura es posterior al cursor confirmado de su consulta.
+    for event in again:
+        keys = [c.key for c in CHANNELS if c.name == event["channel"]]
+        assert any(event["record_id"] > cursor.get(key, -1) for key in keys), event
 
 
 @pytest.mark.parametrize(
@@ -226,3 +252,168 @@ def test_defender_detection_keeps_threat_fields() -> None:
     assert event["level"] == "warning"
     assert event["data"]["Threat Name"] == "Trojan:Win32/Test"
     assert "FWLink" not in event["data"]
+
+
+def _logon_xml(record: int, logon_type: str, level: int = 0) -> str:
+    data = (
+        "<EventData><Data Name='TargetUserName'>alice</Data>"
+        f"<Data Name='LogonType'>{logon_type}</Data></EventData>"
+    )
+    return _event_with_data(4624, record, data).replace(
+        "<Level>0</Level>", f"<Level>{level}</Level>"
+    )
+
+
+def test_level_contract_with_simulated_events_per_channel() -> None:
+    # Eventos informativos (Level 4 o 0) de canales filtrados por nivel: nunca se envían.
+    for channel in ("System", "Application", "Microsoft-Windows-PowerShell/Operational"):
+        assert parse_events(_event_xml(1, 4, 1) + _event_xml(2, 0, 2), channel) == []
+    # Excepciones por id del System: informativos en Windows, con nivel propio en Sentra.
+    system = parse_events(_event_xml(104, 4, 3) + _event_xml(7045, 4, 4), "System")
+    assert [(e["event_code"], e["level"]) for e in system] == [(104, "critical"), (7045, "warning")]
+    # 4624 interactivo/RDP/caché: "info", con el tipo de logon como dato estructurado.
+    logons = parse_events(
+        _logon_xml(5, "2") + _logon_xml(6, "10") + _logon_xml(7, "11"), "Security"
+    )
+    assert {e["level"] for e in logons} == {"info"}
+    for event in logons:
+        _assert_level_contract(event)
+    # Ids informativos que no están en la lista del canal: descartados (la consulta ya los
+    # excluye por id; el parser no los convierte en "info" si llegaran).
+    assert parse_events(_event_xml(4688, 0, 8), "Security") == []
+    defender = "Microsoft-Windows-Windows Defender/Operational"
+    assert parse_events(_event_xml(1150, 4, 9), defender) == []
+    assert parse_events(_event_xml(5001, 4, 10), defender)[0]["level"] == "warning"
+    # El nivel de Windows nunca convierte en "info" un evento de canal filtrado por nivel.
+    for level, expected in ((1, "critical"), (2, "error"), (3, "warning")):
+        (event,) = parse_events(_event_xml(999, level, 20 + level), "Application")
+        assert event["level"] == expected
+        _assert_level_contract(event)
+
+
+def test_info_level_is_only_assigned_to_interactive_logons() -> None:
+    # Guarda de la especificación: si alguien añade otro evento "info" o quita el filtro por
+    # tipo de logon, esta prueba obliga a revisar el contrato y la documentación.
+    info_ids = {
+        (channel.name, event_id)
+        for channel in CHANNELS
+        for event_id, level in channel.levels_by_id.items()
+        if level == "info"
+    }
+    assert info_ids == {("Security", 4624)}
+    logon_queries = [c for c in CHANNELS if c.name == "Security" and "4624" in build_query(c, 1)[0]]
+    assert [c.key for c in logon_queries] == ["Security:4624"]
+    query = build_query(logon_queries[0], None)[0]
+    for logon_type in _INTERACTIVE_LOGON_TYPES:
+        assert f"Data[@Name='LogonType']='{logon_type}'" in query
+    for noisy in ("3", "4", "5", "8", "9"):  # red, batch, servicio, cleartext, newcredentials
+        assert f"Data[@Name='LogonType']='{noisy}'" not in query
+
+
+class _FakeEventLog:
+    """Registro simulado por consulta (cursor key): devuelve lo que pediría wevtutil."""
+
+    def __init__(self) -> None:
+        self.records: dict[str, list[int]] = {channel.key: [] for channel in CHANNELS}
+        self.calls: list[tuple[str, int | None]] = []
+
+    def add(self, key: str, *records: int) -> None:
+        self.records[key].extend(records)
+
+    def query(self, channel: Channel, after: int | None) -> list[dict[str, object]]:
+        self.calls.append((channel.key, after))
+        stored = sorted(self.records[channel.key])
+        if after is None:
+            chosen = stored[-events_module.FIRST_RUN_MAX :]
+        else:
+            chosen = [r for r in stored if r > after][: events_module.BATCH_MAX]
+        return [{"channel": channel.name, "record_id": r, "level": "warning"} for r in chosen]
+
+
+@pytest.fixture
+def fake_log(monkeypatch: pytest.MonkeyPatch) -> _FakeEventLog:
+    monkeypatch.setattr(sys, "platform", "win32")
+    log = _FakeEventLog()
+    monkeypatch.setattr(events_module, "_query", log.query)
+    return log
+
+
+def test_cursor_only_advances_after_commit(tmp_path: Path, fake_log: _FakeEventLog) -> None:
+    fake_log.add("System", 10, 11, 12)
+    collector = EventCollector(tmp_path)
+
+    first, cursor = collector.pending()
+    # Sin commit (la API rechazó el lote o no respondió) se vuelve a leer lo mismo.
+    retry, _ = collector.pending()
+    assert [e["record_id"] for e in first] == [e["record_id"] for e in retry] == [10, 11, 12]
+    assert cursor["System"] == 12
+
+    collector.commit(cursor)
+    after_commit, _ = collector.pending()
+    assert after_commit == []
+
+    fake_log.add("System", 13)
+    newer, _ = collector.pending()
+    assert [e["record_id"] for e in newer] == [13]
+    assert ("System", 12) in fake_log.calls
+
+
+def test_cursor_survives_restart_and_first_run_is_limited(
+    tmp_path: Path, fake_log: _FakeEventLog
+) -> None:
+    fake_log.add("Application", *range(1, 301))
+    collector = EventCollector(tmp_path)
+
+    first, cursor = collector.pending()
+    # Primera ejecución: solo los más recientes, no todo el histórico.
+    assert len(first) == events_module.FIRST_RUN_MAX
+    assert first[-1]["record_id"] == 300
+    collector.commit(cursor)
+
+    fake_log.add("Application", 301)
+    restarted = EventCollector(tmp_path)  # reinicio del servicio: lee el cursor del disco
+    events, _ = restarted.pending()
+    assert [e["record_id"] for e in events] == [301]
+
+
+def test_security_queries_keep_independent_cursors(tmp_path: Path, fake_log: _FakeEventLog) -> None:
+    fake_log.add("Security", 500, 501)
+    fake_log.add("Security:4624", 480, 502)
+    collector = EventCollector(tmp_path)
+
+    events, cursor = collector.pending()
+    collector.commit(cursor)
+
+    # Mismo canal, dos consultas: cada una conserva su propio último record id, así la
+    # consulta de logons no salta eventos de la general (ni al revés).
+    assert cursor["Security"] == 501 and cursor["Security:4624"] == 502
+    assert sorted(e["record_id"] for e in events if e["channel"] == "Security") == [
+        480,
+        500,
+        501,
+        502,
+    ]
+    fake_log.add("Security", 503)
+    again, _ = collector.pending()
+    assert [e["record_id"] for e in again] == [503]
+
+
+def test_failed_query_keeps_its_cursor_and_others_advance(
+    tmp_path: Path, fake_log: _FakeEventLog, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    (tmp_path / CURSOR_FILE).write_text('{"System": 5, "Security": 40}')
+    fake_log.add("System", 5, 6)
+    fake_log.add("Security", 41)
+
+    def flaky(channel: Channel, after: int | None) -> list[dict[str, object]]:
+        if channel.key == "Security":
+            raise EventLogError("wevtutil failed on Security (15007): channel not found")
+        return fake_log.query(channel, after)
+
+    monkeypatch.setattr(events_module, "_query", flaky)
+    collector = EventCollector(tmp_path)
+    events, cursor = collector.pending()
+
+    assert [e["record_id"] for e in events] == [6]
+    # El cursor de la consulta que falló no se toca: cuando vuelva, se lee desde 40.
+    assert cursor["Security"] == 40 and cursor["System"] == 6

@@ -54,6 +54,17 @@ from app.models.incident import (
     IncidentVulnerability,
 )
 from app.models.inventory import AssetInventory
+from app.models.network import (
+    NetworkDevice,
+    NetworkDevicePoll,
+    NetworkInterface,
+    NetworkMacEntry,
+    NetworkNeighbor,
+    NetworkPollRecord,
+    NetworkVlan,
+    NetworkVlanMembership,
+    SnmpCredentialProfile,
+)
 from app.models.process import AssetProcessSnapshot
 from app.models.rate_limit import RateLimitHit
 from app.models.report import Report, ReportArtifact
@@ -160,6 +171,14 @@ __all__ = [
     "IncidentVulnerability",
     "LineageEndReason",
     "MonitoringMethod",
+    "NetworkDevice",
+    "NetworkDevicePoll",
+    "NetworkInterface",
+    "NetworkMacEntry",
+    "NetworkNeighbor",
+    "NetworkPollRecord",
+    "NetworkVlan",
+    "NetworkVlanMembership",
     "NetworkZone",
     "Playbook",
     "PlaybookRun",
@@ -182,6 +201,7 @@ __all__ = [
     "SensorObservation",
     "Site",
     "SiteNetwork",
+    "SnmpCredentialProfile",
     "SystemEvent",
     "TelemetrySample",
     "ThreatIndicator",

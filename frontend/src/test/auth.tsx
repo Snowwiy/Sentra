@@ -26,6 +26,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "response:execute",
     "reports:read",
     "reports:generate",
+    "network:poll",
   ],
   admin: [
     "monitoring:read",
@@ -61,6 +62,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "reports:admin",
     "sites:manage",
     "sensors:manage",
+    "network:poll",
+    "network:manage",
+    "snmp_credentials:manage",
   ],
 };
 

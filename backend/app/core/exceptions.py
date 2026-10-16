@@ -415,3 +415,29 @@ class DiscoveryTuneForbiddenError(ForbiddenError):
     # Límites o puertos fuera del perfil sin el permiso discovery:tune. Se rechaza en lugar
     # de recortar en silencio: el operador creería que el scan usó sus valores.
     code = "discovery_tune_forbidden"
+
+
+# --- Fase 6B: infraestructura de red (SNMP, LLDP/CDP) ------------------------------------
+# Conflictos (409) y validaciones (422) reutilizan SiteConflictError / SiteValidationError con
+# su código concreto (snmp_profile_conflict, network_address_out_of_scope...).
+
+
+class SnmpProfileNotFoundError(NotFoundError):
+    # También para el perfil de otro site cuando la operación exige el site del equipo.
+    code = "snmp_profile_not_found"
+
+
+class NetworkDeviceNotFoundError(NotFoundError):
+    code = "network_device_not_found"
+
+
+class NetworkPollNotFoundError(NotFoundError):
+    code = "network_poll_not_found"
+
+
+class SecretStoreUnavailableError(SentraError):
+    # Sin fichero de claves (SNMP_CREDENTIAL_KEY_FILE) o ilegible: no se puede cifrar ni
+    # descifrar. 503 y no 500: es configuración del servidor, no un fallo de la petición. El
+    # mensaje nunca incluye la ruta ni el contenido del fichero.
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "snmp_secret_store_unavailable"

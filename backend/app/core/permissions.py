@@ -115,6 +115,16 @@ class Permission(enum.StrEnum):
     # Tokens de enrolamiento de sensores, revocar, deshabilitar, habilitar y rotar credencial:
     # dan o quitan a un proceso remoto la capacidad de observar una red. Solo admin.
     SENSORS_MANAGE = "sensors:manage"
+    # Fase 6B. Ver equipos de red, interfaces, vecinos LLDP/CDP, VLANs y tablas MAC es
+    # monitoring:read. Pedir y cancelar una consulta SNMP de un equipo ya registrado (con su
+    # perfil y su sensor asignados por un admin): solo lectura en el equipo remoto.
+    NETWORK_POLL = "network:poll"
+    # Registrar, editar y archivar equipos de red y asignarles perfil y sensor: decide qué
+    # direcciones de un site consulta un sensor y con qué credencial. Solo admin.
+    NETWORK_MANAGE = "network:manage"
+    # Perfiles de credenciales SNMP (crear, rotar, revocar). Solo admin: dan acceso de
+    # lectura a la configuración de los equipos de red de un site.
+    SNMP_CREDENTIALS_MANAGE = "snmp_credentials:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -152,6 +162,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RESPONSE_EXECUTE,
             Permission.REPORTS_READ,
             Permission.REPORTS_GENERATE,
+            Permission.NETWORK_POLL,
         }
     ),
     Role.ADMIN: frozenset(Permission),

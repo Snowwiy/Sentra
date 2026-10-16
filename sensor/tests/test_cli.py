@@ -247,6 +247,28 @@ def test_enroll_and_run_over_real_loopback_http(
     assert (info.value.status, info.value.code) == (403, "sensor_revoked")
 
 
+def test_http_error_responses_are_closed_by_the_transport(
+    server: FakeServer, http_server: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Un 4xx/5xx llega como HTTPError, que es también la respuesta abierta: el transporte la
+    # cierra. Se espía close() para comprobarlo en cualquier versión (el aviso es de 3.14+).
+    import urllib.error
+
+    closed: list[int] = []
+    original_close = urllib.error.HTTPError.close
+
+    def spy_close(self: urllib.error.HTTPError) -> None:
+        closed.append(self.code)
+        original_close(self)
+
+    monkeypatch.setattr(urllib.error.HTTPError, "close", spy_close)
+    url = http_server + "/api/v1/sensor/jobs/poll"
+    server.fail_next.append(("/sensor/jobs/poll", 429, "rate_limited"))
+    response = UrllibTransport().request("POST", url, {}, b"{}", 5)
+    assert response.status == 429 and b"rate_limited" in response.body
+    assert closed == [429]
+
+
 def test_tls_context_always_verifies(tmp_path: Path) -> None:
     import ssl
 

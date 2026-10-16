@@ -39,6 +39,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "report-worker": _BASE + 12,
     # Fase 5F: caducidad de jobs de sensor, leases vencidos y sensores perdidos.
     "sensor-maintenance": _BASE + 13,
+    # Fase 6B: consultas SNMP periódicas y retención opt-in del historial de red.
+    "network-maintenance": _BASE + 14,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.

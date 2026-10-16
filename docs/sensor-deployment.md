@@ -27,6 +27,10 @@ Guía operativa corta. Detalle del runtime, configuración y servicio en
 4. Comprobar en Sentra → Sensores que pasa a `online` y declara capacidades.
    En el equipo: `sentra-sensor --config … diagnostics`.
 5. Red → Descubrir: elegir el site y el sensor, y una red autorizada del site.
+6. Opcional (Fase 6B): para inventario SNMP de switches, instalar el extra `snmp` del sensor
+   (`pip install "./sensor[snmp]"` en su entorno), reiniciar el servicio y comprobar que
+   declara las capacidades `snmp.*`. Permitir UDP saliente al puerto 161 de los equipos.
+   Pasos completos en [snmp-network-intelligence.md](snmp-network-intelligence.md).
 
 ## Operación
 
