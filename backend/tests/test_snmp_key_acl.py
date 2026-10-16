@@ -395,6 +395,10 @@ windows_only = pytest.mark.skipif(sys.platform != "win32", reason="ACL reales de
 
 def _set_dacl(path: Path, sddl: str) -> None:
     """Sustituye la DACL de `path` (solo en estos tests) con la API de Windows."""
+    # La comprobación de plataforma la entiende mypy: en Linux no analiza las API de Windows
+    # (WinDLL, WinError, windll no existen en sus stubs) y en win32 las sigue tipando.
+    if sys.platform != "win32":
+        raise OSError("_set_dacl solo funciona en Windows")
     import ctypes
     from ctypes import wintypes
 
@@ -437,6 +441,9 @@ def test_windows_real_users_read_ace_is_refused(tmp_path: Path) -> None:
 
 @windows_only
 def test_windows_real_insecure_directory_and_junction_are_refused(tmp_path: Path) -> None:
+    # Además del marcador: mypy solo estrecha la plataforma con la comprobación en el cuerpo.
+    if sys.platform != "win32":
+        pytest.skip("las junctions solo existen en Windows")
     import _winapi
 
     secure = tmp_path / "secure"
