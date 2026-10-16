@@ -1,6 +1,6 @@
 [project]
 name = "sentra-sensor"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sentra distributed sensor: authorized network discovery inside a remote site"
 requires-python = ">=3.12"
 # Solo biblioteca estándar: menos superficie de ataque y despliegue trivial en sites remotos.
@@ -8,6 +8,9 @@ dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest>=9.1,<10", "ruff>=0.16,<1", "mypy>=2.4,<3"]
+# Fase 6B: inventario SNMP de solo lectura (pysnmp BSD-2, pyasn1 BSD-2; cryptography
+# Apache-2.0/BSD para AES de SNMPv3). Opcional: sin él el sensor no declara snmp.*.
+snmp = ["pysnmp>=7.1,<8", "cryptography>=50,<51"]
 
 [project.scripts]
 sentra-sensor = "sentra_sensor.__main__:main"
@@ -33,6 +36,11 @@ select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "N", "RUF"]
 python_version = "3.12"
 strict = true
 files = ["sentra_sensor", "tests"]
+
+# pysnmp y pyasn1 (extra opcional snmp) no publican tipos; solo los importa snmp/pysnmp_adapter.py.
+[[tool.mypy.overrides]]
+module = ["pysnmp.*", "pyasn1.*"]
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

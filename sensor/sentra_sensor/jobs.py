@@ -4,8 +4,9 @@ El sensor está dentro de una red ajena y ejecuta lo que le pide un servidor rem
 servidor (o alguien con acceso a él) pudiera mandar cualquier cosa, el sensor sería una
 puerta de entrada al site. Por eso:
 
-* Solo existen `discovery_basic` y (Fase 6A) `discovery_advanced`. No hay tipos genéricos,
-  ni comandos, ni scripts, ni binarios enviados por el servidor.
+* Solo existen `discovery_basic`, (Fase 6A) `discovery_advanced` y (Fase 6B) `snmp_inventory`
+  de solo lectura. No hay tipos genéricos, ni comandos, ni scripts, ni binarios enviados por
+  el servidor, ni OIDs: un job SNMP solo nombra módulos del catálogo del propio sensor.
 * El esquema es exacto: claves desconocidas = rechazo (un campo nuevo no se ignora en
   silencio, porque podría cambiar el significado del job).
 * El target se vuelve a comprobar contra las redes permitidas que mandó el servidor
@@ -22,7 +23,33 @@ from sentra_sensor.protocol import IPNetwork, ServerConfig
 
 JOB_TYPE_DISCOVERY_BASIC = "discovery_basic"
 JOB_TYPE_DISCOVERY_ADVANCED = "discovery_advanced"
-KNOWN_JOB_TYPES = frozenset({JOB_TYPE_DISCOVERY_BASIC, JOB_TYPE_DISCOVERY_ADVANCED})
+JOB_TYPE_SNMP_INVENTORY = "snmp_inventory"
+KNOWN_JOB_TYPES = frozenset(
+    {JOB_TYPE_DISCOVERY_BASIC, JOB_TYPE_DISCOVERY_ADVANCED, JOB_TYPE_SNMP_INVENTORY}
+)
+SNMP_SCHEMA_VERSION = 1
+SNMP_MODULES = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan")
+SNMP_AUTH_PROTOCOLS = frozenset({"sha", "sha224", "sha256", "sha384", "sha512"})
+SNMP_PRIV_PROTOCOLS = frozenset({"aes128", "aes192", "aes256"})
+SNMP_PARAMETER_KEYS = frozenset(
+    {
+        "schema_version",
+        "target",
+        "port",
+        "snmp_version",
+        "profile_id",
+        "secret_revision",
+        "auth_protocol",
+        "priv_protocol",
+        "modules",
+        "timeout_ms",
+        "retries",
+        "max_repetitions",
+        "max_varbinds",
+        "max_rows_per_table",
+        "deadline_seconds",
+    }
+)
 # Única versión del esquema de discovery_advanced que entiende este sensor.
 ADVANCED_SCHEMA_VERSION = 1
 ADVANCED_PROFILES = frozenset({"quick", "standard", "deep"})
@@ -116,6 +143,30 @@ class DiscoveryParameters:
 
 
 @dataclass(frozen=True)
+class SnmpParameters:
+    """snmp_inventory v1: sin secretos ni OIDs (la credencial llega aparte, en el start)."""
+
+    target: IPNetwork
+    port: int
+    snmp_version: str
+    profile_id: str
+    secret_revision: int
+    auth_protocol: str | None
+    priv_protocol: str | None
+    modules: tuple[str, ...]
+    timeout_ms: int
+    retries: int
+    max_repetitions: int
+    max_varbinds: int
+    max_rows_per_table: int
+    deadline_seconds: int
+
+    @property
+    def address(self) -> str:
+        return str(self.target.network_address)
+
+
+@dataclass(frozen=True)
 class DiscoveryJob:
     job_id: str
     site_id: str
@@ -126,7 +177,7 @@ class DiscoveryJob:
     expires_at: datetime
     lease_expires_at: datetime | None
     idempotency_key: str
-    parameters: DiscoveryParameters
+    parameters: DiscoveryParameters | SnmpParameters
 
 
 def host_count(network: IPNetwork) -> int:
@@ -250,7 +301,10 @@ def _validate(
         raise JobRejectedError("invalid_schema", "idempotency_key invalid")
     params = raw["parameters"]
     job_type = str(raw["job_type"])
-    if job_type == JOB_TYPE_DISCOVERY_ADVANCED:
+    parameters: DiscoveryParameters | SnmpParameters
+    if job_type == JOB_TYPE_SNMP_INVENTORY:
+        parameters = _snmp(params, config)
+    elif job_type == JOB_TYPE_DISCOVERY_ADVANCED:
         parameters = _advanced(params, config)
     else:
         parameters = _basic(params, config)
@@ -372,3 +426,61 @@ def _basic(params: object, config: ServerConfig) -> DiscoveryParameters:
     if not (parameters.ports or parameters.icmp or parameters.arp):
         raise JobRejectedError("invalid_schema", "job has no probe method")
     return parameters
+
+
+def _snmp(params: object, config: ServerConfig) -> SnmpParameters:
+    """snmp_inventory v1: esquema exacto, una sola dirección dentro de las redes del site y
+    solo módulos y protocolos del catálogo. Sin pysnmp instalado se rechaza (el sensor no
+    declara snmp.* en ese caso, así que un servidor correcto nunca lo envía)."""
+    from sentra_sensor import snmp
+
+    if not isinstance(params, dict) or set(params) != SNMP_PARAMETER_KEYS:
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+    if params["schema_version"] != SNMP_SCHEMA_VERSION or isinstance(
+        params["schema_version"], bool
+    ):
+        raise JobRejectedError("schema_unsupported", "unsupported snmp_inventory schema")
+    if not snmp.snmp_available():
+        raise JobRejectedError("snmp_unavailable", "SNMP support is not installed")
+    network = parse_target(params["target"])
+    if network.num_addresses != 1:
+        raise JobRejectedError("target_invalid", "SNMP target must be a single address")
+    if not target_allowed(network, config.allowed_networks):
+        raise JobRejectedError("target_out_of_scope", "target outside the site's networks")
+    version = params["snmp_version"]
+    auth, priv = params["auth_protocol"], params["priv_protocol"]
+    if version == "v3":
+        if not snmp.v3_available():
+            raise JobRejectedError("snmp_unavailable", "SNMPv3 needs the cryptography package")
+        if auth not in SNMP_AUTH_PROTOCOLS or priv not in SNMP_PRIV_PROTOCOLS:
+            raise JobRejectedError("invalid_schema", "SNMPv3 requires SHA auth and AES privacy")
+    elif version == "v2c":
+        if auth is not None or priv is not None:
+            raise JobRejectedError("invalid_schema", "SNMPv2c has no auth/priv protocols")
+    else:
+        # SNMPv1 o cualquier otra cosa: nunca.
+        raise JobRejectedError("invalid_schema", "unsupported SNMP version")
+    modules_raw = params["modules"]
+    if not isinstance(modules_raw, list) or not modules_raw:
+        raise JobRejectedError("invalid_schema", "modules must be a non-empty list")
+    if any(m not in SNMP_MODULES for m in modules_raw) or len(set(modules_raw)) != len(modules_raw):
+        raise JobRejectedError("invalid_schema", "unknown or duplicate SNMP module")
+    if "system" not in modules_raw or ("vlan" in modules_raw and "bridge" not in modules_raw):
+        raise JobRejectedError("invalid_schema", "system is mandatory and vlan needs bridge")
+    modules = tuple(m for m in SNMP_MODULES if m in modules_raw)
+    return SnmpParameters(
+        target=network,
+        port=_int(params["port"], "port", 1, 65_535),
+        snmp_version=str(version),
+        profile_id=_uuid(params["profile_id"], "profile_id"),
+        secret_revision=_int(params["secret_revision"], "secret_revision", 1, 2**31 - 1),
+        auth_protocol=str(auth) if auth is not None else None,
+        priv_protocol=str(priv) if priv is not None else None,
+        modules=modules,
+        timeout_ms=_int(params["timeout_ms"], "timeout_ms", 200, 10_000),
+        retries=_int(params["retries"], "retries", 0, 3),
+        max_repetitions=_int(params["max_repetitions"], "max_repetitions", 1, 50),
+        max_varbinds=_int(params["max_varbinds"], "max_varbinds", 100, 500_000),
+        max_rows_per_table=_int(params["max_rows_per_table"], "max_rows_per_table", 10, 100_000),
+        deadline_seconds=_int(params["deadline_seconds"], "deadline_seconds", 10, 3600),
+    )

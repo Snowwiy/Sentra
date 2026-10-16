@@ -290,6 +290,15 @@ def run_sensor_maintenance() -> None:
         sweep_sensors(session)
 
 
+def run_network_maintenance() -> None:
+    """Fase 6B: encola las consultas SNMP periódicas vencidas (SNMP_POLL_INTERVAL_MINUTES) y
+    aplica la retención opt-in del historial de red (SNMP_HISTORY_RETENTION_DAYS)."""
+    from app.services.network_jobs import run_network_maintenance as maintain
+
+    with get_sessionmaker()() as session:
+        maintain(session, get_settings())
+
+
 def run_report_worker() -> None:
     """Fase 5E: genera los informes pendientes (acotado por vuelta) y aplica la retención.
 

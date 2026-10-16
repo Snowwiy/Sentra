@@ -25,7 +25,14 @@ from sentra_sensor.batching import BatchBuilder, enqueue_complete
 from sentra_sensor.client import ApiError, SensorClient, Transport, TransportError
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.credentials import CredentialError, CredentialStore, SensorIdentity
-from sentra_sensor.jobs import DiscoveryJob, JobRejectedError, validate_job
+from sentra_sensor.jobs import (
+    DiscoveryJob,
+    DiscoveryParameters,
+    JobRejectedError,
+    SnmpParameters,
+    validate_job,
+)
+from sentra_sensor.logs import register_secret
 from sentra_sensor.protocol import ProtocolError, ServerConfig
 from sentra_sensor.scanner import (
     IcmpProber,
@@ -36,6 +43,8 @@ from sentra_sensor.scanner import (
     ScanReport,
     TcpProber,
 )
+from sentra_sensor.snmp.collector import SnmpCollector, SnmpCredentials, SnmpReport
+from sentra_sensor.snmp.transport import SnmpTransport
 from sentra_sensor.spool import KIND_COMPLETE, KIND_RESULTS, Spool, SpoolItem
 from sentra_sensor.state import (
     MODE_ACTIVE,
@@ -72,13 +81,52 @@ class ProberSet:
     resolver: ReverseResolver | None = None
 
 
+SnmpTransportFactory = Callable[[SnmpParameters, SnmpCredentials], SnmpTransport]
+
+
+def default_snmp_transport(params: SnmpParameters, credentials: SnmpCredentials) -> SnmpTransport:
+    # Importación diferida: pysnmp es opcional y solo se carga con un job SNMP real.
+    from sentra_sensor.snmp.pysnmp_adapter import make_transport
+
+    return make_transport(
+        params.address, params.port, credentials, params.timeout_ms, params.retries
+    )
+
+
+def parse_credentials(raw: object, params: SnmpParameters) -> SnmpCredentials | None:
+    """Credencial de la respuesta de start. Debe corresponder EXACTAMENTE al job (perfil,
+    revisión y versión); si no, el job no se ejecuta."""
+    if not isinstance(raw, dict):
+        return None
+    if (
+        str(raw.get("profile_id")) != params.profile_id
+        or raw.get("secret_revision") != params.secret_revision
+        or raw.get("snmp_version") != params.snmp_version
+    ):
+        return None
+
+    def opt(key: str) -> str | None:
+        value = raw.get(key)
+        return value if isinstance(value, str) and value else None
+
+    return SnmpCredentials(
+        snmp_version=params.snmp_version,
+        username=opt("username"),
+        auth_protocol=params.auth_protocol,
+        priv_protocol=params.priv_protocol,
+        auth_password=opt("auth_password"),
+        priv_password=opt("priv_password"),
+        community=opt("community"),
+    )
+
+
 @dataclass
 class ActiveJob:
     job: DiscoveryJob
-    scanner: Scanner
+    scanner: Scanner | SnmpCollector
     builder: BatchBuilder
     thread: threading.Thread | None = None
-    report: ScanReport | None = None
+    report: ScanReport | SnmpReport | None = None
     crash: str | None = None
     done: threading.Event = field(default_factory=threading.Event)
 
@@ -98,6 +146,7 @@ class SensorRunner:
         clock: Callable[[], float] = time.time,
         rng: random.Random | None = None,
         threaded_jobs: bool = True,
+        snmp_transport: SnmpTransportFactory | None = None,
     ) -> None:
         self.config = config
         self._transport = transport
@@ -111,28 +160,38 @@ class SensorRunner:
             max_age_seconds=config.spool_max_age_hours * 3600,
             clock=clock,
         )
-        self._probers = probers or ProberSet
-        self._clock = clock
-        self._rng = rng or random.Random()  # noqa: S311  (jitter, no criptografía)
-        self._threaded_jobs = threaded_jobs
-        self._wake = threading.Event()
-        self._stopping = threading.Event()
-        self._state_path = config.state_file()
-        self.state: LocalState = load_state(self._state_path)
-        self.server_config: ServerConfig | None = None
-        if self.state.server_config is not None:
-            try:
-                self.server_config = ServerConfig.parse(self.state.server_config)
-            except ProtocolError:
-                self.server_config = None
-        self._identity_mtime = self.store.mtime()
-        self.client = self._make_client()
-        self.mode = MODE_ACTIVE
-        self.started_at = clock()
-        self.clock_offset = 0.0
-        self.pending_jobs = 0
-        self.active: ActiveJob | None = None
-        self.next_heartbeat_at = 0.0
+        # El runner solo cierra el spool que abre él (uno inyectado es de quien lo creó).
+        self._owns_spool = spool is None
+        try:
+            self._probers = probers or ProberSet
+            self._clock = clock
+            self._rng = rng or random.Random()  # noqa: S311  (jitter, no criptografía)
+            self._threaded_jobs = threaded_jobs
+            self._snmp_transport = snmp_transport or default_snmp_transport
+            self._wake = threading.Event()
+            self._stopping = threading.Event()
+            self._state_path = config.state_file()
+            self.state: LocalState = load_state(self._state_path)
+            self.server_config: ServerConfig | None = None
+            if self.state.server_config is not None:
+                try:
+                    self.server_config = ServerConfig.parse(self.state.server_config)
+                except ProtocolError:
+                    self.server_config = None
+            self._identity_mtime = self.store.mtime()
+            self.client = self._make_client()
+            self.mode = MODE_ACTIVE
+            self.started_at = clock()
+            self.clock_offset = 0.0
+            self.pending_jobs = 0
+            self.active: ActiveJob | None = None
+            self.next_heartbeat_at = 0.0
+        except BaseException:
+            # Si el resto del arranque falla (estado ilegible, cliente), la conexión SQLite
+            # recién abierta no puede quedar viva hasta el GC.
+            if self._owns_spool:
+                self.spool.close()
+            raise
         self.next_poll_at = 0.0
         self._heartbeat_failures = 0
         self._poll_failures = 0
@@ -215,17 +274,25 @@ class SensorRunner:
         self._shutdown()
 
     def _shutdown(self) -> None:
-        active = self.active
-        if active is not None:
-            active.scanner.request_cancel()
-            if active.thread is not None:
-                active.thread.join(timeout=30)
-            self._reap_job()
-        # Último intento de entregar lo pendiente; lo que no salga sigue en el spool.
-        if self.mode == MODE_ACTIVE and self._server_reachable:
-            self.flush()
-        self.spool.close()
+        try:
+            active = self.active
+            if active is not None:
+                active.scanner.request_cancel()
+                if active.thread is not None:
+                    active.thread.join(timeout=30)
+                self._reap_job()
+            # Último intento de entregar lo pendiente; lo que no salga sigue en el spool.
+            if self.mode == MODE_ACTIVE and self._server_reachable:
+                self.flush()
+        finally:
+            # Aunque recoger el job o el último envío fallen, el spool se cierra: lo
+            # pendiente ya está confirmado en disco y se reenvía en el próximo arranque.
+            self.close()
         logger.info("sensor stopped")
+
+    def close(self) -> None:
+        """Libera los recursos locales del runner (la conexión del spool). Idempotente."""
+        self.spool.close()
 
     def tick(self) -> float:
         """Una vuelta del bucle. Devuelve cuántos segundos dormir hasta la siguiente."""
@@ -502,16 +569,106 @@ class SensorRunner:
                 self.wake()
             return
         try:
-            self.client.start(job.job_id, job.attempt)
+            started = self.client.start(job.job_id, job.attempt)
         except (TransportError, ApiError) as exc:
             # Sin start confirmado no se escanea: el lease caducará y el servidor decidirá.
             logger.warning("job start failed", extra={"job_id": job.job_id, "error": str(exc)})
             if isinstance(exc, ApiError):
                 self._handle_auth_error(exc)
             return
+        if isinstance(job.parameters, SnmpParameters):
+            credentials = parse_credentials(started.get("credentials"), job.parameters)
+            if credentials is None:
+                logger.warning(
+                    "snmp job without matching credentials, not executed",
+                    extra={"job_id": job.job_id},
+                )
+                enqueue_complete(
+                    self.spool,
+                    job.job_id,
+                    job.attempt,
+                    "failed",
+                    errors=["job_rejected:credentials_missing"],
+                    snmp={"modules": {}, "error_code": "internal"},
+                )
+                self.wake()
+                return
+            # Defensa en profundidad: aunque ningún camino los registra, nunca en un log.
+            for secret in (
+                credentials.auth_password,
+                credentials.priv_password,
+                credentials.community,
+            ):
+                register_secret(secret)
+            self._launch_snmp(job, job.parameters, credentials, config)
+            return
         self._launch(job, config)
 
+    def _launch_snmp(
+        self,
+        job: DiscoveryJob,
+        params: SnmpParameters,
+        credentials: SnmpCredentials,
+        config: ServerConfig,
+    ) -> None:
+        builder = BatchBuilder(
+            self.spool,
+            job.job_id,
+            job.attempt,
+            config.max_observations_per_batch,
+            config.max_batch_bytes,
+            on_enqueue=self.wake,
+            items_key="records",
+        )
+
+        def emit(records: list[dict[str, Any]]) -> None:
+            builder.add(records)
+            builder.flush()
+
+        factory = self._snmp_transport
+        collector = SnmpCollector(
+            params.modules,
+            lambda: factory(params, credentials),
+            emit,
+            max_varbinds=params.max_varbinds,
+            max_rows=params.max_rows_per_table,
+            max_repetitions=params.max_repetitions,
+            deadline_seconds=params.deadline_seconds,
+        )
+        active = ActiveJob(job=job, scanner=collector, builder=builder)
+        self.active = active
+        logger.info(
+            "job started",
+            extra={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "target": params.address,
+                "snmp_version": params.snmp_version,
+                "modules": list(params.modules),
+            },
+        )
+
+        def body() -> None:
+            try:
+                active.report = collector.run()
+            except Exception as exc:
+                logger.exception("snmp collection crashed", extra={"job_id": job.job_id})
+                active.crash = f"snmp error: {type(exc).__name__}"
+            finally:
+                active.done.set()
+                self.wake()
+
+        self._start_body(active, body)
+
+    def _start_body(self, active: ActiveJob, body: Callable[[], None]) -> None:
+        if self._threaded_jobs:
+            active.thread = threading.Thread(target=body, name="sensor-scan", daemon=True)
+            active.thread.start()
+        else:
+            body()
+
     def _launch(self, job: DiscoveryJob, config: ServerConfig) -> None:
+        assert isinstance(job.parameters, DiscoveryParameters)  # noqa: S101
         probers = self._probers()
         builder = BatchBuilder(
             self.spool,
@@ -557,11 +714,40 @@ class SensorRunner:
                 active.done.set()
                 self.wake()
 
-        if self._threaded_jobs:
-            active.thread = threading.Thread(target=body, name="sensor-scan", daemon=True)
-            active.thread.start()
+        self._start_body(active, body)
+
+    def _reap_snmp(self, active: ActiveJob, report: SnmpReport | None) -> None:
+        errors = list(active.builder.errors)
+        if report is None:
+            outcome = "failed"
+            errors.insert(0, active.crash or "snmp error")
+            summary: dict[str, Any] = {"modules": {}, "error_code": "internal"}
         else:
-            body()
+            outcome = report.outcome
+            errors = report.errors + errors
+            summary = report.summary()
+        enqueue_complete(
+            self.spool,
+            active.job.job_id,
+            active.job.attempt,
+            outcome,
+            errors=errors,
+            batches_sent=active.builder.batches_enqueued,
+            snmp=summary,
+        )
+        logger.info(
+            "job finished",
+            extra={
+                "job_id": active.job.job_id,
+                "outcome": outcome,
+                "records": report.records if report is not None else 0,
+                "error_code": summary.get("error_code"),
+                "batches": active.builder.batches_enqueued,
+            },
+        )
+        if outcome == "completed":
+            self.state.last_successful_job_at = utc_iso(self._clock())
+            self._persist_state()
 
     def _reap_job(self) -> None:
         active = self.active
@@ -570,6 +756,10 @@ class SensorRunner:
         self.active = None
         active.builder.flush()
         report = active.report
+        if isinstance(active.scanner, SnmpCollector):
+            self._reap_snmp(active, report if isinstance(report, SnmpReport) else None)
+            return
+        assert not isinstance(report, SnmpReport)  # noqa: S101
         errors = list(active.builder.errors)
         if report is None:
             outcome = "failed"

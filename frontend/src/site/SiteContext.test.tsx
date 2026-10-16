@@ -1,12 +1,12 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Agent } from "../api/types";
 import { AgentsPage } from "../pages/AgentsPage";
 import { WithRole } from "../test/auth";
-import { BRANCH_SITE_ID, DEFAULT_SITE_ID, OLD_SITE_ID, SITES, installFetch, type Call } from "../test/sites";
+import { BRANCH_SITE_ID, DEFAULT_SITE_ID, OLD_SITE_ID, SITES, installFetch, jsonResponse, type Call } from "../test/sites";
 import { SITE_STORAGE_KEY, SiteProvider, useSite, validSelection } from "./SiteContext";
 import { SiteScopeChip, SiteSelector } from "./SiteSelector";
 
@@ -92,6 +92,162 @@ describe("SiteProvider", () => {
     const select = await screen.findByLabelText("Site");
     fireEvent.change(select, { target: { value: BRANCH_SITE_ID } });
     await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|`));
+  });
+});
+
+/**
+ * Anota en cada render la selección publicada y lo que hay guardado en ese momento. Leer el
+ * almacenamiento durante el render no tiene efectos; permite comprobar que ningún render
+ * muestra la selección corregida con el id inválido aún guardado.
+ */
+function RenderLog({ log }: { log: { text: string; stored: string | null }[] }) {
+  const site = useSite();
+  log.push({
+    text: site.loading ? "cargando" : `${site.selection}|${site.scopeId ?? "-"}`,
+    stored: window.localStorage.getItem(SITE_STORAGE_KEY),
+  });
+  return (
+    <>
+      <button type="button" onClick={() => site.setSelection(BRANCH_SITE_ID)}>
+        elegir sucursal
+      </button>
+      <button type="button" onClick={() => site.setSelection(DEFAULT_SITE_ID)}>
+        elegir principal
+      </button>
+      <button type="button" onClick={() => site.setSelection(OLD_SITE_ID)}>
+        elegir archivado
+      </button>
+      <button type="button" onClick={site.refresh}>
+        recargar
+      </button>
+    </>
+  );
+}
+
+interface Pending {
+  resolve: (items: unknown[]) => void;
+  signal: AbortSignal | undefined;
+}
+
+/** GET /sites que no responde hasta que el test lo decide (ignora la cancelación a propósito). */
+function deferredSites(): Pending[] {
+  const pending: Pending[] = [];
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(
+      (_input: string, init: RequestInit = {}) =>
+        new Promise<Response>((resolve) => {
+          pending.push({
+            resolve: (items) => resolve(jsonResponse(200, { items })),
+            signal: init.signal ?? undefined,
+          });
+        }),
+    ),
+  );
+  return pending;
+}
+
+function nth(pending: Pending[], index: number): Pending {
+  const entry = pending[index];
+  if (!entry) throw new Error(`no hay petición ${index}`);
+  return entry;
+}
+
+describe("SiteProvider: normalización al aceptar el catálogo", () => {
+  type Entry = { text: string; stored: string | null };
+
+  function renderLogged(log: Entry[]) {
+    return render(
+      <SiteProvider>
+        <Probe />
+        <RenderLog log={log} />
+      </SiteProvider>,
+    );
+  }
+
+  it("un site inexistente ya está olvidado en el primer render que muestra all", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, "11111111-dead-beef-0000-000000000000");
+    const log: Entry[] = [];
+    renderLogged(log);
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent("all|-"));
+    const published = log.filter((e) => e.text !== "cargando");
+    expect(published.length).toBeGreaterThan(0);
+    for (const entry of published) expect(entry).toEqual({ text: "all|-", stored: null });
+  });
+
+  it("un site archivado guardado se rechaza y se olvida en el mismo render", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, OLD_SITE_ID);
+    const log: Entry[] = [];
+    renderLogged(log);
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent("all|-"));
+    for (const entry of log.filter((e) => e.text !== "cargando")) {
+      expect(entry).toEqual({ text: "all|-", stored: null });
+    }
+  });
+
+  it("un site válido se conserva y elegir otro no repite GET /sites", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, BRANCH_SITE_ID);
+    const log: Entry[] = [];
+    renderLogged(log);
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|${BRANCH_SITE_ID}`));
+    expect(log.some((e) => e.text.startsWith("all"))).toBe(false);
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBe(BRANCH_SITE_ID);
+    fireEvent.click(screen.getByText("elegir principal"));
+    expect(screen.getByLabelText("alcance")).toHaveTextContent(`${DEFAULT_SITE_ID}|${DEFAULT_SITE_ID}`);
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBe(DEFAULT_SITE_ID);
+    expect(calls.filter((c) => c.path === "/sites")).toHaveLength(1);
+  });
+
+  it("con catálogo, elegir un site archivado deja all y no lo guarda", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, BRANCH_SITE_ID);
+    renderLogged([]);
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|`));
+    fireEvent.click(screen.getByText("elegir archivado"));
+    expect(screen.getByLabelText("alcance")).toHaveTextContent("all|-");
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBeNull();
+  });
+
+  it("una elección hecha mientras carga el catálogo no se pierde ni la pisa el id guardado", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, "11111111-dead-beef-0000-000000000000");
+    const pending = deferredSites();
+    renderLogged([]);
+    expect(screen.getByLabelText("alcance")).toHaveTextContent("cargando");
+    fireEvent.click(screen.getByText("elegir sucursal"));
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBe(BRANCH_SITE_ID);
+    expect(pending).toHaveLength(1); // cambiar de site no repite la petición
+    await act(async () => nth(pending, 0).resolve(SITES));
+    expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|${BRANCH_SITE_ID}`);
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBe(BRANCH_SITE_ID);
+  });
+
+  it("al recargar el catálogo se olvida un site que ya no vale", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, BRANCH_SITE_ID);
+    let catalog = SITES;
+    calls = installFetch({ "GET /sites": () => ({ body: { items: catalog } }) });
+    const log: Entry[] = [];
+    renderLogged(log);
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|`));
+    catalog = SITES.map((s) => (s.site_id === BRANCH_SITE_ID ? { ...s, status: "archived" as const } : s));
+    log.length = 0;
+    fireEvent.click(screen.getByText("recargar"));
+    await waitFor(() => expect(screen.getByLabelText("alcance")).toHaveTextContent("all|-"));
+    for (const entry of log.filter((e) => e.text === "all|-")) expect(entry.stored).toBeNull();
+    expect(calls.filter((c) => c.path === "/sites")).toHaveLength(2);
+  });
+
+  it("una respuesta de una petición cancelada no se publica", async () => {
+    window.localStorage.setItem(SITE_STORAGE_KEY, BRANCH_SITE_ID);
+    const pending = deferredSites();
+    renderLogged([]);
+    fireEvent.click(screen.getByText("recargar"));
+    expect(pending).toHaveLength(2);
+    expect(nth(pending, 0).signal?.aborted).toBe(true);
+    await act(async () => nth(pending, 1).resolve(SITES));
+    expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|${BRANCH_SITE_ID}`);
+    // La respuesta vieja (sin la sucursal) llega tarde: ni cambia el alcance ni borra nada.
+    await act(async () => nth(pending, 0).resolve(SITES.slice(0, 1)));
+    expect(screen.getByLabelText("alcance")).toHaveTextContent(`${BRANCH_SITE_ID}|${BRANCH_SITE_ID}`);
+    expect(window.localStorage.getItem(SITE_STORAGE_KEY)).toBe(BRANCH_SITE_ID);
   });
 });
 

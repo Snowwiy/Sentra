@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { sitesApi } from "../api/sentra";
 import type { Site } from "../api/types";
 
@@ -73,18 +73,39 @@ const SiteContext = createContext<SiteValue | undefined>(undefined);
  * nunca se usa tal cual: hasta que llega el catálogo el alcance es "all" y, después, solo se
  * acepta un site que exista y no esté archivado. Así un id viejo o manipulado no filtra nada
  * por error. El servidor vuelve a validar el site_id (404 site_not_found).
+ *
+ * La normalización ocurre en el mismo callback que acepta el catálogo, antes de publicarlo:
+ * cuando un render muestra "all" por un id inválido, el navegador ya lo ha olvidado. Un
+ * efecto posterior dejaba un render intermedio con la selección corregida pero el id viejo
+ * aún guardado.
  */
 export function SiteProvider({ children }: { children: ReactNode }) {
   const [sites, setSites] = useState<Site[] | undefined>(undefined);
   const [error, setError] = useState<Error | undefined>(undefined);
   const [requested, setRequested] = useState<string | undefined>(() => readStored());
   const [attempt, setAttempt] = useState(0);
+  // Última selección pedida, leída desde los callbacks asíncronos. Así la respuesta del
+  // catálogo valida la elección más reciente (aunque llegue durante la petición) sin que
+  // `requested` sea dependencia del efecto: cambiar de site no repite GET /sites.
+  const requestedRef = useRef(requested);
+  // Catálogo aceptado, para validar en setSelection sin esperar a otro render.
+  const sitesRef = useRef<Site[] | undefined>(undefined);
 
   useEffect(() => {
     const controller = new AbortController();
     sitesApi
       .list(controller.signal)
       .then((list) => {
+        // Una respuesta de una petición cancelada (desmontaje o refresh) no se publica.
+        if (controller.signal.aborted) return;
+        const latest = requestedRef.current;
+        if (latest && latest !== "all" && validSelection(latest, list.items) === "all") {
+          // Borrado o archivado: se olvida antes de publicar el estado que provoca el render.
+          writeStored("all");
+          requestedRef.current = "all";
+          setRequested("all");
+        }
+        sitesRef.current = list.items;
         setSites(list.items);
         setError(undefined);
       })
@@ -96,8 +117,13 @@ export function SiteProvider({ children }: { children: ReactNode }) {
   }, [attempt]);
 
   const setSelection = useCallback((value: SiteSelection) => {
-    setRequested(value);
-    writeStored(value);
+    // Con catálogo, un id que no vale como alcance se guarda como "all"; sin catálogo se
+    // guarda tal cual y lo valida la respuesta de GET /sites.
+    const catalog = sitesRef.current;
+    const next = catalog === undefined ? value : validSelection(value, catalog);
+    requestedRef.current = next;
+    setRequested(next);
+    writeStored(next);
   }, []);
 
   const refresh = useCallback(() => setAttempt((n) => n + 1), []);
@@ -119,12 +145,6 @@ export function SiteProvider({ children }: { children: ReactNode }) {
       refresh,
     };
   }, [sites, requested, error, setSelection, refresh]);
-
-  // Un id guardado que ya no vale (borrado, archivado) se olvida en cuanto llega el catálogo.
-  useEffect(() => {
-    if (sites === undefined || !requested || requested === "all") return;
-    if (validSelection(requested, sites) === "all") writeStored("all");
-  }, [sites, requested]);
 
   return <SiteContext.Provider value={value}>{children}</SiteContext.Provider>;
 }

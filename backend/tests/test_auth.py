@@ -187,7 +187,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "incidents:read", "incidents:manage", "rules:read", "rules:test",
         "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
         "threat_intel:triage", "assets:duplicates_read", "response:read", "response:execute",
-        "reports:read", "reports:generate",
+        "reports:read", "reports:generate", "network:poll",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -476,8 +476,11 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.VULNERABILITIES_READ, Permission.VULNERABILITIES_MANAGE,
         Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
         Permission.RESPONSE_READ, Permission.RESPONSE_EXECUTE,
-        Permission.REPORTS_READ, Permission.REPORTS_GENERATE,
+        Permission.REPORTS_READ, Permission.REPORTS_GENERATE, Permission.NETWORK_POLL,
     }  # fmt: skip
+    # Fase 6B: credenciales SNMP y registro de equipos de red, solo admin.
+    assert Permission.SNMP_CREDENTIALS_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
+    assert Permission.NETWORK_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Resumen ejecutivo, técnico global, cancelar ajenos y borrar informes: solo admin (5E).
     assert Permission.REPORTS_ADMIN not in ROLE_PERMISSIONS[Role.ANALYST]
     # Acciones MEDIUM, gestión de playbooks y cancelación (response:manage): solo admin (5D).
@@ -560,6 +563,29 @@ def _matrix_requests(
         ),
         ("POST", f"{API}/reports/{uuid4()}/cancel", None, Permission.REPORTS_GENERATE),
         ("DELETE", f"{API}/reports/{uuid4()}", None, Permission.REPORTS_ADMIN),
+        # Fase 6B: perfil, equipo o consulta inexistentes -> 404 con permiso, 403 sin él.
+        ("GET", f"{API}/network/snmp-profiles", None, Permission.SNMP_CREDENTIALS_MANAGE),
+        (
+            "GET",
+            f"{API}/network/snmp-profiles/{uuid4()}",
+            None,
+            Permission.SNMP_CREDENTIALS_MANAGE,
+        ),
+        (
+            "POST",
+            f"{API}/network/snmp-profiles/{uuid4()}/revoke",
+            {"version": 1, "reason": "test"},
+            Permission.SNMP_CREDENTIALS_MANAGE,
+        ),
+        (
+            "PATCH",
+            f"{API}/network/devices/{uuid4()}",
+            {"version": 1},
+            Permission.NETWORK_MANAGE,
+        ),
+        ("POST", f"{API}/network/devices/{uuid4()}/polls", None, Permission.NETWORK_POLL),
+        ("POST", f"{API}/network/polls/{uuid4()}/cancel", None, Permission.NETWORK_POLL),
+        ("GET", f"{API}/network/devices", None, Permission.MONITORING_READ),
     ]
 
 
@@ -637,6 +663,7 @@ def _concrete(path: str) -> str:
         "model_id", "benchmark_id", "incident_id", "finding_id", "indicator_id", "match_id",
         "execution_id", "playbook_id", "run_id", "request_id", "report_id",
         "site_id", "network_id", "sensor_id", "enrollment_id",
+        "profile_id", "device_id", "poll_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.

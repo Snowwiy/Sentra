@@ -103,8 +103,13 @@ class UrllibTransport:
                     response.status, dict(response.headers), response.read(MAX_RESPONSE_BYTES)
                 )
         except urllib.error.HTTPError as error:
-            data = error.read(MAX_RESPONSE_BYTES) if error.fp is not None else b""
-            return HttpResponse(error.code, dict(error.headers or {}), data)
+            # HTTPError es también la respuesta abierta (cuerpo y socket); quien la captura es su
+            # dueño y debe cerrarla. Sin el cierre, Python 3.14+ avisa "Implicitly cleaning up".
+            try:
+                data = error.read(MAX_RESPONSE_BYTES) if error.fp is not None else b""
+                return HttpResponse(error.code, dict(error.headers or {}), data)
+            finally:
+                error.close()
         except urllib.error.URLError as error:
             if isinstance(error.reason, ssl.SSLError):
                 raise TlsError(f"TLS verification failed: {error.reason}") from error

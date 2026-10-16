@@ -1,5 +1,28 @@
 import { apiDelete, apiDownload, apiGet, apiPatch, apiPost } from "./client";
 import type {
+  DeviceClassification,
+  MacLocationList,
+  MonitoringStatus,
+  NeighborProtocol,
+  NetworkCandidateList,
+  NetworkDevice,
+  NetworkDeviceCreate,
+  NetworkDeviceDetail,
+  NetworkDeviceList,
+  NetworkDeviceUpdate,
+  NetworkInterfaceList,
+  NetworkMacEntryList,
+  NetworkNeighborList,
+  NetworkPoll,
+  NetworkPollList,
+  NetworkVlanList,
+  OperStatus,
+  PortKind,
+  SnmpProfile,
+  SnmpProfileCreate,
+  SnmpProfileList,
+  SnmpProfileRotate,
+  SnmpProfileUpdate,
   Report,
   ReportCatalog,
   ReportList,
@@ -1450,4 +1473,132 @@ export const sensorsApi = {
     apiPost<SensorEnrollmentCreated>("/sensors/enrollment-tokens", input),
   revokeEnrollment: (enrollmentId: string) =>
     apiPost<SensorEnrollment>(`/sensors/enrollment-tokens/${encodeURIComponent(enrollmentId)}/revoke`),
+};
+
+/** Filtros de GET /network/devices (Fase 6B); todos opcionales. */
+export interface NetworkDeviceQuery {
+  siteId?: string;
+  classification?: DeviceClassification;
+  monitoringStatus?: MonitoringStatus;
+  q?: string;
+  includeArchived?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NetworkInterfaceQuery {
+  operStatus?: OperStatus;
+  portKind?: PortKind;
+  q?: string;
+  includeAbsent?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface NetworkMacQuery {
+  vlanId?: number;
+  interfaceId?: string;
+  mac?: string;
+  includeAbsent?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+const snmpProfilePath = (profileId: string) => `/network/snmp-profiles/${encodeURIComponent(profileId)}`;
+const networkDevicePath = (deviceId: string) => `/network/devices/${encodeURIComponent(deviceId)}`;
+
+/**
+ * Infraestructura de red: SNMP / LLDP / CDP (Fase 6B).
+ *
+ * Los secretos SNMP (passwords v3, comunidad v2c) solo viajan en el cuerpo de `create` y
+ * `rotate`: nunca en la URL, nunca en otra petición y ninguna respuesta los devuelve.
+ * Perfiles: snmp_credentials:manage. Equipos: monitoring:read (lectura), network:manage
+ * (registro y edición) y network:poll (consultas). El servidor comprueba siempre el permiso.
+ */
+export const networkApi = {
+  profiles: (siteId?: string, includeRevoked = false, signal?: AbortSignal) =>
+    apiGet<SnmpProfileList>(
+      `/network/snmp-profiles${queryString({ site_id: siteId, include_revoked: includeRevoked || undefined })}`,
+      { signal },
+    ),
+  profile: (profileId: string, signal?: AbortSignal) => apiGet<SnmpProfile>(snmpProfilePath(profileId), { signal }),
+  createProfile: (input: SnmpProfileCreate) => apiPost<SnmpProfile>("/network/snmp-profiles", input),
+  updateProfile: (profileId: string, input: SnmpProfileUpdate) =>
+    apiPatch<SnmpProfile>(snmpProfilePath(profileId), input),
+  rotateProfile: (profileId: string, input: SnmpProfileRotate) =>
+    apiPost<SnmpProfile>(`${snmpProfilePath(profileId)}/rotate`, input),
+  revokeProfile: (profileId: string, version: number, reason: string) =>
+    apiPost<SnmpProfile>(`${snmpProfilePath(profileId)}/revoke`, { version, reason }),
+
+  devices: (query: NetworkDeviceQuery = {}, signal?: AbortSignal) =>
+    apiGet<NetworkDeviceList>(
+      `/network/devices${queryString({
+        site_id: query.siteId,
+        classification: query.classification,
+        monitoring_status: query.monitoringStatus,
+        q: query.q,
+        include_archived: query.includeArchived || undefined,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  device: (deviceId: string, signal?: AbortSignal) => apiGet<NetworkDeviceDetail>(networkDevicePath(deviceId), { signal }),
+  interfaces: (deviceId: string, query: NetworkInterfaceQuery = {}, signal?: AbortSignal) =>
+    apiGet<NetworkInterfaceList>(
+      `${networkDevicePath(deviceId)}/interfaces${queryString({
+        oper_status: query.operStatus,
+        port_kind: query.portKind,
+        q: query.q,
+        include_absent: query.includeAbsent || undefined,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  neighbors: (
+    deviceId: string,
+    query: { protocol?: NeighborProtocol; includeAbsent?: boolean; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    apiGet<NetworkNeighborList>(
+      `${networkDevicePath(deviceId)}/neighbors${queryString({
+        protocol: query.protocol,
+        include_absent: query.includeAbsent || undefined,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  vlans: (deviceId: string, includeAbsent = false, signal?: AbortSignal) =>
+    apiGet<NetworkVlanList>(
+      `${networkDevicePath(deviceId)}/vlans${queryString({ include_absent: includeAbsent || undefined })}`,
+      { signal },
+    ),
+  macEntries: (deviceId: string, query: NetworkMacQuery = {}, signal?: AbortSignal) =>
+    apiGet<NetworkMacEntryList>(
+      `${networkDevicePath(deviceId)}/mac-entries${queryString({
+        vlan_id: query.vlanId,
+        interface_id: query.interfaceId,
+        mac: query.mac,
+        include_absent: query.includeAbsent || undefined,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  polls: (deviceId: string, query: { limit?: number; offset?: number } = {}, signal?: AbortSignal) =>
+    apiGet<NetworkPollList>(`${networkDevicePath(deviceId)}/polls${queryString({ ...query })}`, { signal }),
+  macLocations: (mac: string, siteId?: string, signal?: AbortSignal) =>
+    apiGet<MacLocationList>(`/network/mac-locations${queryString({ mac, site_id: siteId })}`, { signal }),
+  candidates: (siteId?: string, limit?: number, signal?: AbortSignal) =>
+    apiGet<NetworkCandidateList>(`/network/candidates${queryString({ site_id: siteId, limit })}`, { signal }),
+
+  createDevice: (input: NetworkDeviceCreate) => apiPost<NetworkDevice>("/network/devices", input),
+  updateDevice: (deviceId: string, input: NetworkDeviceUpdate) =>
+    apiPatch<NetworkDevice>(networkDevicePath(deviceId), input),
+  archiveDevice: (deviceId: string, version: number, reason?: string) =>
+    apiPost<NetworkDevice>(`${networkDevicePath(deviceId)}/archive`, { version, ...(reason ? { reason } : {}) }),
+  requestPoll: (deviceId: string) => apiPost<NetworkPoll>(`${networkDevicePath(deviceId)}/polls`),
+  cancelPoll: (pollId: string) => apiPost<NetworkPoll>(`/network/polls/${encodeURIComponent(pollId)}/cancel`),
 };

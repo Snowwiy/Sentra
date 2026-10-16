@@ -21,6 +21,7 @@ from app.api.v1.routes import (
     incidents,
     inventory,
     metrics,
+    network,
     processes,
     reports,
     response,
@@ -72,3 +73,4 @@ api_router.include_router(console_discovery.router, responses=_COMMON)
 api_router.include_router(sites.router, responses=_COMMON)
 api_router.include_router(sensors.router, responses=_COMMON)
 api_router.include_router(sensor_protocol.router, responses=_COMMON)
+api_router.include_router(network.router, responses=_COMMON)

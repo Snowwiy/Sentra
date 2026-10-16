@@ -61,6 +61,14 @@ const reportsFallback = <LoadingState label="Cargando informes…" />;
 // Fase 5F: sites y sensores distribuidos en su propio chunk.
 const SitesPage = lazy(() => import("./pages/SitesPage").then((m) => ({ default: m.SitesPage })));
 const SensorsPage = lazy(() => import("./pages/SensorsPage").then((m) => ({ default: m.SensorsPage })));
+// Fase 6B: infraestructura de red (SNMP / LLDP / CDP) en su propio chunk.
+const InfrastructurePage = lazy(() =>
+  import("./pages/InfrastructurePage").then((m) => ({ default: m.InfrastructurePage })),
+);
+const InfrastructureDevicePage = lazy(() =>
+  import("./pages/InfrastructureDevicePage").then((m) => ({ default: m.InfrastructureDevicePage })),
+);
+const infrastructureFallback = <LoadingState label="Cargando infraestructura…" />;
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -286,6 +294,26 @@ export function AppRoutes() {
               <RequirePermission permission="monitoring:read">
                 <Suspense fallback={incidentsFallback}>
                   <SensorsPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="infrastructure"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={infrastructureFallback}>
+                  <InfrastructurePage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="infrastructure/devices/:deviceId"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={infrastructureFallback}>
+                  <InfrastructureDevicePage />
                 </Suspense>
               </RequirePermission>
             }

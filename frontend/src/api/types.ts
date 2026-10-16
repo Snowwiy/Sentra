@@ -1261,7 +1261,11 @@ export type Permission =
   | "reports:generate"
   | "reports:admin"
   | "sites:manage"
-  | "sensors:manage";
+  | "sensors:manage"
+  // Fase 6B: consultas SNMP (analyst y admin), registro de equipos y perfiles SNMP (admin).
+  | "network:poll"
+  | "network:manage"
+  | "snmp_credentials:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -3673,4 +3677,464 @@ export interface SensorEnrollmentCreated extends SensorEnrollment {
 
 export interface SensorEnrollmentList {
   items: SensorEnrollment[];
+}
+
+// --- Infraestructura de red: SNMP / LLDP / CDP (Fase 6B) -----------------------------------
+//
+// Espejo de backend/app/schemas/network.py. Toda la información de inventario es evidencia
+// observada por un sensor del site del equipo: un vecino LLDP/CDP es "informado por el
+// equipo" (nunca un enlace confirmado) y un equipo sin consulta reciente no está "online".
+// Los secretos SNMP son de solo escritura: ninguna respuesta los incluye.
+
+export type SnmpVersion = "v3" | "v2c";
+export type SnmpSecurityLevel = "authPriv" | "community";
+export type SnmpAuthProtocol = "sha" | "sha224" | "sha256" | "sha384" | "sha512";
+export type SnmpPrivProtocol = "aes128" | "aes192" | "aes256";
+export type SnmpProfileStatus = "active" | "revoked";
+
+export type DeviceClassification = "managed_switch" | "router" | "access_point" | "firewall" | "unclassified";
+export type DeviceClassificationConfidence = "high" | "medium" | "low" | "none";
+export type MonitoringStatus =
+  | "archived"
+  | "disabled"
+  | "credentials_pending"
+  | "sensor_pending"
+  | "never_polled"
+  | "polling"
+  | "ok"
+  | "partial"
+  | "failing";
+export type EvidenceFreshness = "recent" | "historical" | "none";
+export type PollStatus = "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled" | "expired";
+export type PollTrigger = "manual" | "scheduled";
+export type NetworkModuleName = "system" | "entity" | "interfaces" | "lldp" | "cdp" | "bridge" | "vlan";
+export type ModuleStatus = "complete" | "partial" | "unsupported" | "failed" | "skipped";
+export type SnmpErrorCode =
+  | "timeout"
+  | "host_unreachable"
+  | "auth_failed"
+  | "unsupported_version"
+  | "oid_unavailable"
+  | "no_lldp"
+  | "no_cdp"
+  | "partial"
+  | "sensor_offline"
+  | "sensor_lost"
+  | "credentials_unavailable"
+  | "job_expired"
+  | "job_rejected"
+  | "cancelled"
+  | "limit_exceeded"
+  | "malformed_response"
+  | "internal";
+export type PortKind = "physical" | "lag" | "logical" | "vlan" | "loopback" | "tunnel" | "wireless" | "other";
+export type AdminStatus = "up" | "down" | "testing" | "unknown";
+export type OperStatus = "up" | "down" | "testing" | "unknown" | "dormant" | "not_present" | "lower_layer_down";
+export type NeighborProtocol = "lldp" | "cdp";
+export type LocalPortMatch = "if_index" | "if_name" | "if_descr" | "unmatched";
+export type RemoteMatchBasis = "chassis_mac" | "mgmt_address" | "sys_name";
+export type MacStatus = "learned" | "mgmt" | "self" | "other" | "invalid";
+export type VlanSource = "fdb_vlan_map" | "fdb_id_assumed" | "none";
+export type MacLocation = "edge_candidate" | "uplink_or_shared" | "unknown";
+
+/** Metadatos de un perfil SNMP. Nunca incluye passwords, claves ni comunidades. */
+export interface SnmpProfile {
+  profile_id: string;
+  site_id: string;
+  site_name: string;
+  name: string;
+  description: string | null;
+  snmp_version: SnmpVersion;
+  security_level: SnmpSecurityLevel;
+  username: string | null;
+  auth_protocol: SnmpAuthProtocol | null;
+  priv_protocol: SnmpPrivProtocol | null;
+  status: SnmpProfileStatus;
+  secret_configured: boolean;
+  secret_updated_at: string | null;
+  secret_revision: number;
+  devices_count: number;
+  created_at: string;
+  created_by: string | null;
+  updated_at: string;
+  revoked_at: string | null;
+  revoked_by: string | null;
+  revoke_reason: string | null;
+  version: number;
+}
+
+export interface SnmpProfileList {
+  items: SnmpProfile[];
+  /** False: el servidor no tiene almacén cifrado de secretos (no se puede crear ni rotar). */
+  secret_store_available: boolean;
+  v2c_allowed: boolean;
+}
+
+export interface SnmpProfileCreate {
+  site_id: string;
+  name: string;
+  description?: string | null;
+  snmp_version: SnmpVersion;
+  username?: string | null;
+  auth_protocol?: SnmpAuthProtocol | null;
+  priv_protocol?: SnmpPrivProtocol | null;
+  auth_password?: string | null;
+  priv_password?: string | null;
+  community?: string | null;
+}
+
+export interface SnmpProfileUpdate {
+  version: number;
+  name?: string | null;
+  description?: string | null;
+}
+
+export interface SnmpProfileRotate {
+  version: number;
+  username?: string | null;
+  auth_protocol?: SnmpAuthProtocol | null;
+  priv_protocol?: SnmpPrivProtocol | null;
+  auth_password?: string | null;
+  priv_password?: string | null;
+  community?: string | null;
+}
+
+export interface DeviceClassificationEvidence {
+  /** lldp_capabilities, sys_services, bridge_mib, ip_forwarding, sys_object_id, if_type... */
+  source: string;
+  detail: string;
+}
+
+export interface DeviceProfileRef {
+  profile_id: string;
+  name: string;
+  snmp_version: SnmpVersion;
+  status: SnmpProfileStatus;
+}
+
+export interface DeviceSensorRef {
+  sensor_id: string;
+  name: string;
+  /** Estado efectivo del sensor (online/offline/stale/pending/disabled/revoked). */
+  status: string;
+}
+
+export interface NetworkDevice {
+  device_id: string;
+  site_id: string;
+  site_name: string;
+  display_name: string;
+  name: string | null;
+  management_address: string;
+  snmp_port: number;
+  asset_id: string | null;
+  status: "active" | "archived";
+  monitoring_enabled: boolean;
+  monitoring_status: MonitoringStatus;
+  freshness: EvidenceFreshness;
+  sys_name: string | null;
+  sys_descr: string | null;
+  sys_object_id: string | null;
+  sys_location: string | null;
+  sys_uptime_seconds: number | null;
+  vendor: string | null;
+  vendor_source: "sys_object_id" | "entity_mib" | null;
+  enterprise_number: number | null;
+  model: string | null;
+  firmware: string | null;
+  serial_number: string | null;
+  classification: DeviceClassification;
+  classification_confidence: DeviceClassificationConfidence;
+  classification_evidence: DeviceClassificationEvidence[];
+  layer3: boolean | null;
+  profile: DeviceProfileRef | null;
+  sensor: DeviceSensorRef | null;
+  last_poll_at: string | null;
+  last_success_at: string | null;
+  last_error_code: SnmpErrorCode | null;
+  last_error_at: string | null;
+  consecutive_failures: number;
+  interfaces_total: number;
+  interfaces_up: number;
+  neighbors_total: number;
+  vlans_total: number;
+  mac_entries_total: number;
+  created_at: string;
+  updated_at: string;
+  version: number;
+}
+
+export interface NetworkDeviceCounts {
+  total: number;
+  by_classification: Record<string, number>;
+  by_monitoring_status: Record<string, number>;
+}
+
+export interface NetworkDeviceList {
+  items: NetworkDevice[];
+  total: number;
+  limit: number;
+  offset: number;
+  counts: NetworkDeviceCounts;
+}
+
+export interface LldpLocal {
+  chassis_id: string | null;
+  chassis_id_subtype: string | null;
+  sys_name: string | null;
+  capabilities_enabled: string[];
+}
+
+export interface NetworkEntity {
+  index: number;
+  phys_class: string;
+  description: string | null;
+  name: string | null;
+  model_name: string | null;
+  serial_number: string | null;
+  hardware_rev: string | null;
+  firmware_rev: string | null;
+  software_rev: string | null;
+  mfg_name: string | null;
+}
+
+export interface NetworkDeviceDetail extends NetworkDevice {
+  lldp_local: LldpLocal | null;
+  entities: NetworkEntity[];
+  base_bridge_address: string | null;
+  bridge_ports: number | null;
+  last_modules: Record<string, ModuleStatus>;
+  can_poll: boolean;
+  poll_blockers: string[];
+}
+
+export interface NetworkDeviceCreate {
+  site_id: string;
+  management_address: string;
+  snmp_port?: number;
+  name?: string | null;
+  profile_id?: string | null;
+  sensor_id?: string | null;
+  monitoring_enabled?: boolean;
+  asset_id?: string | null;
+}
+
+export interface NetworkDeviceUpdate {
+  version: number;
+  name?: string | null;
+  snmp_port?: number | null;
+  profile_id?: string | null;
+  sensor_id?: string | null;
+  clear_profile?: boolean;
+  clear_sensor?: boolean;
+  monitoring_enabled?: boolean | null;
+}
+
+export interface NetworkCandidate {
+  asset_id: string;
+  site_id: string;
+  site_name: string;
+  address: string;
+  hostname: string | null;
+  device_type: string | null;
+  device_type_reason: string | null;
+  mac_address: string | null;
+  last_seen_at: string | null;
+}
+
+export interface NetworkCandidateList {
+  items: NetworkCandidate[];
+}
+
+export interface InterfaceRef {
+  interface_id: string;
+  name: string;
+  port_kind: PortKind;
+}
+
+export interface SwitchInterface {
+  interface_id: string;
+  if_index: number;
+  name: string;
+  if_name: string | null;
+  if_descr: string | null;
+  if_alias: string | null;
+  if_type: number | null;
+  port_kind: PortKind;
+  mac: string | null;
+  admin_status: AdminStatus;
+  oper_status: OperStatus;
+  speed_mbps: number | null;
+  mtu: number | null;
+  in_octets: number | null;
+  out_octets: number | null;
+  counters_hc: boolean;
+  in_errors: number | null;
+  out_errors: number | null;
+  in_discards: number | null;
+  out_discards: number | null;
+  counters_at: string | null;
+  bridge_port: number | null;
+  pvid: number | null;
+  untagged_vlans: number[];
+  tagged_vlans: number[];
+  is_trunk: boolean;
+  lag_parent: InterfaceRef | null;
+  lag_members: number;
+  mac_count: number;
+  neighbor_count: number;
+  present: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  evidence_source: string;
+}
+
+export interface NetworkInterfaceList {
+  items: SwitchInterface[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface DeviceRef {
+  device_id: string;
+  display_name: string;
+}
+
+export interface NetworkNeighbor {
+  neighbor_id: string;
+  protocol: NeighborProtocol;
+  local_interface: InterfaceRef | null;
+  local_port_label: string | null;
+  local_port_match: LocalPortMatch;
+  remote_chassis_id: string | null;
+  remote_chassis_id_subtype: string | null;
+  remote_port_id: string | null;
+  remote_port_id_subtype: string | null;
+  remote_port_descr: string | null;
+  remote_sys_name: string | null;
+  remote_sys_descr: string | null;
+  remote_platform: string | null;
+  remote_software: string | null;
+  remote_mgmt_address: string | null;
+  remote_capabilities: string[];
+  remote_native_vlan: number | null;
+  remote_device: DeviceRef | null;
+  remote_match_basis: RemoteMatchBasis | null;
+  reciprocal: boolean;
+  assessment: "reported_by_device";
+  present: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+  sensor_id: string | null;
+  evidence_source: string;
+}
+
+export interface NetworkNeighborList {
+  items: NetworkNeighbor[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface NetworkVlan {
+  vlan_id: number;
+  name: string | null;
+  source: "q_bridge_static" | "q_bridge_current";
+  untagged_ports: number;
+  tagged_ports: number;
+  present: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface NetworkVlanList {
+  items: NetworkVlan[];
+}
+
+export interface AssetRef {
+  asset_id: string;
+  display_name: string;
+}
+
+export interface NetworkMacEntry {
+  entry_id: string;
+  mac: string;
+  vlan_id: number | null;
+  vlan_source: VlanSource;
+  bridge_port: number | null;
+  interface: InterfaceRef | null;
+  status: MacStatus;
+  location: MacLocation;
+  location_reason: string;
+  port_mac_count: number;
+  asset: AssetRef | null;
+  present: boolean;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface NetworkMacEntryList {
+  items: NetworkMacEntry[];
+  total: number;
+  limit: number;
+  offset: number;
+  truncated: boolean;
+}
+
+export interface MacLocationEntry extends NetworkMacEntry {
+  device: DeviceRef;
+  site_id: string;
+  site_name: string;
+}
+
+export interface MacLocationList {
+  mac: string;
+  items: MacLocationEntry[];
+}
+
+export interface PollCounts {
+  interfaces: number;
+  neighbors: number;
+  vlans: number;
+  mac_entries: number;
+  records: number;
+}
+
+export interface PollChanges {
+  interfaces_added: number;
+  interfaces_removed: number;
+  oper_status_changes: number;
+  neighbors_added: number;
+  neighbors_removed: number;
+  classification_changed: boolean;
+}
+
+export interface NetworkPoll {
+  poll_id: string;
+  device_id: string;
+  site_id: string;
+  sensor_id: string | null;
+  sensor_name: string | null;
+  sensor_job_id: string | null;
+  status: PollStatus;
+  trigger: PollTrigger;
+  requested_by: string;
+  snmp_version: SnmpVersion | null;
+  modules_requested: string[];
+  modules: Record<string, ModuleStatus>;
+  error_code: SnmpErrorCode | null;
+  error_message: string | null;
+  counts: PollCounts;
+  changes: PollChanges;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+export interface NetworkPollList {
+  items: NetworkPoll[];
+  total: number;
+  limit: number;
+  offset: number;
 }

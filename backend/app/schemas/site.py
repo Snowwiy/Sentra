@@ -17,6 +17,7 @@ from pydantic import AwareDatetime, Field, field_validator
 
 from app.discovery.probes import normalize_mac
 from app.schemas.common import RequestModel, ResponseModel
+from app.schemas.network_protocol import SnmpJobCredentials, SnmpJobSummary, SnmpRecord
 
 SiteStatus = Literal["active", "disabled", "archived"]
 SensorStatus = Literal["pending", "online", "offline", "stale", "disabled", "revoked"]
@@ -348,6 +349,9 @@ class SensorJobStarted(ResponseModel):
     job_id: UUID
     status: Literal["running"]
     lease_expires_at: datetime
+    # Fase 6B: solo en jobs snmp_inventory. Los sensores anteriores nunca reciben esos jobs
+    # y para ellos la clave es siempre null.
+    credentials: SnmpJobCredentials | None = None
 
 
 class PortObservation(RequestModel):
@@ -394,7 +398,10 @@ class SensorResultsRequest(RequestModel):
     attempt: int = Field(ge=1, le=100)
     # El tope real (SENSOR_MAX_OBSERVATIONS_PER_BATCH) lo aplica el servicio; este es de
     # defensa para que pydantic no construya listas absurdas.
-    observations: list[ObservationIn] = Field(max_length=5000)
+    observations: list[ObservationIn] = Field(default_factory=list, max_length=5000)
+    # Fase 6B: registros SNMP normalizados de un job snmp_inventory (nunca junto con
+    # observaciones de discovery: el servicio exige la lista que corresponde al tipo de job).
+    records: list[SnmpRecord] = Field(default_factory=list, max_length=5000)
 
 
 class SensorResultsResponse(ResponseModel):
@@ -415,6 +422,8 @@ class SensorJobComplete(RequestModel):
     unprobed: list[str] = Field(default_factory=list, max_length=4096)
     errors: list[str] = Field(default_factory=list, max_length=50)
     batches_sent: int = Field(default=0, ge=0, le=100_000)
+    # Fase 6B: resumen de módulos y error de un job snmp_inventory.
+    snmp: SnmpJobSummary | None = None
 
     @field_validator("unprobed")
     @classmethod

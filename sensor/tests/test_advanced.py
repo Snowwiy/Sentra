@@ -10,7 +10,7 @@ from typing import Any
 
 import pytest
 
-from sentra_sensor import CAPABILITIES, __version__
+from sentra_sensor import CAPABILITIES, __version__, snmp
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.jobs import (
     JOB_TYPE_DISCOVERY_ADVANCED,
@@ -88,9 +88,10 @@ def rejected(job: dict[str, Any], config: ServerConfig = CONFIG) -> str:
 def test_capability_and_version_declared() -> None:
     assert "network.discovery.advanced" in CAPABILITIES
     assert "network.discovery.basic" in CAPABILITIES  # compatibilidad con 5F
-    assert __version__ == "0.2.0"
-    # Nada que el sensor no implemente.
-    assert not any(c.startswith(("snmp", "network.snmp", "network.lldp")) for c in CAPABILITIES)
+    assert __version__ == "0.3.0"
+    # Nada que el sensor no implemente: las snmp.* solo con el extra snmp instalado (6B).
+    assert not any(c.startswith(("network.snmp", "network.lldp")) for c in CAPABILITIES)
+    assert set(c for c in CAPABILITIES if c.startswith("snmp.")) == set(snmp.capabilities())
 
 
 def test_valid_advanced_job() -> None:

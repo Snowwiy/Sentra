@@ -634,6 +634,36 @@ class Settings(BaseSettings):
     # Cada cuánto el job sensor-maintenance caduca jobs y recupera leases vencidos.
     sensor_sweep_interval_seconds: int = Field(default=30, ge=5, le=3600)
 
+    # --- Fase 6B: SNMP, LLDP/CDP y switch intelligence (docs/snmp-network-intelligence.md) --
+    # Las consultas SNMP siempre las ejecuta un sensor del site del equipo (el servidor no
+    # habla SNMP). Sin equipos registrados ni perfiles nada de esto tiene efecto.
+    # Fichero con las claves AES-256 que cifran los secretos de los perfiles SNMP (ver
+    # app/core/secret_box.py; se crea con `python -m app.cli snmp-keygen`). Ruta absoluta,
+    # fuera del repositorio y de la base de datos. Sin él no se pueden crear ni usar perfiles.
+    snmp_credential_key_file: str | None = None
+    # Windows (fix 2 de 6B): SID con permiso de SOLO LECTURA sobre el fichero de claves, además
+    # de la política fija (SYSTEM, Administradores, la cuenta del proceso y la cuenta virtual
+    # NT SERVICE\SentraAPI). Solo hace falta si la API corre con una cuenta local propia.
+    # Separados por comas; siempre SID (S-1-5-21-...), nunca nombres, que dependen del idioma.
+    snmp_credential_key_readers: str = ""
+    # SNMPv2c (comunidad en claro por la red) solo si el admin lo habilita expresamente para
+    # equipos heredados. SNMPv1 no existe en Sentra.
+    snmp_allow_v2c: bool = False
+    # Consulta periódica de los equipos con monitorización activada; vacío = solo manual.
+    snmp_poll_interval_minutes: int | None = Field(default=None, ge=5, le=10_080)
+    # Límites de cada consulta, que el sensor vuelve a acotar con sus topes propios.
+    snmp_timeout_ms: int = Field(default=2000, ge=200, le=10_000)
+    snmp_retries: int = Field(default=1, ge=0, le=3)
+    snmp_max_varbinds_per_job: int = Field(default=50_000, ge=100, le=500_000)
+    snmp_max_rows_per_table: int = Field(default=10_000, ge=10, le=100_000)
+    snmp_job_deadline_seconds: int = Field(default=300, ge=10, le=3600)
+    # Un puerto con más MACs que esto no se valora como puerto de acceso (edge): probable
+    # uplink, trunk, switch no administrado o AP detrás.
+    snmp_edge_port_max_macs: int = Field(default=3, ge=1, le=64)
+    # Días que se conserva el historial de consultas y lo marcado como ausente. Vacío = sin
+    # purga (opt-in como el resto de retenciones).
+    snmp_history_retention_days: int | None = Field(default=None, ge=1, le=36_500)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en
@@ -669,6 +699,7 @@ class Settings(BaseSettings):
         "pg_bin_dir",
         "frontend_dist_dir",
         "report_output_dir",
+        "snmp_credential_key_file",
         mode="before",
     )
     @classmethod
@@ -677,7 +708,13 @@ class Settings(BaseSettings):
             return value.strip() or None
         return value
 
-    @field_validator("report_retention_days", "discovery_observation_retention_days", mode="before")
+    @field_validator(
+        "report_retention_days",
+        "discovery_observation_retention_days",
+        "snmp_poll_interval_minutes",
+        "snmp_history_retention_days",
+        mode="before",
+    )
     @classmethod
     def _blank_report_retention(cls, value: object) -> object:
         # `REPORT_RETENTION_DAYS=` en .env significa "sin retención": se conserva todo.
@@ -693,6 +730,29 @@ class Settings(BaseSettings):
         if value is not None and ("\x00" in value or not os.path.isabs(value)):
             raise ValueError("REPORT_OUTPUT_DIR must be an absolute path")
         return value
+
+    @field_validator("snmp_credential_key_file")
+    @classmethod
+    def _check_snmp_key_file(cls, value: str | None) -> str | None:
+        # Absoluta por la misma razón que REPORT_OUTPUT_DIR: una relativa podría resolverse
+        # dentro del repositorio y acabar versionada o servida.
+        if value is not None and ("\x00" in value or not os.path.isabs(value)):
+            raise ValueError("SNMP_CREDENTIAL_KEY_FILE must be an absolute path")
+        return value
+
+    @field_validator("snmp_credential_key_readers")
+    @classmethod
+    def _check_snmp_key_readers(cls, value: str) -> str:
+        from app.core.file_acl import is_valid_sid
+
+        for item in (part.strip() for part in value.split(",")):
+            if item and not is_valid_sid(item):
+                raise ValueError("SNMP_CREDENTIAL_KEY_READERS must be a comma separated SID list")
+        return value
+
+    @property
+    def snmp_key_readers(self) -> tuple[str, ...]:
+        return tuple(p.strip() for p in self.snmp_credential_key_readers.split(",") if p.strip())
 
     @field_validator("ai_redact")
     @classmethod

@@ -17,7 +17,8 @@ descubre otros equipos de la red del site. Son paquetes independientes y no comp
 - **El servidor es la autoridad del alcance.** Las redes permitidas (`allowed_networks`) llegan
   en la configuración del servidor; no se configuran localmente. Aun así, el sensor vuelve a
   validar cada job (defensa en profundidad).
-- **Catálogo cerrado de jobs**: solo `discovery_basic`, con esquema exacto (sin claves extra),
+- **Catálogo cerrado de jobs**: `discovery_basic`, `discovery_advanced` (Fase 6A) y
+  `snmp_inventory` (Fase 6B, ver más abajo); `discovery_basic` con esquema exacto (sin claves extra),
   `sensor_id`/`site_id` propios, sin caducar, target dentro de `allowed_networks`, nunca `/0`,
   número de hosts ≤ `max_hosts_per_job`, puertos 1..65535 sin duplicados. Un job rechazado no se
   ejecuta y se informa como `failed` con un error corto (`job_rejected:<motivo>`).
@@ -185,6 +186,30 @@ necesitan ninguna capacidad.
 
 **Validación en Windows real pendiente**: arranque/parada bajo el SCM, reinicio por fallo,
 DPAPI con la cuenta virtual y ACL del directorio solo se pueden comprobar en un Windows físico.
+
+## SNMP (Fase 6B, extra opcional)
+
+Inventario SNMP de solo lectura de switches, routers, APs y cortafuegos registrados en Sentra
+(docs/snmp-network-intelligence.md). Requiere el extra `snmp` (pysnmp 7.1 + cryptography):
+
+```bash
+/opt/sentra-sensor/bin/pip install "./sensor[snmp]"          # Linux
+"C:\Program Files\SentraSensor\python\python.exe" -m pip install ".\sensor[snmp]"   # Windows
+```
+
+- Sin el extra el sensor no declara `snmp.*` y el servidor nunca le envía jobs SNMP.
+- El job trae nombres de módulo (`system`, `entity`, `interfaces`, `lldp`, `cdp`, `bridge`,
+  `vlan`), nunca OIDs; el sensor solo consulta su catálogo cerrado
+  (`sentra_sensor/snmp/catalog.py`) con GET y GETBULK. No hay ninguna operación SET.
+- Una sola dirección dentro de las redes del site; SNMPv3 siempre authPriv (SHA + AES); v2c
+  solo si el servidor lo envía; SNMPv1 nunca.
+- La credencial llega solo en la respuesta de `start` del job, debe coincidir con el perfil,
+  la revisión y la versión del job, vive solo en memoria y se añade al filtro de logs. Nunca
+  se escribe en el spool, el estado ni los logs.
+- Límites del job revalidados por el sensor: timeout, reintentos, repeticiones de GETBULK,
+  varbinds totales, filas por tabla y plazo; cancelable desde el servidor. Un agente que
+  devuelve OIDs que no avanzan se corta como respuesta malformada.
+- Solo UDP saliente al puerto SNMP del equipo; no necesita privilegios ni raw sockets.
 
 ## Pruebas y calidad
 

@@ -95,20 +95,28 @@ class Spool:
         # check_same_thread=False: el hilo del scan encola y el bucle principal envía; el
         # acceso se serializa con self._lock.
         self._db = sqlite3.connect(str(path), check_same_thread=False, isolation_level=None)
-        self._db.execute("PRAGMA auto_vacuum=INCREMENTAL")
-        self._db.execute("PRAGMA journal_mode=WAL")
-        # FULL: un lote confirmado en el spool sobrevive a un corte de luz.
-        self._db.execute("PRAGMA synchronous=FULL")
-        self._db.executescript(_SCHEMA)
-        # -wal y -shm contienen las mismas observaciones. SQLite los crea con el modo del
-        # fichero principal (POSIX) o heredando la DACL del directorio (Windows); se
-        # comprueban igualmente de forma explícita.
-        for suffix in ("-wal", "-shm"):
-            aux = path.with_name(path.name + suffix)
-            if aux.exists():
-                make_private_file(aux)
+        try:
+            self._db.execute("PRAGMA auto_vacuum=INCREMENTAL")
+            self._db.execute("PRAGMA journal_mode=WAL")
+            # FULL: un lote confirmado en el spool sobrevive a un corte de luz.
+            self._db.execute("PRAGMA synchronous=FULL")
+            self._db.executescript(_SCHEMA)
+            # -wal y -shm contienen las mismas observaciones. SQLite los crea con el modo del
+            # fichero principal (POSIX) o heredando la DACL del directorio (Windows); se
+            # comprueban igualmente de forma explícita.
+            for suffix in ("-wal", "-shm"):
+                aux = path.with_name(path.name + suffix)
+                if aux.exists():
+                    make_private_file(aux)
+        except BaseException:
+            # Un spool corrupto o no protegible hace fallar el arranque; la conexión ya
+            # abierta se cierra aquí porque nadie recibirá el objeto para cerrarla.
+            self._db.close()
+            raise
 
     def close(self) -> None:
+        # Idempotente: sqlite3 admite cerrar dos veces y no pierde nada confirmado (cada
+        # enqueue/ack es una transacción autocommit con synchronous=FULL).
         with self._lock:
             self._db.close()
 

@@ -2,24 +2,27 @@
 
 import logging
 import random
+import sqlite3
 from pathlib import Path
+from typing import Any
 
 import pytest
 
 from sentra_sensor.backoff import backoff_delay
 from sentra_sensor.spool import KIND_COMPLETE, KIND_RESULTS, Spool
-from tests.conftest import FakeClock
+from tests.conftest import FakeClock, track_resource
 from tests.privacy import assert_private
 
 
 def make_spool(path: Path, clock: FakeClock, **limits: float) -> Spool:
-    return Spool(
+    spool = Spool(
         path,
         max_bytes=int(limits.get("max_bytes", 1_000_000)),
         max_items=int(limits.get("max_items", 1000)),
         max_age_seconds=limits.get("max_age", 3600),
         clock=clock,
     )
+    return track_resource(spool)
 
 
 def test_fifo_per_job_and_persistence(tmp_path: Path) -> None:
@@ -128,3 +131,46 @@ def test_backoff_grows_with_jitter_and_cap() -> None:
     assert backoff_delay(1, 5, 300, retry_after=10_000, rng=rng) == 300
     # Jitter: dos sensores con el mismo número de fallos no reintentan a la vez.
     assert len({round(backoff_delay(6, 5, 300), 6) for _ in range(20)}) > 1
+
+
+def _closed(spool: Spool) -> bool:
+    try:
+        spool._db.execute("SELECT 1")
+    except sqlite3.ProgrammingError:
+        return True
+    return False
+
+
+def test_spool_closes_its_connection_when_opening_fails(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Fix 2: un fichero que no es SQLite hace fallar el arranque; la conexión ya abierta se
+    # cierra en el acto en lugar de quedar viva hasta el GC (ResourceWarning en Python 3.13+).
+    opened: list[sqlite3.Connection] = []
+    real_connect = sqlite3.connect
+
+    def recording_connect(*args: Any, **kwargs: Any) -> sqlite3.Connection:
+        connection: sqlite3.Connection = real_connect(*args, **kwargs)
+        opened.append(connection)
+        return connection
+
+    monkeypatch.setattr(sqlite3, "connect", recording_connect)
+    path = tmp_path / "spool.db"
+    path.write_bytes(b"esto no es una base SQLite" * 100)
+    path.chmod(0o600)
+    with pytest.raises(sqlite3.DatabaseError):
+        make_spool(path, FakeClock())
+    assert len(opened) == 1
+    with pytest.raises(sqlite3.ProgrammingError):
+        opened[0].execute("SELECT 1")
+
+
+def test_spool_close_is_idempotent_and_keeps_data(tmp_path: Path) -> None:
+    clock = FakeClock()
+    path = tmp_path / "spool.db"
+    spool = make_spool(path, clock)
+    spool.enqueue("job-a", KIND_RESULTS, {"n": 1}, "b1")
+    spool.close()
+    spool.close()
+    assert _closed(spool)
+    assert [h.payload["n"] for h in make_spool(path, clock).heads()] == [1]

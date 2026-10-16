@@ -26,10 +26,12 @@ from app.core.exceptions import (
     ConflictError,
     NotFoundError,
     PolicyError,
+    SecretStoreUnavailableError,
     ThreatIntelBusyError,
     ThreatIntelError,
 )
 from app.core.permissions import Role
+from app.core.secret_box import SecretStoreError
 from app.db.locks import VULN_CATALOG_LOCK_KEY, singleton_lock
 from app.db.session import get_engine, get_sessionmaker
 from app.detection.config import DetectionConfig
@@ -654,6 +656,62 @@ def _generate_secret(nbytes: int) -> int:
     return 0
 
 
+def _snmp_keygen(file: str | None, kid: str | None, add: bool) -> int:
+    """Crea el fichero de claves de credenciales SNMP o añade una clave activa nueva.
+
+    Nunca imprime la clave: solo la ruta y el identificador. El fichero se respalda aparte de
+    la base de datos (sin él, los perfiles guardados no se pueden descifrar).
+    """
+    from app.core.secret_box import add_key, write_new_keyring
+
+    settings = get_settings()
+    target = file or settings.snmp_credential_key_file
+    if not target:
+        print("set SNMP_CREDENTIAL_KEY_FILE or pass --file", file=sys.stderr)
+        return 2
+    path = Path(target)
+    key_id = kid or datetime.now(UTC).strftime("k%Y%m%d%H%M%S")
+    try:
+        if add:
+            add_key(path, key_id, settings.snmp_key_readers)
+        else:
+            write_new_keyring(path, key_id, settings.snmp_key_readers)
+    except FileExistsError:
+        print(f"{path} already exists; use --add to rotate the master key", file=sys.stderr)
+        return 1
+    except (OSError, ValueError, SecretStoreError) as exc:
+        print(f"cannot write {path}: {exc}", file=sys.stderr)
+        return 1
+    print(f"active SNMP credential key {key_id!r} written to {path}")
+    if sys.platform == "win32":
+        # Fix 2: la DACL del fichero, de su directorio y de sus antecesores ya se comprobó al
+        # escribir (las mismas comprobaciones que hace la API al cargarlo).
+        print("NTFS permissions of the key file and its directories verified")
+    if add:
+        print("now run: python -m app.cli snmp-rekey (keep old keys until it reports 0 unreadable)")
+    return 0
+
+
+def _snmp_rekey(session: Session) -> int:
+    from app.services.snmp_profile_service import rekey_all
+
+    try:
+        counts = rekey_all(session, get_settings())
+    except SecretStoreUnavailableError as exc:
+        print(f"secret store unavailable: {exc}", file=sys.stderr)
+        return 1
+    print(
+        f"rekeyed {counts['rekeyed']}, already current {counts['already_current']},"
+        f" unreadable {counts['unreadable']}"
+    )
+    if counts["unreadable"]:
+        # Retirar ahora una clave antigua perdería para siempre esos secretos.
+        print("do NOT remove old keys: rotate the unreadable profiles first", file=sys.stderr)
+        return 1
+    print("every active profile now uses the active key; old keys may be removed")
+    return 0
+
+
 def _backup(directory: str | None) -> int:
     from pathlib import Path
 
@@ -859,6 +917,15 @@ def main(argv: list[str] | None = None) -> int:
         "integrity-check", help="schema revision and row counts of the key tables"
     )
     integrity.add_argument("--database", help="database name (default: the configured one)")
+    keygen = commands.add_parser(
+        "snmp-keygen", help="create the SNMP credential key file or add a new active key"
+    )
+    keygen.add_argument("--file", help="key file (default: SNMP_CREDENTIAL_KEY_FILE)")
+    keygen.add_argument("--kid", help="key id (default: k<UTC timestamp>)")
+    keygen.add_argument("--add", action="store_true", help="add a new active key (rotation)")
+    commands.add_parser(
+        "snmp-rekey", help="re-encrypt every SNMP profile with the active key (Fase 6B)"
+    )
     args = parser.parse_args(argv)
 
     if args.command == "production-check":
@@ -879,6 +946,8 @@ def main(argv: list[str] | None = None) -> int:
         return _discovery_scope()
     if args.command == "discover":
         return _discover(args.target)
+    if args.command == "snmp-keygen":
+        return _snmp_keygen(args.file, args.kid, args.add)
 
     with get_sessionmaker()() as session:
         if args.command == "list-agents":
@@ -911,6 +980,8 @@ def main(argv: list[str] | None = None) -> int:
             return _threat_intel_sync(session, args.source)
         if args.command == "threat-intel-status":
             return _threat_intel_status(session)
+        if args.command == "snmp-rekey":
+            return _snmp_rekey(session)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",
