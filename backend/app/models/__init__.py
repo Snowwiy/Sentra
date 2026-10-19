@@ -108,7 +108,17 @@ from app.models.vulnerability import (
     VulnerabilityAffected,
     VulnerabilityFinding,
     VulnerabilityFindingHistory,
+    VulnerabilityProductMap,
     VulnerabilitySource,
+    VulnerabilitySourceSync,
+)
+from app.models.wlan import (
+    WlanAccessPoint,
+    WlanAgentReport,
+    WlanBss,
+    WlanClient,
+    WlanConfiguredNetwork,
+    WlanObservation,
 )
 
 __all__ = [
@@ -217,5 +227,13 @@ __all__ = [
     "VulnerabilityFinding",
     "VulnerabilityFindingHistory",
     "VulnerabilityIntel",
+    "VulnerabilityProductMap",
     "VulnerabilitySource",
+    "VulnerabilitySourceSync",
+    "WlanAccessPoint",
+    "WlanAgentReport",
+    "WlanBss",
+    "WlanClient",
+    "WlanConfiguredNetwork",
+    "WlanObservation",
 ]

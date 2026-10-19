@@ -11,13 +11,13 @@ import type {
   Sensor,
 } from "../api/types";
 
-/** Nombres de estado tal como los define la especificación de Fase 4D. */
+/** Etiquetas en español de los estados de Fase 4D (el valor de la API no cambia). */
 export const JOB_STATUS_LABELS: Record<DiscoveryJobStatus, string> = {
-  queued: "Queued",
-  running: "Running",
-  completed: "Completed",
-  failed: "Failed",
-  cancelled: "Cancelled",
+  queued: "En cola",
+  running: "En ejecución",
+  completed: "Completado",
+  failed: "Fallido",
+  cancelled: "Cancelado",
 };
 
 export const JOB_STATUS_CLASS: Record<DiscoveryJobStatus, string> = {
@@ -45,7 +45,7 @@ export function stopReasonLabel(reason: string | null): string | undefined {
 }
 
 export function originLabel(job: Pick<DiscoveryJob, "trigger" | "requested_via">): string {
-  if (job.requested_via === "dashboard") return "Dashboard";
+  if (job.requested_via === "dashboard") return "Consola";
   if (job.requested_via === "cli") return "CLI";
   if (job.trigger === "scheduled") return "Programado";
   return "Manual";

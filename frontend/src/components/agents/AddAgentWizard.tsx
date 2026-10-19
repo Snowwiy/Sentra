@@ -7,12 +7,15 @@ import {
   checkServerUrl,
   installSteps,
   lifetimeMinutes,
+  macosInstallSteps,
   timeLeft,
   windowsInstallSteps,
   WINDOWS_PACKAGE,
   type InstallMethod,
   type InstallPackage,
   type InstallStep,
+  type MacArchitecture,
+  type MacInstallPackage,
   type WindowsInstallMethod,
 } from "../../lib/install";
 import { usePolling } from "../../lib/usePolling";
@@ -23,10 +26,10 @@ import { Modal } from "../Modal";
 // While a token waits for its host, check often so the new agent shows up within seconds.
 const WAIT_POLL_MS = 5_000;
 
-export type Platform = "linux" | "windows";
+export type Platform = "linux" | "windows" | "macos";
 type Step = "platform" | "configure" | "install";
 
-const PLATFORM_NAMES: Record<Platform, string> = { linux: "Linux", windows: "Windows" };
+const PLATFORM_NAMES: Record<Platform, string> = { linux: "Linux", windows: "Windows", macos: "macOS" };
 
 export interface WizardPreset {
   /** Expected hostname (re-enrollment of a known host). */
@@ -38,7 +41,7 @@ export interface WizardPreset {
 }
 
 /**
- * Agentes → Añadir agente → Linux o Windows → Generar token → copiar instalación → registrado.
+ * Agentes → Añadir agente → Linux, Windows o macOS → Generar token → copiar instalación → registrado.
  *
  * The one-time token lives only in this component's state: it is shown once, never stored
  * (no browser storage, no URL) and never logged, and it is gone when the dialog
@@ -124,6 +127,16 @@ export function AddAgentWizard({
             >
               <strong>Windows</strong>
               <span className="muted small">Windows 10/11, Server 2019+ (x64) · servicio Windows</span>
+            </button>
+            <button
+              type="button"
+              role="radio"
+              aria-checked={platform === "macos"}
+              className={`choice${platform === "macos" ? " choice--active" : ""}`}
+              onClick={() => setPlatform("macos")}
+            >
+              <strong>macOS</strong>
+              <span className="muted small">macOS 13+ (Apple Silicon o Intel) · LaunchDaemon · paquete sin firmar</span>
             </button>
           </div>
           <div className="modal__actions">
@@ -276,6 +289,8 @@ function InstallInstructions({
   const [method, setMethod] = useState<InstallMethod>("file");
   const [windowsMethod, setWindowsMethod] = useState<WindowsInstallMethod>("prompt");
   const [pkg, setPkg] = useState<InstallPackage>("tarball");
+  const [macPkg, setMacPkg] = useState<MacInstallPackage>("pkg");
+  const [macArch, setMacArch] = useState<MacArchitecture>("arm64");
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
@@ -300,7 +315,9 @@ function InstallInstructions({
   const steps: InstallStep[] =
     platform === "windows"
       ? windowsInstallSteps({ serverUrl, method: windowsMethod, reenroll })
-      : installSteps({ serverUrl, token: token.token, method, pkg });
+      : platform === "macos"
+        ? macosInstallSteps({ serverUrl, pkg: macPkg, arch: macArch })
+        : installSteps({ serverUrl, token: token.token, method, pkg });
 
   return (
     <div className="stack">
@@ -334,6 +351,8 @@ function InstallInstructions({
 
           {platform === "windows" ? (
             <WindowsMethodChooser method={windowsMethod} onChange={setWindowsMethod} />
+          ) : platform === "macos" ? (
+            <MacOptions pkg={macPkg} arch={macArch} onPkg={setMacPkg} onArch={setMacArch} />
           ) : (
             <>
               <div className="segmented" role="tablist" aria-label="Método de instalación">
@@ -445,6 +464,54 @@ function WindowsMethodChooser({
         Copia {WINDOWS_PACKAGE} al equipo Windows y abre PowerShell <strong>como administrador</strong> en esa
         carpeta. No hace falta Git, Python ni dejar PowerShell abierto: el agente queda como servicio
         «Sentra Agent». -ExecutionPolicy Bypass solo afecta a ese proceso.
+      </p>
+    </>
+  );
+}
+
+function MacOptions({
+  pkg,
+  arch,
+  onPkg,
+  onArch,
+}: {
+  pkg: MacInstallPackage;
+  arch: MacArchitecture;
+  onPkg: (pkg: MacInstallPackage) => void;
+  onArch: (arch: MacArchitecture) => void;
+}) {
+  return (
+    <>
+      <div className="form-grid">
+        <label className="form-field">
+          <span>Paquete</span>
+          <select className="input input--select" value={pkg} onChange={(e) => onPkg(e.target.value as MacInstallPackage)}>
+            <option value="pkg">Paquete de instalación (.pkg)</option>
+            <option value="tarball">Tarball (.tar.gz)</option>
+          </select>
+        </label>
+        <label className="form-field">
+          <span>Arquitectura</span>
+          <select
+            className="input input--select"
+            value={arch}
+            onChange={(e) => onArch(e.target.value as MacArchitecture)}
+          >
+            <option value="arm64">Apple Silicon (arm64)</option>
+            <option value="x86_64">Intel (x86_64)</option>
+          </select>
+        </label>
+      </div>
+      <div className="banner banner--warn" role="note">
+        El paquete .pkg <strong>no está firmado ni notarizado</strong>: Gatekeeper lo bloquea con doble clic, por eso
+        se instala con <code>installer</code> desde Terminal. Instálalo solo si lo has obtenido de tu propio servidor
+        Sentra. Requiere el Python 3.12+ de python.org sin escritura para el grupo admin (ver
+        docs/agent-macos-installation.md).
+      </div>
+      <p className="muted small">
+        El token se pega en un aviso que no lo muestra y se guarda en un archivo solo legible por ti; no queda en el
+        historial ni en la lista de procesos, y el instalador lo borra al registrarse. En el Mac, abre Terminal en la
+        carpeta del paquete:
       </p>
     </>
   );

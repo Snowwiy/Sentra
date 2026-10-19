@@ -49,6 +49,14 @@ dashboard can be opened from any LAN workstation after login (`npm run dev -- --
 
 ## What the page shows
 
+Plataforma (`platform` en `GET /api/v1/agents`): `windows`, `linux`, `macos` (Fase 6C.5: el
+agente de macOS informa `os_name` `"macOS"`; uno anterior en un Mac, `"Darwin"`) u `other`. Los
+tokens de instalación admiten `expected_platform` `windows`, `linux` o `macos` (también
+`python -m app.cli create-enrollment-token --platform macos`). El panel todavía no tiene un
+asistente de instalación para macOS ni una etiqueta propia para `macos` (pendiente del
+rediseño del frontend); `frontend/src/lib/install.ts` ya genera los comandos
+(`macosInstallSteps`).
+
 - Cards: **Total, Online, Offline, Revoked, Pending** (enrolled, not reported yet). Revoked
   agents are counted only as revoked.
 - Agents: hostname, IP, OS, platform, agent version, state, last contact, enrollment date,

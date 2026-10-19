@@ -76,7 +76,7 @@ describe("AgentPanel (asset detail)", () => {
     await within(panel).findByText(AGENT.agent_id);
     expect(panel).toHaveTextContent("0.1.0");
     expect(panel).toHaveTextContent("Linux");
-    expect(panel).toHaveTextContent("Active");
+    expect(panel).toHaveTextContent("Activa");
     expect(panel).toHaveTextContent("No reportado");
     expect(within(panel).getByRole("button", { name: "Reiniciar agente" })).toBeDisabled();
   });
@@ -117,6 +117,6 @@ describe("AgentPanel (asset detail)", () => {
 
     await waitFor(() => expect(posts).toEqual([`/console/agents/${AGENT.asset_id}/revoke`]));
     expect(await within(panel).findByRole("button", { name: "Reactivar…" })).toBeInTheDocument();
-    expect(within(panel).getAllByText("Revoked").length).toBeGreaterThan(0);
+    expect(within(panel).getAllByText("Revocado").length).toBeGreaterThan(0);
   });
 });

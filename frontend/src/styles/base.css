@@ -1,0 +1,198 @@
+/* Sentra UI 6C: estilos base de elementos y controles. */
+:root {
+  color-scheme: dark;
+  font-family: var(--font);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--text);
+  background: var(--bg);
+  -webkit-font-smoothing: antialiased;
+  text-size-adjust: 100%;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 0;
+  background: var(--bg);
+}
+
+img,
+svg,
+video,
+canvas {
+  max-width: 100%;
+}
+
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+h1,
+h2,
+h3 {
+  margin: 0;
+  font-weight: 600;
+  line-height: 1.25;
+}
+
+h1 {
+  font-size: var(--fs-2xl);
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  font-size: var(--fs-md);
+}
+
+h3 {
+  font-size: var(--fs-sm);
+}
+
+/* Textos largos sin espacios (hashes, rutas, URLs) no deben ensanchar su contenedor. */
+p,
+li,
+dd,
+.field dd {
+  overflow-wrap: anywhere;
+}
+
+/* En celdas, break-word (no anywhere): anywhere reduce el ancho mínimo de la columna a una
+   letra y parte palabras cortas ("Abiert-a") aunque haya sitio para la palabra entera. */
+td {
+  overflow-wrap: break-word;
+}
+
+.muted {
+  color: var(--text-muted);
+}
+
+.small {
+  font-size: var(--fs-sm);
+  margin: 2px 0 0;
+}
+
+.mono {
+  font-family: var(--mono);
+  font-size: 0.85em;
+}
+
+.strong {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* Controles */
+
+.button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--space-2);
+  min-height: var(--hit);
+  padding: 6px 14px;
+  font: inherit;
+  font-weight: 500;
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    border-color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+
+.button:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--surface-3);
+}
+
+.button:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.input {
+  width: 260px;
+  max-width: 100%;
+  min-height: var(--hit);
+  padding: 6px 10px;
+  font: inherit;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-sm);
+  transition: border-color var(--dur) var(--ease);
+}
+
+.input:hover:not(:disabled) {
+  border-color: var(--text-subtle);
+}
+
+.input[aria-invalid="true"] {
+  border-color: var(--crit);
+}
+
+.input:focus,
+.button:focus-visible,
+.stat:focus-visible,
+.iconbutton:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.input:focus {
+  outline-offset: 0;
+  border-color: var(--accent);
+}
+
+/* Botón de solo icono (≡, cerrar, menú de usuario). */
+.iconbutton {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-width: var(--hit);
+  min-height: var(--hit);
+  padding: 0 8px;
+  font: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition:
+    color var(--dur) var(--ease),
+    background-color var(--dur) var(--ease);
+}
+
+.iconbutton:hover:not(:disabled),
+.iconbutton[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--surface-2);
+}

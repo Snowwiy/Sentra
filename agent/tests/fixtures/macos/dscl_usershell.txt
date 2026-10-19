@@ -1,0 +1,7 @@
+_amavisd                 /usr/bin/false
+alice                    /bin/zsh
+bob                      /bin/zsh
+daemon                   /usr/bin/false
+nobody                   /usr/bin/false
+root                     /bin/sh
+svc-backup               /usr/bin/false

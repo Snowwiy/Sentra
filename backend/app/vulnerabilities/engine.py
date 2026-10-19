@@ -49,6 +49,8 @@ from app.models.vulnerability import (
     VulnerabilityAffected,
     VulnerabilityFinding,
     VulnerabilityFindingHistory,
+    VulnerabilityProductMap,
+    VulnerabilitySource,
 )
 from app.risk.queue import request_recalculation
 from app.services import audit_service
@@ -57,17 +59,20 @@ from app.services.asset_context_service import ContextValues, context_values
 from app.services.audit_service import Actor
 from app.threat_intel.lookup import intel_cve, load_exploitation
 from app.vulnerabilities import priority as priority_mod
-from app.vulnerabilities import workflow
+from app.vulnerabilities import product_map, workflow
 from app.vulnerabilities.catalog import SEVERITY_RANK
 from app.vulnerabilities.exposure import EXPOSURE_RANK, AssetExposure, assess
 from app.vulnerabilities.matcher import (
     STATE_RANK,
     AffectedRule,
     AssetSoftware,
+    ComponentAlias,
     MatchResult,
     VulnerabilityMatcher,
     build_asset_software,
+    with_identities,
 )
+from app.vulnerabilities.product_map import ProductIdentity
 
 logger = logging.getLogger(__name__)
 
@@ -95,6 +100,8 @@ class VulnerabilityConfig:
     # Puertos que prueba discovery: solo esos pueden quedar "no observados".
     probed_ports: frozenset[int] = frozenset()
     max_candidates: int = MAX_CANDIDATES
+    # Fase 6C.4: semilla integrada de identificadores inventario -> CPE (product_map.py).
+    builtin_product_map: bool = True
 
     @classmethod
     def from_settings(cls, settings: Settings) -> "VulnerabilityConfig":
@@ -111,6 +118,7 @@ class VulnerabilityConfig:
             alert_enabled=settings.vuln_alert_enabled,
             alert_cooldown=timedelta(hours=settings.vuln_alert_cooldown_hours),
             probed_ports=probed,
+            builtin_product_map=settings.vuln_builtin_product_map,
         )
 
 
@@ -218,6 +226,8 @@ class VulnerabilityEngine:
         self._config = config
         self._alerts = AlertService(session, thresholds) if thresholds is not None else None
         self._matcher = VulnerabilityMatcher()
+        # Fuente de cada registro (clave y adapter) para la procedencia del finding.
+        self._source_info: dict[int, tuple[str, str]] = {}
 
     # --- Selección de activos ----------------------------------------------------------------
 
@@ -380,16 +390,22 @@ class VulnerabilityEngine:
         ):
             open_ports.setdefault(asset_id, set()).add(port)
         contexts = context_values(self._session, assets)
+        softwares: dict[int, AssetSoftware] = {}
+        for asset in assets:
+            inventory = inventories.get(asset.id)
+            softwares[asset.id] = build_asset_software(
+                os_name=asset.os_name,
+                os_version=asset.os_version,
+                inventory=inventory.data if inventory is not None else None,
+                collected_at=inventory.collected_at if inventory is not None else None,
+                architecture=asset.architecture,
+            )
+        identities = self._identities(softwares)
         result: dict[int, _AssetData] = {}
         for asset in assets:
             inventory = inventories.get(asset.id)
             document = inventory.data if inventory is not None else None
-            software = build_asset_software(
-                os_name=asset.os_name,
-                os_version=asset.os_version,
-                inventory=document,
-                collected_at=inventory.collected_at if inventory is not None else None,
-            )
+            software = with_identities(softwares[asset.id], identities.get(asset.id, {}))
             raw_software = (document or {}).get("software")
             result[asset.id] = _AssetData(
                 asset=asset,
@@ -405,6 +421,59 @@ class VulnerabilityEngine:
                 context=contexts[asset.id],
             )
         return result
+
+    def _identities(
+        self, softwares: Mapping[int, AssetSoftware]
+    ) -> dict[int, dict[str, tuple[ProductIdentity, ...]]]:
+        """Identificadores CPE declarados (semilla + product_map) de las claves del lote.
+
+        Una consulta por lote acotada a las claves que de verdad tiene el inventario: la tabla
+        puede tener miles de filas, el lote solo necesita las de sus componentes.
+        """
+        per_asset = {asset_id: set(sw.components) for asset_id, sw in softwares.items()}
+        wanted = set().union(*per_asset.values()) if per_asset else set()
+        imported: list[ProductIdentity] = []
+        if wanted:
+            for row in self._session.execute(
+                select(VulnerabilityProductMap, VulnerabilitySource.source_key)
+                .join(
+                    VulnerabilitySource, VulnerabilitySource.id == VulnerabilityProductMap.source_id
+                )
+                .where(VulnerabilityProductMap.inventory_key.in_(sorted(wanted)))
+            ):
+                entry, source_key = row
+                imported.append(
+                    ProductIdentity(
+                        inventory_key=entry.inventory_key,
+                        cpe_key=entry.cpe_key,
+                        cpe=entry.cpe,
+                        vendor=entry.vendor,
+                        product=entry.product,
+                        publishers=tuple(entry.publishers or ()),
+                        editions=tuple(entry.editions or ()),
+                        platforms=tuple(entry.platforms or ()),
+                        source=source_key,
+                    )
+                )
+        builtin = product_map.BUILTIN_INDEX if self._config.builtin_product_map else {}
+        merged = product_map.merge(builtin, imported) if imported else dict(builtin)
+        return {
+            asset_id: {k: merged[k] for k in keys if k in merged}
+            for asset_id, keys in per_asset.items()
+        }
+
+    def _sources(self, source_ids: Iterable[int]) -> dict[int, tuple[str, str]]:
+        missing = sorted(set(source_ids) - set(self._source_info))
+        if missing:
+            for source_id, key, adapter in self._session.execute(
+                select(
+                    VulnerabilitySource.id,
+                    VulnerabilitySource.source_key,
+                    VulnerabilitySource.adapter,
+                ).where(VulnerabilitySource.id.in_(missing))
+            ):
+                self._source_info[source_id] = (key, adapter)
+        return self._source_info
 
     def _evaluate_asset(
         self,
@@ -433,13 +502,15 @@ class VulnerabilityEngine:
                 )
                 .values(last_seen_at=now, inventory_observed_at=software.collected_at)
             )
-            self._finish(state, software, fingerprint, now, pending_removal=False)
+            self._finish(state, software, fingerprint, now, pending_removal=False, covered=None)
             run.unchanged += 1
             return
 
         candidates, truncated = self._candidates(software)
         results = self._match(software, candidates)
+        covered = _covered_components(software, candidates)
         vulns = self._vulnerabilities({vuln_id for vuln_id, _ in results})
+        sources = self._sources(v.source_id for v in vulns.values())
         # Fase 5C: inteligencia de explotabilidad de los CVEs del activo (una consulta).
         cves = {vid: intel_cve(v.external_id, v.aliases) for vid, v in vulns.items()}
         intel = load_exploitation(self._session, cves.values(), now)
@@ -477,6 +548,13 @@ class VulnerabilityEngine:
                 )
             )
             evidence = result.evidence(software.collected_at)
+            source_key, adapter = sources.get(vuln.source_id, ("", ""))
+            # Procedencia del registro que produjo el finding (qué fuente y qué versión).
+            evidence["catalog"] = {
+                "source": source_key,
+                "adapter": adapter,
+                "record_version": vuln.record_version,
+            }
             exposure_json = assessment.to_json(item.exposure.internet_exposed)
             if existing is None:
                 if not result.active:
@@ -584,7 +662,9 @@ class VulnerabilityEngine:
         self._maybe_clear_alert(asset, now)
         if risk_changed:
             request_recalculation(self._session, [asset.id])
-        self._finish(state, software, fingerprint, now, pending_removal=pending_removal)
+        self._finish(
+            state, software, fingerprint, now, pending_removal=pending_removal, covered=covered
+        )
 
     def _candidates(self, software: AssetSoftware) -> tuple[Sequence[Any], bool]:
         keys = software.keys
@@ -625,18 +705,32 @@ class VulnerabilityEngine:
         self, software: AssetSoftware, candidates: Sequence[Any]
     ) -> dict[tuple[int, str], MatchResult]:
         best: dict[tuple[int, str], MatchResult] = {}
+        fixed_builds: dict[tuple[int, str], MatchResult] = {}
         for _row_id, vuln_id, keys, definition in candidates:
             rule = AffectedRule.from_definition(definition)
             for key in keys:
-                component = software.components.get(key)
-                if component is None:
-                    continue
-                result = self._matcher.match(component, rule, software)
-                if result is None:
-                    continue
-                current = best.get((vuln_id, key))
-                if current is None or STATE_RANK[result.state] > STATE_RANK[current.state]:
-                    best[(vuln_id, key)] = result
+                pairs: list[tuple[str, ComponentAlias | None]] = []
+                if key in software.components:
+                    pairs.append((key, None))
+                # Fase 6C.4: una clave cpe: casa a través del identificador del componente; el
+                # finding se guarda con la clave del componente (un finding por componente).
+                pairs.extend((a.component_key, a) for a in software.aliases.get(key, ()))
+                for component_key, alias in pairs:
+                    component = software.components.get(component_key)
+                    if component is None:
+                        continue
+                    result = self._matcher.match(component, rule, software, alias)
+                    if result is None:
+                        continue
+                    if _fixed_build(result):
+                        fixed_builds[(vuln_id, component_key)] = result
+                    current = best.get((vuln_id, component_key))
+                    if current is None or STATE_RANK[result.state] > STATE_RANK[current.state]:
+                        best[(vuln_id, component_key)] = result
+        # Un aviso de distribución trae una entrada por versión de la distribución (Ubuntu
+        # 22.04 y 24.04...). Si el paquete instalado es EXACTAMENTE la versión corregida de una
+        # de ellas, es esa compilación corregida: las entradas de otras versiones no aplican.
+        best.update(fixed_builds)
         # Linux: el mismo paquete puede casar como paquete (clave pkg:) y como aplicación
         # (clave name:). Gana la entrada de paquete, más precisa: un finding, no dos.
         packaged: dict[int, set[str]] = {}
@@ -969,8 +1063,11 @@ class VulnerabilityEngine:
         now: datetime,
         *,
         pending_removal: bool,
+        covered: int | None,
     ) -> None:
         state.input_hash = fingerprint
+        if covered is not None:
+            state.covered_components = covered
         state.evaluated_at = now
         state.inventory_collected_at = software.collected_at
         state.inventory_complete = software.complete
@@ -1070,3 +1167,31 @@ def _listening_ports(document: Mapping[str, Any] | None) -> frozenset[int]:
                 pass
         ports.add(port)
     return frozenset(ports)
+
+
+def _covered_components(software: AssetSoftware, candidates: Sequence[Any]) -> int:
+    """Componentes del activo que el catálogo describe (alguna entrada con su clave o alias).
+
+    Distingue "sin vulnerabilidades" (el catálogo conoce el producto y no afecta a la versión)
+    de "catálogo insuficiente" (ningún registro habla de él). Cuenta productos, no CVEs.
+    """
+    covered: set[str] = set()
+    for _row_id, _vuln_id, keys, _definition in candidates:
+        for key in keys or ():
+            if key in software.components:
+                covered.add(key)
+            for alias in software.aliases.get(key, ()):
+                covered.add(alias.component_key)
+    return len(covered)
+
+
+def _fixed_build(result: MatchResult) -> bool:
+    """El paquete instalado es la versión corregida exacta de una entrada de distribución."""
+    rule = result.rule
+    return (
+        rule.type == "package"
+        and bool(rule.distro)
+        and rule.fixed_version is not None
+        and result.state == "not_affected"
+        and all(i.version == rule.fixed_version for i in result.component.instances)
+    )

@@ -64,7 +64,7 @@ def parse_lan_networks(value: str, setting: str) -> tuple[AINetwork, ...]:
     return tuple(networks)
 
 
-def parse_source_urls(value: str) -> dict[str, str]:
+def parse_source_urls(value: str, setting: str = "THREAT_INTEL_SOURCE_URLS") -> dict[str, str]:
     """'cisa-kev=https://espejo/kev.json,first-epss=https://...' -> {fuente: URL}.
 
     Solo el servidor fija a dónde se conecta cada fuente (Fase 5C): la API nunca acepta una
@@ -75,9 +75,9 @@ def parse_source_urls(value: str) -> dict[str, str]:
         key, separator, url = item.partition("=")
         key, url = key.strip(), url.strip()
         if not separator or not re.match(r"^[a-z0-9][a-z0-9._-]{1,63}$", key):
-            raise ValueError(f"THREAT_INTEL_SOURCE_URLS expects source=url, got {key!r}")
+            raise ValueError(f"{setting} expects source=url, got {key!r}")
         if not url.lower().startswith(("https://", "http://")):
-            raise ValueError(f"THREAT_INTEL_SOURCE_URLS needs an http(s) URL for {key!r}")
+            raise ValueError(f"{setting} needs an http(s) URL for {key!r}")
         urls[key] = url
     return urls
 
@@ -394,6 +394,37 @@ class Settings(BaseSettings):
     vuln_alert_enabled: bool = True
     vuln_alert_cooldown_hours: int = Field(default=24, ge=0, le=720)
 
+    # --- Fase 6C.4: fuentes oficiales del catálogo (ver docs/vulnerability-sources.md) ---
+    # Descargas por red de NVD y OSV. APAGADO por defecto: sin Internet Sentra sigue usando el
+    # último catálogo válido y las importaciones de ficheros (API/CLI) funcionan igual.
+    vuln_source_sync_enabled: bool = False
+    # Fuentes que el job sincroniza solas ("nvd,osv"). Vacío: solo cuando un admin lo pide.
+    vuln_source_auto_sync: str = ""
+    vuln_source_sync_interval_hours: int = Field(default=12, ge=1, le=720)
+    # Sin una importación/sincronización correcta en este plazo la fuente se marca obsoleta.
+    vuln_source_stale_hours: int = Field(default=72, ge=1, le=8760)
+    # URL de cada fuente si no es la oficial: "nvd=https://espejo/rest/json/cves/2.0,
+    # osv=https://espejo/osv" (OSV: base a la que se añade /<ecosistema>/all.zip).
+    vuln_source_urls: str = ""
+    # Tamaño máximo de una descarga o fichero (también descomprimido) y registros por fuente.
+    vuln_source_max_download_mb: int = Field(default=256, ge=1, le=4096)
+    vuln_source_max_records: int = Field(default=500_000, ge=1, le=5_000_000)
+    # Reintentos ante 429/5xx/tiempo agotado, con espera exponencial y Retry-After.
+    vuln_source_max_retries: int = Field(default=4, ge=0, le=10)
+    # Ecosistemas OSV que se descargan (solo los que Sentra inventaría).
+    vuln_osv_ecosystems: str = "Debian,Ubuntu,AlmaLinux,Rocky Linux"
+    # NVD CVE API 2.0: tamaño de página (máximo 2000), páginas por ejecución y días hacia
+    # atrás de la primera sincronización incremental sin cursor (máximo 120, límite de NVD).
+    vuln_nvd_results_per_page: int = Field(default=2000, ge=1, le=2000)
+    vuln_nvd_max_pages_per_run: int = Field(default=100, ge=1, le=1000)
+    vuln_nvd_initial_days: int = Field(default=120, ge=1, le=120)
+    # API key de NVD (sube el límite de 5 a 50 peticiones por 30 s). Solo variable o fichero
+    # del servidor; nunca en logs, respuestas ni auditoría.
+    nvd_api_key: SecretStr | None = None
+    nvd_api_key_file: str | None = None
+    # Semilla integrada de identificadores inventario -> CPE (app/vulnerabilities/product_map).
+    vuln_builtin_product_map: bool = True
+
     # --- Fase 5C: Threat Intelligence (ver docs/threat-intelligence.md) ---
     # Módulo (importación local, matching con datos locales, enriquecimiento). Desactivado:
     # sin job; lo ya guardado se sigue viendo. Sentra funciona igual sin inteligencia.
@@ -663,6 +694,10 @@ class Settings(BaseSettings):
     # Días que se conserva el historial de consultas y lo marcado como ausente. Vacío = sin
     # purga (opt-in como el resto de retenciones).
     snmp_history_retention_days: int | None = Field(default=None, ge=1, le=36_500)
+    # Fase 6C.3 (docs/wlan-discovery.md): días que se conserva el historial Wi-Fi, los
+    # clientes no vistos y los BSS solo observados. Vacío = sin purga (opt-in). Los APs y lo
+    # que un operador marcó como autorizado o externo nunca se purgan.
+    wlan_history_retention_days: int | None = Field(default=None, ge=1, le=36_500)
 
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
@@ -700,6 +735,7 @@ class Settings(BaseSettings):
         "frontend_dist_dir",
         "report_output_dir",
         "snmp_credential_key_file",
+        "nvd_api_key_file",
         mode="before",
     )
     @classmethod
@@ -713,6 +749,7 @@ class Settings(BaseSettings):
         "discovery_observation_retention_days",
         "snmp_poll_interval_minutes",
         "snmp_history_retention_days",
+        "wlan_history_retention_days",
         mode="before",
     )
     @classmethod
@@ -773,6 +810,46 @@ class Settings(BaseSettings):
     @classmethod
     def _check_threat_intel_urls(cls, value: str) -> str:
         parse_source_urls(value)
+        return value
+
+    @field_validator("vuln_source_urls")
+    @classmethod
+    def _check_vuln_source_urls(cls, value: str) -> str:
+        parse_source_urls(value, "VULN_SOURCE_URLS")
+        return value
+
+    @field_validator("vuln_source_auto_sync")
+    @classmethod
+    def _check_vuln_auto_sync(cls, value: str) -> str:
+        unknown = set(parse_name_list(value.lower())) - {"nvd", "osv"}
+        if unknown:
+            raise ValueError(f"VULN_SOURCE_AUTO_SYNC has unknown sources: {sorted(unknown)}")
+        return value
+
+    @field_validator("vuln_osv_ecosystems")
+    @classmethod
+    def _check_osv_ecosystems(cls, value: str) -> str:
+        from app.vulnerabilities.adapters.osv import DOWNLOAD_ECOSYSTEMS
+
+        unknown = set(parse_name_list(value)) - set(DOWNLOAD_ECOSYSTEMS)
+        if unknown:
+            raise ValueError(f"VULN_OSV_ECOSYSTEMS has unsupported ecosystems: {sorted(unknown)}")
+        return value
+
+    @field_validator("nvd_api_key", mode="before")
+    @classmethod
+    def _blank_nvd_key(cls, value: object) -> object:
+        # NVD_API_KEY= vacío en .env significa "sin API key" (límite público de NVD).
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("nvd_api_key_file")
+    @classmethod
+    def _check_nvd_key_file(cls, value: str | None) -> str | None:
+        # Absoluta, como SNMP_CREDENTIAL_KEY_FILE: una relativa podría acabar en el repositorio.
+        if value is not None and ("\x00" in value or not os.path.isabs(value)):
+            raise ValueError("NVD_API_KEY_FILE must be an absolute path")
         return value
 
     @field_validator("ai_local_networks")

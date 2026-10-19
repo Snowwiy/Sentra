@@ -1,0 +1,89 @@
+/*
+ * Sentra UI 6C: tokens de diseño.
+ *
+ * Una sola fuente para color, tipografía, espaciado, radios, elevación y medidas del layout.
+ * Los nombres anteriores (--bg, --surface, --accent...) se conservan porque los usan las
+ * hojas de cada módulo; los nuevos amplían la escala sin romperlas.
+ *
+ * Puntos de corte (no pueden ser variables dentro de @media; deben coincidir con
+ * src/ui/useMediaQuery.ts): móvil < 768 px, tablet 768-1199 px, escritorio >= 1200 px.
+ */
+:root {
+  /* Superficies: azul-negro profundo, de más oscuro (fondo) a más claro (elevado). */
+  --bg: #060a12;
+  --surface: #0c1320;
+  --surface-2: #111a2a;
+  --surface-3: #172235;
+  --surface-hover: #15203250;
+  --border: #1d2a3d;
+  --border-strong: #2b3c56;
+
+  /* Texto. */
+  --text: #e3e9f2;
+  --text-muted: #8d9db4;
+  --text-subtle: #66768e;
+
+  /* Acento cian, usado con moderación: estado activo, foco, acciones primarias. */
+  --accent: #22d3ee;
+  --accent-strong: #06b6d4;
+  --accent-soft: rgb(34 211 238 / 0.12);
+  --accent-contrast: #031118;
+
+  /* Estados semánticos (no decorativos). */
+  --ok: #22c55e;
+  --warn: #f59e0b;
+  --crit: #ef4444;
+  --info: #38bdf8;
+  --idle: #64748b;
+  --ok-soft: rgb(34 197 94 / 0.12);
+  --warn-soft: rgb(245 158 11 / 0.12);
+  --crit-soft: rgb(239 68 68 / 0.12);
+  --info-soft: rgb(56 189 248 / 0.12);
+
+  /* Tipografía: base 15 px (antes 14) para que métricas y tablas se lean sin zoom. */
+  --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
+  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
+  --fs-xs: 0.75rem;
+  --fs-sm: 0.85rem;
+  --fs-md: 1rem;
+  --fs-lg: 1.125rem;
+  --fs-xl: 1.375rem;
+  --fs-2xl: clamp(1.4rem, 1.1rem + 1vw, 1.75rem);
+  --fs-metric: clamp(1.6rem, 1.3rem + 1vw, 2.1rem);
+
+  /* Espaciado en múltiplos de 4 px. */
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgb(0 0 0 / 0.35);
+  --shadow-2: 0 8px 24px rgb(0 0 0 / 0.4);
+  --shadow-3: 0 20px 60px rgb(0 0 0 / 0.55);
+
+  /* Layout. */
+  --appbar-h: 56px;
+  --sidebar-w: 248px;
+  --sidebar-w-compact: 64px;
+  --content-max: 1680px;
+  --gutter: clamp(12px, 2.4vw, 28px);
+  /* Área táctil mínima de botones e iconos (WCAG 2.5.8 recomienda 24 px; se usa 36). */
+  --hit: 36px;
+
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 160ms;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --dur: 0ms;
+  }
+}

@@ -21,8 +21,10 @@ export function AgentActions({
 }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const name = agent.hostname ?? agent.display_name;
-  // Plataformas con instalador desde el dashboard (Linux desde la Fase 4B, Windows desde la 4F).
-  const platform = agent.platform === "linux" || agent.platform === "windows" ? agent.platform : null;
+  // Plataformas con instalador desde el dashboard (Linux desde la Fase 4B, Windows desde la 4F,
+  // macOS desde la 6C.5).
+  const platform =
+    agent.platform === "linux" || agent.platform === "windows" || agent.platform === "macos" ? agent.platform : null;
   const disabledReason = consoleState.available ? undefined : consoleState.reason;
   const preset: WizardPreset = {
     hostname: agent.hostname ?? undefined,
@@ -105,7 +107,7 @@ export function AgentActions({
           }}
         >
           <p>
-            Se permitirá que <strong>{name}</strong> vuelva a registrarse. Re-enrollment required: no
+            Se permitirá que <strong>{name}</strong> vuelva a registrarse. Requiere volver a registrarse: no
             recupera su credencial anterior.
           </p>
           <p className="muted small">

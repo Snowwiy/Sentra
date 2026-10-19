@@ -1,0 +1,7 @@
+Network shell commands need location permission to access WLAN information. Turn on Location services on the Location page in Privacy & security settings.
+
+Here is the URI for the Location page in the Settings app:
+ms-settings:privacy-location
+To open the Location page in the Settings app, hold down the Ctrl key and select the link, or run the following command:
+start ms-settings:privacy-location
+

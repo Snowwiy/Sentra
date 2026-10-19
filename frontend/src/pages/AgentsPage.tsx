@@ -40,10 +40,10 @@ const SORTERS: Record<Key, (a: Agent) => string | number | null> = {
 
 const CARDS: { key: AgentState | ""; label: string; className: string }[] = [
   { key: "", label: "Total", className: "" },
-  { key: "online", label: "Online", className: "stat--online" },
-  { key: "offline", label: "Offline", className: "stat--offline" },
-  { key: "revoked", label: "Revoked", className: "stat--revoked" },
-  { key: "pending", label: "Pending", className: "stat--unknown" },
+  { key: "online", label: "En línea", className: "stat--online" },
+  { key: "offline", label: "Sin conexión", className: "stat--offline" },
+  { key: "revoked", label: "Revocados", className: "stat--revoked" },
+  { key: "pending", label: "Pendientes", className: "stat--unknown" },
 ];
 
 export function AgentsPage() {

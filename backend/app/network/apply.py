@@ -47,6 +47,7 @@ from app.network.catalog import (
     port_kind,
 )
 from app.network.classify import DeviceEvidence, classify
+from app.network.wlan_apply import WlanApplier
 
 logger = logging.getLogger(__name__)
 
@@ -175,6 +176,14 @@ class PollApplier:
         self._classify()
         self._link_asset()
         counts = self._counts(len(records))
+        if usable("wlan"):
+            # Fase 6C.3: después de clasificar y enlazar el equipo, porque un AP autónomo
+            # hereda de él nombre, fabricante, modelo y activo.
+            counts.update(
+                WlanApplier(self._session, self._device, self._poll, self._now).apply(
+                    by_kind, modules.get("wlan"), full
+                )
+            )
         logger.info(
             "network poll applied",
             extra={"device": str(self._device.public_id), "interfaces": len(interfaces)},

@@ -1,0 +1,10 @@
+_amavisd                 83
+_analyticsd              263
+_appleevents             55
+_www                     70
+alice                    501
+bob                      502
+daemon                   1
+nobody                   -2
+root                     0
+svc-backup               503

@@ -44,12 +44,15 @@ class CommandRejectedError(Exception):
 def capabilities(platform: str | None = None) -> list[str]:
     """Tipos que este agente sabe ejecutar en este sistema (lo que declara al servidor).
 
-    Eventos solo donde hay una fuente real (Visor de eventos en Windows, journal en Linux):
-    en otro sistema el servidor no debe ofrecer esa acción.
+    Eventos solo donde hay una fuente real (Visor de eventos en Windows, journal en Linux,
+    Unified Logging en macOS desde la Fase 6C.5): en otro sistema el servidor no debe
+    ofrecer esa acción. Los cinco tipos son de solo lectura y en macOS reutilizan los
+    mismos colectores que el envío periódico; no existe ningún tipo que actúe sobre el
+    equipo, así que no hay nada más que declarar ni que implementar por plataforma.
     """
     platform = platform or sys.platform
     found = {COLLECT_INVENTORY, COLLECT_PROCESSES, COLLECT_TELEMETRY, COLLECT_DIAGNOSTICS}
-    if platform == "win32" or platform.startswith("linux"):
+    if platform in ("win32", "darwin") or platform.startswith("linux"):
         found.add(COLLECT_EVENTS)
     return sorted(found)
 

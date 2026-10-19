@@ -1,0 +1,27 @@
+
+Nombre de interfaz : Wi-Fi 
+Hay 2 redes visibles actualmente. 
+
+SSID 1 : Oficina-5G
+    Tipo de red             : Infraestructura
+    Autenticación           : WPA2-Personal
+    Cifrado                 : CCMP 
+    BSSID 1                 : 7c:10:c9:aa:bb:cc
+         Señal              : 92%  
+         Tipo de radio      : 802.11ax
+         Banda              : 5 GHz
+         Canal              : 44 
+         Velocidades básicas (Mbps) : 6 12 24
+         Otras velocidades (Mbps) : 9 18 36 48 54
+
+SSID 2 : Biblioteca
+    Tipo de red             : Infraestructura
+    Autenticación           : Abierta
+    Cifrado                 : Ninguna 
+    BSSID 1                 : 00:1a:2b:3c:4d:5e
+         Señal              : 55%  
+         Tipo de radio      : 802.11n
+         Banda              : 2,4 GHz
+         Canal              : 6 
+         Velocidades básicas (Mbps) : 1 2 5.5 11
+

@@ -186,6 +186,16 @@ class CatalogBusyError(ConflictError):
     code = "catalog_import_in_progress"
 
 
+class VulnerabilitySourceConflictError(ConflictError):
+    # Fase 6C.4: la fuente oficial no admite esta operación ahora (sincronización por red
+    # desactivada, otra importación en curso, clave de fuente ocupada por un catálogo local).
+    code = "vulnerability_source_conflict"
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
 class ThreatIntelError(SentraError):
     # Fase 5C: importación o configuración de inteligencia rechazada. El código concreto
     # (intel_too_large, intel_invalid_json, unknown_provider...) va en `code`.
@@ -433,6 +443,14 @@ class NetworkDeviceNotFoundError(NotFoundError):
 
 class NetworkPollNotFoundError(NotFoundError):
     code = "network_poll_not_found"
+
+
+class WlanAccessPointNotFoundError(NotFoundError):
+    code = "wlan_access_point_not_found"
+
+
+class WlanBssNotFoundError(NotFoundError):
+    code = "wlan_bss_not_found"
 
 
 class SecretStoreUnavailableError(SentraError):

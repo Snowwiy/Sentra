@@ -366,6 +366,7 @@ class RiskEngine:
                 VulnerabilityFinding.exposure,
                 VulnerabilityFinding.first_seen_at,
                 VulnerabilityFinding.intel_cve,
+                VulnerabilityFinding.component_key,
                 func.row_number()
                 .over(
                     partition_by=VulnerabilityFinding.asset_id,
@@ -409,6 +410,8 @@ class RiskEngine:
                     known_exploited=exploit.known_exploited if exploit else False,
                     epss_score=exploit.epss_score if exploit else None,
                     intel_stale=exploit.stale if exploit else False,
+                    cve=row.intel_cve,
+                    component_key=row.component_key,
                 )
             )
         return result

@@ -19,7 +19,8 @@ configuración completa.
 ## Capacidades
 
 El agente declara en `register` y `heartbeat` (`host.capabilities`) los tipos que soporta en
-su sistema (`commands.capabilities()`; `collect_events` solo en Windows y Linux). El servidor
+su sistema (`commands.capabilities()`; `collect_events` en Windows, Linux y, desde el agente 0.4.0,
+macOS con Unified Logging). El servidor
 las filtra con su propia allowlist y las guarda en `assets.agent_capabilities`. Una acción de
 agente se bloquea si:
 
@@ -77,3 +78,11 @@ falso de `agent/tests/conftest.py` implementa el protocolo.
 
 Pendiente en hardware real: ejecutar cada tipo en Windows (servicio `SentraAgent`) y en Linux
 (systemd) con el agente 0.3.0 empaquetado.
+
+## macOS (Fase 6C.5, agente 0.4.0)
+
+El agente de macOS declara los cinco tipos de la allowlist; `collect_events` lee el
+subconjunto fijo del Unified Logging descrito en `docs/agent-macos-installation.md`. El
+servidor reconoce la plataforma `macos` a partir de `os_name` (`"macOS"`, o `"Darwin"` de un
+agente anterior) y la incluye en `supported_platforms` de las acciones de agente. No se ha
+añadido ningún tipo de comando nuevo.

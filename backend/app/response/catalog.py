@@ -17,6 +17,7 @@ from typing import Literal
 from pydantic import Field
 
 from app.core.permissions import ROLE_PERMISSIONS, Permission, Role
+from app.core.platforms import is_macos
 from app.models.incident import IncidentLevel
 from app.response import handlers
 from app.schemas.common import RequestModel
@@ -26,7 +27,7 @@ RISK_RANK: dict[str, int] = {"low": 0, "medium": 1, "high": 2, "critical": 3}
 Scope = Literal["server", "agent"]
 TargetType = Literal["asset", "incident"]
 Availability = Literal["available", "not_implemented"]
-Platform = Literal["windows", "linux"]
+Platform = Literal["windows", "linux", "macos"]
 
 # Tipos de comando que un agente puede declarar como capacidad (y los únicos que el servidor
 # encola). El agente tiene su propia allowlist idéntica y rechaza cualquier otro tipo.
@@ -124,7 +125,7 @@ def minimum_role(needed: frozenset[Permission]) -> str:
     return Role.ADMIN.value
 
 
-_AGENT_PLATFORMS = frozenset({"windows", "linux"})
+_AGENT_PLATFORMS = frozenset({"windows", "linux", "macos"})
 _READ = Permission.MONITORING_READ
 
 
@@ -172,7 +173,7 @@ ACTIONS: dict[str, ActionDefinition] = {
             "collect_events",
             "Recolectar eventos",
             "Pide al agente que envíe ya los eventos pendientes de su fuente (Visor de eventos"
-            " en Windows, journal en Linux).",
+            " en Windows, journal en Linux, Unified Logging en macOS).",
             "El agente envía los eventos pendientes por el canal normal de eventos.",
         ),
         _agent_action(
@@ -403,10 +404,12 @@ def get_action(action_id: str) -> ActionDefinition | None:
 
 
 def asset_platform(os_name: str | None) -> str | None:
-    """Plataforma del activo según el SO que informa su agente ("windows", "linux" o None)."""
+    """Plataforma del activo según el SO de su agente ("windows", "linux", "macos" o None)."""
     name = (os_name or "").strip().lower()
     if name.startswith("windows"):
         return "windows"
     if name.startswith("linux"):
         return "linux"
+    if is_macos(name):
+        return "macos"
     return None

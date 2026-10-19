@@ -36,7 +36,9 @@ export function AgentPanel({ assetId }: { assetId: string }) {
               title={
                 agent.platform === "windows"
                   ? "Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (Restart-Service SentraAgent, como administrador)."
-                  : "Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (sudo systemctl restart sentra-agent)."
+                  : agent.platform === "macos"
+                    ? "Sin control remoto: Sentra solo monitoriza. Reinicia el daemon en el Mac (sudo launchctl kickstart -k system/com.sentra.agent)."
+                    : "Sin control remoto: Sentra solo monitoriza. Reinicia el servicio en el equipo (sudo systemctl restart sentra-agent)."
               }
             >
               Reiniciar agente
@@ -108,7 +110,7 @@ export function AgentPanel({ assetId }: { assetId: string }) {
           </dl>
           {agent.credential_status === "re_enrollment_required" && (
             <p className="muted small">
-              Re-enrollment required: genera un token nuevo y ejecuta otra vez el instalador en el
+              Requiere volver a registrarse: genera un token nuevo y ejecuta otra vez el instalador en el
               equipo; seguirá siendo este mismo activo.
             </p>
           )}

@@ -13,7 +13,6 @@ import os
 import platform
 import re
 import socket
-import subprocess
 import sys
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -21,6 +20,9 @@ from pathlib import Path
 from typing import Any
 
 import psutil
+
+from sentra_agent import macos
+from sentra_agent.syscmd import run_bounded
 
 logger = logging.getLogger("sentra_agent")
 
@@ -173,6 +175,9 @@ def collect_connections() -> list[dict[str, Any]]:
 
 
 def collect_services() -> list[dict[str, Any]]:
+    if sys.platform == "darwin":
+        # Fase 6C.5: servicios de launchd (daemons del sistema cuando corre como root).
+        return macos.collect_services()
     if sys.platform != "win32":
         return _systemd_services()
     services = []
@@ -195,6 +200,9 @@ def collect_services() -> list[dict[str, Any]]:
 
 
 def collect_software() -> list[dict[str, Any]]:
+    if sys.platform == "darwin":
+        # Fase 6C.5: bundles de /Applications y recibos de paquetes (sin componentes Apple).
+        return macos.collect_software()
     if sys.platform != "win32":
         return _linux_packages()
     import winreg
@@ -285,14 +293,20 @@ def _first_existing(candidates: tuple[str, ...]) -> str | None:
     return next((path for path in candidates if os.path.isfile(path)), None)
 
 
+# Fase 6C.5: además del plazo, la salida queda acotada (syscmd.run_bounded). Una salida que
+# llena el cupo se trata como fallo de la sección: una lista cortada parecería una
+# desinstalación en el servidor.
+_RUN_MAX_BYTES = 16 * 1024 * 1024
+
+
 def _run(executable: str, *args: str) -> str:
-    result = subprocess.run(  # noqa: S603  (absolute path, fixed arguments, no shell)
-        [executable, *args], capture_output=True, timeout=60, check=False
-    )
+    result = run_bounded([executable, *args], timeout=60, max_bytes=_RUN_MAX_BYTES)
+    if result.truncated:
+        raise OSError(f"{os.path.basename(executable)} output exceeded {_RUN_MAX_BYTES} bytes")
     if result.returncode != 0:
-        error = result.stderr.decode("utf-8", "replace").strip()
+        error = result.stderr.strip()
         raise OSError(f"{os.path.basename(executable)} failed ({result.returncode}): {error}")
-    return result.stdout.decode("utf-8", "replace")
+    return result.text()
 
 
 def parse_systemd_services(units: str, unit_files: str) -> list[dict[str, Any]]:
@@ -416,6 +430,12 @@ def software_source() -> str | None:
     """
     if sys.platform == "win32":
         return "windows_registry"
+    if sys.platform == "darwin":
+        # El esquema del servidor solo admite windows_registry, dpkg y rpm: un valor nuevo
+        # haría rechazar el inventario entero (422 que no es extra_forbidden). Sin valor, el
+        # servidor trata el software como de origen desconocido (como un agente antiguo).
+        # Pendiente: añadir un valor macOS al esquema de inventario del servidor.
+        return None
     if _first_existing(_DPKG_QUERY) is not None:
         return "dpkg"
     if _first_existing(_RPM) is not None:
@@ -543,6 +563,10 @@ def parse_linux_accounts(passwd: str, group: str) -> list[dict[str, Any]]:
 
 
 def collect_accounts() -> list[dict[str, Any]]:
+    if sys.platform == "darwin":
+        # macOS guarda las cuentas en Directory Services: /etc/passwd solo trae las del
+        # sistema, así que se consulta dscl.
+        return macos.collect_accounts()
     if sys.platform == "win32":
         # 🪟 VALIDACIÓN LOCAL EN WINDOWS: PowerShell 5.1 LocalAccounts, as a standard user.
         return parse_windows_accounts(
@@ -670,6 +694,9 @@ def _windows_network() -> dict[str, Any]:
 def collect_network() -> dict[str, Any] | None:
     if sys.platform == "win32":
         return _windows_network()
+    if sys.platform == "darwin":
+        # Sin /proc en macOS: route y scutil (configuración DNS real, no solo resolv.conf).
+        return macos.collect_network()
     try:
         route = Path("/proc/net/route").read_text(encoding="utf-8", errors="replace")
     except OSError:

@@ -180,6 +180,23 @@ def test_platform_and_hostname_restrictions(client: TestClient) -> None:
     )
 
 
+@pytest.mark.parametrize(
+    ("os_name", "status"),
+    [("macOS", 201), ("Darwin", 201), ("Windows", 401), ("Linux", 401), ("macintosh", 401)],
+)
+def test_macos_platform_restriction(client: TestClient, os_name: str, status: int) -> None:
+    # Fase 6C.5: el agente de macOS informa "macOS" (uno anterior, "Darwin").
+    created = _create(client, expected_platform="macos")
+    assert created["expected_platform"] == "macos"
+    assert _enroll(client, created["token"], os_name=os_name).status_code == status
+
+
+def test_windows_and_linux_restrictions_do_not_accept_macos(client: TestClient) -> None:
+    for platform in ("windows", "linux"):
+        created = _create(client, expected_platform=platform)
+        assert _enroll(client, created["token"], os_name="macOS").status_code == 401
+
+
 def test_multi_use_token_counts_uses(client: TestClient) -> None:
     created = _create(client, max_uses=2)
     assert _enroll(client, created["token"]).status_code == 201
@@ -317,7 +334,7 @@ def test_admin_api_requires_its_key_and_fails_closed(client: TestClient) -> None
     finally:
         client.app.dependency_overrides.pop(get_settings)  # type: ignore[attr-defined]
     for bad in ({"ttl_minutes": 0}, {"ttl_minutes": 1441}, {"max_uses": 0},
-                {"expected_platform": "macos"}, {"token": "chosen"}):  # fmt: skip
+                {"expected_platform": "freebsd"}, {"token": "chosen"}):  # fmt: skip
         assert client.post(TOKENS, json=bad, headers=ADMIN).status_code == 422, bad
 
 
@@ -348,4 +365,7 @@ def test_cli_creates_lists_and_revokes(
     assert token_id in listing and "active" in listing and token not in listing
     assert cli.main(["revoke-enrollment-token", token_id]) == 0
     assert "revoked" in capsys.readouterr().out
+    # Fase 6C.5: también se puede restringir un token a macOS desde la CLI.
+    assert cli.main(["create-enrollment-token", "--platform", "macos"]) == 0
+    assert "token:" in capsys.readouterr().out
     assert cli.main(["create-enrollment-token", "--ttl-minutes", "0"]) == 2

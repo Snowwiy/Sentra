@@ -90,13 +90,13 @@ describe("SensorsPage", () => {
     renderPage("viewer");
     const table = await screen.findByRole("region", { name: "Sensores" });
     const row = (name: string) => within(table).getByRole("button", { name }).closest("tr") as HTMLElement;
-    expect(within(row("sensor-online")).getByText("Online")).toBeInTheDocument();
-    expect(within(row("sensor-offline")).getByText("Offline")).toBeInTheDocument();
-    expect(within(row("sensor-stale")).getByText("Stale")).toBeInTheDocument();
+    expect(within(row("sensor-online")).getByText("En línea")).toBeInTheDocument();
+    expect(within(row("sensor-offline")).getByText("Sin conexión")).toBeInTheDocument();
+    expect(within(row("sensor-stale")).getByText("Inactivo")).toBeInTheDocument();
     expect(within(row("sensor-stale")).getByText("desactualizada")).toBeInTheDocument();
     expect(within(row("sensor-stale")).getByText(/Fallido/)).toBeInTheDocument();
     expect(within(row("sensor-revocado")).getByText("Revocado")).toBeInTheDocument();
-    expect(within(row("sensor-offline")).getByText("Offline")).toHaveAttribute(
+    expect(within(row("sensor-offline")).getByText("Sin conexión")).toHaveAttribute(
       "title",
       expect.stringMatching(/No significa que esté comprometido/),
     );

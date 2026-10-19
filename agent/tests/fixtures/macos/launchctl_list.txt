@@ -1,0 +1,8 @@
+PID	Status	Label
+-	0	com.apple.SafariHistoryServiceAgent
+372	0	com.sentra.agent
+512	0	com.apple.Finder
+-	-9	com.apple.cvmsCompAgent3600_arm64
+-	78	com.example.brokenhelper
+88	-	com.apple.mDNSResponder
+malformed line without tabs

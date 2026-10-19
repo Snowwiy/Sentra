@@ -1,0 +1,18 @@
++-o J316sAP  <class IOPlatformExpertDevice, id 0x100000214, registered, matched, active, busy 0 (198187 ms), retain 39>
+    {
+      "IOPolledInterface" = "AppleARMWatchdogTimerHibernateHandler is not serializable"
+      "#address-cells" = <02000000>
+      "AAPL,phandle" = <01000000>
+      "serial-number" = <433032585831595a4d4436540000000000000000000000000000000000000000>
+      "IOBusyInterest" = "IOCommand is not serializable"
+      "target-type" = <"J316s">
+      "IOPlatformUUID" = "8E1A6B4C-3D2F-5A7B-9C0D-1E2F3A4B5C6D"
+      "model" = <"MacBookPro18,3">
+      "region-info" = <"LL/A">
+      "IOPlatformSerialNumber" = "C02XX1YZMD6T"
+      "manufacturer" = <"Apple Inc.">
+      "compatible" = <"J316sAP","MacBookPro18,3","AppleARM">
+      "IOConsoleSecurityInterest" = "IOCommand is not serializable"
+      "clock-frequency" = <00366e01>
+      "name" = <"device-tree">
+    }

@@ -1,7 +1,11 @@
 """Catálogo cerrado y de solo lectura de los OIDs que el sensor puede consultar (Fase 6B).
 
 Solo objetos de lectura de MIBs estándar (SNMPv2-MIB, IP-MIB, IF-MIB, ENTITY-MIB, LLDP-MIB,
-BRIDGE-MIB, Q-BRIDGE-MIB) y de CISCO-CDP-MIB. Nada fuera de esta tabla sale nunca del sensor:
+BRIDGE-MIB, Q-BRIDGE-MIB) y de CISCO-CDP-MIB. Fase 6C.3 (módulo wlan): columnas concretas de
+IEEE802dot11-MIB, AIRESPACE-WIRELESS-MIB (controladoras Cisco) y UBNT-UniFi-MIB; la lista
+autorizada es por COLUMNA, no por tabla, para que ninguna petición pueda alcanzar columnas con
+claves WEP, nombres de usuario o IPs de clientes aunque compartan tabla con las permitidas.
+Nada fuera de esta tabla sale nunca del sensor:
 `allowed()` lo comprueba antes de cada petición (defensa en profundidad frente a un bug del
 propio colector).
 """
@@ -120,6 +124,98 @@ DOT1Q_VLAN_STATIC = (*QBRIDGE, 4, 3, 1)
 DOT1Q_VLAN_STATIC_COLUMNS = {"name": 1, "egress": 2, "untagged": 4}
 DOT1Q_PVID = (*QBRIDGE, 4, 5, 1, 1)
 
+# --- Fase 6C.3: IEEE802dot11-MIB (1.2.840.10036), tablas indexadas por ifIndex -------------
+DOT11 = oid("1.2.840.10036")
+# dot11StationConfigEntry: dot11StationID(1), dot11DesiredSSID(9), dot11DesiredBSSType(10).
+DOT11_STATION_CONFIG = (*DOT11, 1, 1, 1)
+DOT11_STATION_COLUMNS = {"station_id": 1, "desired_ssid": 9, "bss_type": 10}
+# dot11PrivacyEntry: dot11PrivacyInvoked(1), dot11ExcludeUnencrypted(4), dot11RSNAEnabled(7).
+# Nunca dot11WEPDefaultKeysTable ni dot11WEPKeyMappingsTable (1.2.840.10036.1.3/1.4).
+DOT11_PRIVACY = (*DOT11, 1, 5, 1)
+DOT11_PRIVACY_COLUMNS = {"privacy_invoked": 1, "exclude_unencrypted": 4, "rsna_enabled": 7}
+# dot11OperationEntry: dot11MACAddress(1).
+DOT11_OPERATION = (*DOT11, 2, 1, 1)
+DOT11_OPERATION_COLUMNS = {"mac_address": 1}
+# dot11PhyOperationEntry: dot11PHYType(1).
+DOT11_PHY_OPERATION = (*DOT11, 4, 1, 1)
+DOT11_PHY_OPERATION_COLUMNS = {"phy_type": 1}
+# dot11PhyDSSSEntry: dot11CurrentChannel(1); dot11PhyOFDMEntry: dot11CurrentFrequency(1)
+# (número de canal OFDM, pese al nombre).
+DOT11_PHY_DSSS = (*DOT11, 4, 5, 1)
+DOT11_PHY_OFDM = (*DOT11, 4, 11, 1)
+DOT11_PHY_CHANNEL_COLUMNS = {"channel": 1}
+
+# --- Fase 6C.3: AIRESPACE-WIRELESS-MIB (controladoras Cisco, empresa 14179) ----------------
+AIRESPACE = oid("1.3.6.1.4.1.14179")
+# bsnAPEntry, índice bsnAPDot3MacAddress (6 octetos). Sin bsnAPReset ni columnas escribibles
+# (solo se leen; aun así no se piden).
+BSN_AP = (*AIRESPACE, 2, 2, 1, 1)
+BSN_AP_COLUMNS = {
+    "name": 3,
+    "location": 4,
+    "operation_status": 6,
+    "software_version": 8,
+    "model": 16,
+    "serial": 17,
+    "ip_address": 19,
+    "ethernet_mac": 33,
+}
+# bsnAPIfEntry, índice (bsnAPDot3MacAddress, bsnAPIfSlotId).
+BSN_AP_IF = (*AIRESPACE, 2, 2, 2, 1)
+BSN_AP_IF_COLUMNS = {"radio_type": 2, "channel": 4, "oper_status": 12, "clients": 15}
+# bsnDot11EssEntry, índice bsnDot11EssIndex: SSID y número de clientes de cada WLAN.
+BSN_ESS = (*AIRESPACE, 2, 1, 1, 1)
+BSN_ESS_COLUMNS = {"ssid": 2, "clients": 38}
+# bsnMobileStationEntry, índice bsnMobileStationMacAddress. Minimización de datos: nunca
+# bsnMobileStationUserName(3) ni bsnMobileStationIpAddress(2).
+BSN_STATION = (*AIRESPACE, 2, 1, 4, 1)
+BSN_STATION_COLUMNS = {
+    "ap_mac": 4,
+    "slot": 5,
+    "ess_index": 6,
+    "ssid": 7,
+    "status": 9,
+    "protocol": 25,
+}
+
+# --- Fase 6C.3: UBNT-UniFi-MIB (Ubiquiti UniFi AP, empresa 41112) ----------------------------
+UNIFI = oid("1.3.6.1.4.1.41112.1.6")
+# unifiVapEntry, índice unifiVapIndex.
+UNIFI_VAP = (*UNIFI, 1, 2, 1)
+UNIFI_VAP_COLUMNS = {
+    "bssid": 2,
+    "channel": 4,
+    "essid": 6,
+    "name": 7,
+    "clients": 8,
+    "radio": 9,
+}
+# unifiApSystem: IP(1), modelo(3) y versión(6), escalares.
+UNIFI_SYSTEM_IP = (*UNIFI, 3, 1, 0)
+UNIFI_SYSTEM_MODEL = (*UNIFI, 3, 3, 0)
+UNIFI_SYSTEM_VERSION = (*UNIFI, 3, 6, 0)
+UNIFI_SYSTEM_SCALARS = (UNIFI_SYSTEM_IP, UNIFI_SYSTEM_MODEL, UNIFI_SYSTEM_VERSION)
+
+
+def _columns(entry: Oid, columns: dict[str, int]) -> tuple[Oid, ...]:
+    return tuple((*entry, number) for number in columns.values())
+
+
+WLAN_ROOTS: tuple[Oid, ...] = (
+    *_columns(DOT11_STATION_CONFIG, DOT11_STATION_COLUMNS),
+    *_columns(DOT11_PRIVACY, DOT11_PRIVACY_COLUMNS),
+    *_columns(DOT11_OPERATION, DOT11_OPERATION_COLUMNS),
+    *_columns(DOT11_PHY_OPERATION, DOT11_PHY_OPERATION_COLUMNS),
+    *_columns(DOT11_PHY_DSSS, DOT11_PHY_CHANNEL_COLUMNS),
+    *_columns(DOT11_PHY_OFDM, DOT11_PHY_CHANNEL_COLUMNS),
+    *_columns(BSN_AP, BSN_AP_COLUMNS),
+    *_columns(BSN_AP_IF, BSN_AP_IF_COLUMNS),
+    *_columns(BSN_ESS, BSN_ESS_COLUMNS),
+    *_columns(BSN_STATION, BSN_STATION_COLUMNS),
+    *_columns(UNIFI_VAP, UNIFI_VAP_COLUMNS),
+    *UNIFI_SYSTEM_SCALARS,
+)
+
 # Raíces autorizadas: todo OID pedido debe colgar de una de ellas.
 ALLOWED_ROOTS: tuple[Oid, ...] = (
     oid("1.3.6.1.2.1.1"),
@@ -137,6 +233,7 @@ ALLOWED_ROOTS: tuple[Oid, ...] = (
     (*QBRIDGE, 4, 2, 1),
     (*QBRIDGE, 4, 3, 1),
     DOT1Q_PVID,
+    *WLAN_ROOTS,
 )
 
 

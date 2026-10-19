@@ -67,6 +67,9 @@ with a one-time enrollment token): [docs/agent-linux-installation.md](docs/agent
 The **Agentes** page creates that token and the install command, and revokes agents (admin
 role): [docs/agent-management.md](docs/agent-management.md).
 
+macOS (Apple Silicon e Intel, Fase 6C.5): LaunchDaemon, token en el keychain del sistema y
+`.pkg` sin firmar: [docs/agent-macos-installation.md](docs/agent-macos-installation.md).
+
 El dashboard exige iniciar sesión (usuarios locales con roles admin, analyst y viewer). El
 primer administrador se crea en el servidor con `python -m app.cli create-admin` desde
 `backend/`; no hay credenciales por defecto: [docs/authentication.md](docs/authentication.md).
@@ -271,6 +274,11 @@ riesgo sin doble conteo, alertas solo en cambios relevantes, incidentes manuales
 lectura. Un puerto abierto nunca es una vulnerabilidad
 ([docs/vulnerability-management.md](docs/vulnerability-management.md),
 [docs/vulnerability-catalog.md](docs/vulnerability-catalog.md)).
+**Fase 6C**: consola responsive con navegación configurable (menú lateral, barra superior o
+automático; [docs/ui-design-system.md](docs/ui-design-system.md)), inventario Wi-Fi/AP/WLAN de
+solo lectura por SNMP y agentes ([docs/wlan-discovery.md](docs/wlan-discovery.md)) y catálogos
+oficiales NVD/OSV con importación verificada y sincronización opcional
+([docs/vulnerability-sources.md](docs/vulnerability-sources.md)).
 **Ciclo de vida de activos y eventos Linux** (Fase 5C.1): revocar un agente, archivar un
 activo y borrarlo son tres cosas distintas. Un activo gestionado nunca se borra: se archiva
 con todo su historial (oculto por defecto, fuera del resumen, restaurable); solo un activo

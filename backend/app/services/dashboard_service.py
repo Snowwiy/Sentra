@@ -19,7 +19,12 @@ from app.models.detection import Detection, DetectionSeverity, DetectionStatus
 from app.models.incident import ACTIVE_STATUSES as INCIDENT_ACTIVE
 from app.models.incident import Incident, IncidentAsset, IncidentLevel
 from app.models.risk import AssetRisk, RiskLevel
-from app.models.vulnerability import VulnerabilityFinding
+from app.models.vulnerability import (
+    AssetVulnerabilityState,
+    Vulnerability,
+    VulnerabilityFinding,
+    VulnerabilitySource,
+)
 from app.repositories.asset_repository import effective_status_expr
 from app.schemas.dashboard import (
     DashboardAssets,
@@ -41,9 +46,16 @@ CURRENT = Asset.archived_at.is_(None)
 
 class DashboardService:
     def __init__(
-        self, session: Session, heartbeat_timeout: timedelta, site_id: int | None = None
+        self,
+        session: Session,
+        heartbeat_timeout: timedelta,
+        site_id: int | None = None,
+        *,
+        catalog_stale_after: timedelta = timedelta(hours=72),
     ) -> None:
         self._session = session
+        # Fase 6C.4: sin importación/sincronización correcta en este plazo, catálogo obsoleto.
+        self._catalog_stale_after = catalog_stale_after
         self._timeout = heartbeat_timeout
         # Fase 5F: con site, cada contador se limita a los activos de ese site (y a lo que
         # cuelga de ellos: alertas, detecciones, riesgo, findings, incidentes).
@@ -166,6 +178,42 @@ class DashboardService:
                 func.count(func.distinct(VulnerabilityFinding.asset_id)).filter(evidenced),
             ).where(active)
         ).one()
+        evaluated, covered, pending = self._session.execute(
+            select(
+                func.count().filter(AssetVulnerabilityState.evaluated_at.is_not(None)),
+                func.count().filter(AssetVulnerabilityState.covered_components > 0),
+                func.count().filter(AssetVulnerabilityState.dirty_at.is_not(None)),
+            ).where(self._current_assets(AssetVulnerabilityState.asset_id))
+        ).one()
+        has_catalog = self._session.scalar(select(Vulnerability.id).limit(1)) is not None
+        now = datetime.now(UTC)
+        stale = bool(
+            self._session.scalar(
+                select(func.count()).where(
+                    VulnerabilitySource.records > 0,
+                    VulnerabilitySource.last_success_at < now - self._catalog_stale_after,
+                )
+            )
+        )
+        found = sum(severities.values()) + (potential or 0)
+        # Fase 6C.4: "cero vulnerabilidades" solo si el catálogo describe el software evaluado.
+        if not has_catalog:
+            state = "no_catalog"
+        elif found:
+            state = "vulnerabilities_found"
+        elif not evaluated:
+            state = "pending"
+        elif not covered:
+            state = "insufficient_catalog"
+        else:
+            state = "no_vulnerabilities"
         return DashboardVulnerabilities(
-            by_severity=severities, potential=potential or 0, assets_affected=assets or 0
+            by_severity=severities,
+            potential=potential or 0,
+            assets_affected=assets or 0,
+            evaluation_state=state,
+            catalog_stale=stale,
+            assets_evaluated=evaluated or 0,
+            assets_covered=covered or 0,
+            assets_pending=pending or 0,
         )

@@ -33,6 +33,8 @@ from app.api.v1.routes import (
     threat_intel,
     users,
     vulnerabilities,
+    vulnerability_sources,
+    wlan,
 )
 
 # Statuses every route with input can answer. FastAPI would otherwise document 422 with its
@@ -60,6 +62,7 @@ api_router.include_router(incidents.router, responses=_COMMON)
 api_router.include_router(response.router, responses=_COMMON)
 api_router.include_router(reports.router, responses=_COMMON)
 api_router.include_router(vulnerabilities.router, responses=_COMMON)
+api_router.include_router(vulnerability_sources.router, responses=_COMMON)
 api_router.include_router(threat_intel.router, responses=_COMMON)
 api_router.include_router(ai.router, responses=_COMMON)
 api_router.include_router(ai_local.router, responses=_COMMON)
@@ -74,3 +77,4 @@ api_router.include_router(sites.router, responses=_COMMON)
 api_router.include_router(sensors.router, responses=_COMMON)
 api_router.include_router(sensor_protocol.router, responses=_COMMON)
 api_router.include_router(network.router, responses=_COMMON)
+api_router.include_router(wlan.router, responses=_COMMON)

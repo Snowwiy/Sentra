@@ -1,0 +1,26 @@
+
+Hay 1 interfaz en el sistema: 
+
+    Nombre                 : Wi-Fi
+    Descripción            : Intel(R) Wi-Fi 6 AX201 160MHz
+    GUID                   : 4d2f8c1a-7b3e-4f6a-9c2d-1e3f5a7b9c0d
+    Dirección física       : a4:c3:f0:11:22:33
+    Tipo de interfaz       : Principal
+    Estado                 : conectado
+    SSID                   : Oficina-5G
+    BSSID de AP            : 7c:10:c9:aa:bb:cc
+    Banda                  : 5 GHz
+    Canal                  : 44
+    Tipo de red            : Infraestructura
+    Tipo de radio          : 802.11ax
+    Autenticación          : WPA2-Personal
+    Cifrado                : CCMP
+    Modo de conexión       : Conexión automática
+    Velocidad de recepción (Mbps)  : 1201
+    Velocidad de transmisión (Mbps) : 1201
+    Señal                  : 92%
+    Rssi                   : -48
+    Perfil                 : Oficina-5G
+
+    Estado de la red hospedada : No disponible
+

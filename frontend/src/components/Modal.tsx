@@ -1,7 +1,15 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { Icon } from "./icons";
+import { trapTab } from "./layout/navKeys";
 import { errorMessage } from "../lib/format";
 
-/** Centered dialog over the page. Escape and the close button call `onClose`. */
+/**
+ * Diálogo centrado (en móvil, hoja inferior). Escape y el botón de cierre llaman a `onClose`.
+ *
+ * Fase 6C: el foco queda dentro del diálogo (Tab no se escapa a la página de detrás), vuelve
+ * al elemento que lo abrió al cerrarse y el fondo no hace scroll mientras está abierto. La
+ * cabecera con el botón de cierre queda siempre visible; el cuerpo tiene scroll propio.
+ */
 export function Modal({
   title,
   onClose,
@@ -15,7 +23,19 @@ export function Modal({
 }) {
   const dialogRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
+    const opener = document.activeElement instanceof HTMLElement ? document.activeElement : null;
     dialogRef.current?.focus();
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      // Solo si el foco sigue dentro (o perdido): no se roba a otro diálogo abierto después.
+      if (opener && opener.isConnected && (!document.activeElement || document.activeElement === document.body)) {
+        opener.focus();
+      }
+    };
+  }, []);
+  useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape") onClose();
     };
@@ -32,11 +52,12 @@ export function Modal({
         aria-modal="true"
         aria-label={title}
         tabIndex={-1}
+        onKeyDown={trapTab}
       >
         <div className="modal__header">
           <h2>{title}</h2>
-          <button type="button" className="button button--ghost" onClick={onClose} aria-label="Cerrar">
-            ✕
+          <button type="button" className="iconbutton" onClick={onClose} aria-label="Cerrar">
+            <Icon name="close" />
           </button>
         </div>
         <div className="modal__body">{children}</div>

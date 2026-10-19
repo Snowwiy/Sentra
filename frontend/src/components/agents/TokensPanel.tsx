@@ -5,9 +5,9 @@ import type { EnrollmentToken } from "../../api/types";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
 import { ConfirmDialog } from "../Modal";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
-import { TokenStateBadge } from "./AgentBadges";
+import { platformLabel, TokenStateBadge } from "./AgentBadges";
 
-const ORIGIN_LABELS: Record<string, string> = { dashboard: "Dashboard", cli: "CLI", api: "API" };
+const ORIGIN_LABELS: Record<string, string> = { dashboard: "Consola", cli: "CLI", api: "API" };
 
 /** One-time installation tokens: state only, the token value is never listed. */
 export function TokensPanel({
@@ -58,7 +58,7 @@ export function TokensPanel({
                 <tr key={token.token_id}>
                   <td title={formatDateTime(token.created_at)}>{formatRelative(token.created_at)}</td>
                   <td title={formatDateTime(token.expires_at)}>{formatDateTime(token.expires_at)}</td>
-                  <td>{token.expected_platform ?? <span className="muted">cualquiera</span>}</td>
+                  <td>{platformLabel(token.expected_platform) ?? <span className="muted">cualquiera</span>}</td>
                   <td className="mono small">{token.expected_hostname ?? <span className="muted">—</span>}</td>
                   <td className="small">{token.site_name ?? <span className="muted">por defecto</span>}</td>
                   <td>

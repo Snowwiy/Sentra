@@ -79,7 +79,8 @@ def test_full_collection_normalizes_every_module() -> None:
     report, records = collect(agent)
     assert report.outcome == "completed"
     assert report.error_code is None
-    assert report.modules == dict.fromkeys(SNMP_MODULES, "complete")
+    # Fase 6C.3: un switch sin MIBs Wi-Fi informa wlan como unsupported, no como error.
+    assert report.modules == {**dict.fromkeys(SNMP_MODULES[:-1], "complete"), "wlan": "unsupported"}
     assert report.records == len(records)
     assert agent.closed
 
@@ -550,7 +551,10 @@ def test_runner_executes_snmp_job_end_to_end(
     assert {r["kind"] for r in records} >= {"system", "interface", "lldp_remote", "mac_entry"}
     complete = server.completes[job_id]
     assert complete["outcome"] == "completed"
-    assert complete["snmp"]["modules"] == dict.fromkeys(SNMP_MODULES, "complete")
+    assert complete["snmp"]["modules"] == {
+        **dict.fromkeys(SNMP_MODULES[:-1], "complete"),
+        "wlan": "unsupported",
+    }
     assert "observations" not in complete
     # Los secretos no llegan al disco (spool, estado) ni a los logs ni a lo enviado al servidor.
     stored = files_text(Path(config.data_dir))

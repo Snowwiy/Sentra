@@ -29,7 +29,10 @@ from app.models.risk import RiskLevel
 # probables (CISA KEV, EPSS) como factor acotado sobre la vulnerabilidad (VULNERABILITY_
 # EXPLOIT_FACTOR); (b) matches de IOCs con datos locales como evidencia propia (THREAT_*).
 # Un IOC sin match local no aporta nada. Sin inteligencia el resultado es idéntico a v3.
-FORMULA_VERSION = 4
+# v5 (Fase 6C.4): varios findings del MISMO CVE sobre el MISMO componente (el CVE descrito
+# por NVD, por OSV y por un catálogo local) son un único hecho: se agrupan y cuenta el más
+# fuerte (los demás quedan como "absorbed"). Sin duplicados el resultado es idéntico a v4.
+FORMULA_VERSION = 5
 
 
 # Puntos base por severidad: impacto si la detección es cierta, en la escala 0-100. No es

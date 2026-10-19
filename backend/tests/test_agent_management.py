@@ -204,7 +204,7 @@ def test_revoked_token_cannot_be_used(console: TestClient, client: TestClient) -
 
 
 def test_token_input_is_validated(console: TestClient) -> None:
-    for body in ({"max_uses": 0}, {"ttl_minutes": 5000}, {"expected_platform": "macos"}, {"x": 1}):
+    for body in ({"max_uses": 0}, {"ttl_minutes": 5000}, {"expected_platform": "bsd"}, {"x": 1}):
         response = console.post(f"{CONSOLE}/enrollment-tokens", json=body, headers=LOCAL)
         assert response.status_code == 422, body
 
@@ -256,6 +256,21 @@ def test_agents_listing_states_and_no_secrets(
     hashes = db.scalars(select(Asset.agent_token_hash).where(Asset.agent_token_hash.is_not(None)))
     for secret in [*agent_tokens, *tokens, *hashes]:
         assert secret not in response.text
+
+
+@pytest.mark.parametrize("os_name", ["macOS", "Darwin"])
+def test_macos_agent_platform(console: TestClient, client: TestClient, os_name: str) -> None:
+    # Fase 6C.5: arquitectura y versión tal como las informa el agente de macOS.
+    token = _create_token(console, expected_platform="macos")["token"]
+    response, _ = _enroll(
+        client, token, os_name=os_name, os_version="15.1 (24B83)", architecture="arm64",
+        installation_method="macos_launchd",
+    )  # fmt: skip
+    assert response.status_code == 201, response.text
+    agent = _agent(client, response.json()["asset_id"])
+    assert agent["platform"] == "macos" and agent["architecture"] == "arm64"
+    assert agent["os_version"] == "15.1 (24B83)"
+    assert agent["installation_method"] == "macos_launchd"
 
 
 def test_asset_agent_detail(console: TestClient, client: TestClient, db: Session) -> None:

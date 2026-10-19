@@ -1,9 +1,9 @@
 import type { AssetStatus, LifecycleState } from "../api/types";
 
 const LABELS: Record<AssetStatus, string> = {
-  online: "Online",
-  offline: "Offline",
-  unknown: "Unknown",
+  online: "En línea",
+  offline: "Sin conexión",
+  unknown: "Desconocido",
 };
 
 export function StatusBadge({ status }: { status: AssetStatus }) {
@@ -17,9 +17,9 @@ export function StatusBadge({ status }: { status: AssetStatus }) {
 
 // Fase 5C.2: estado de ciclo de vida calculado por el servidor.
 export const LIFECYCLE_LABELS: Record<LifecycleState, string> = {
-  active: "Online",
-  offline: "Offline",
-  stale: "Stale",
+  active: "En línea",
+  offline: "Sin conexión",
+  stale: "Inactivo",
   cleanup_candidate: "Candidato a limpieza",
   archived: "Archivado",
 };
@@ -51,7 +51,7 @@ export function LifecycleBadge({ state, title }: { state: LifecycleState; title?
 
 /**
  * Estado visible de un activo: Stale, Candidato a limpieza y Archivado ganan a la conectividad;
- * si no, el estado de siempre (Online / Offline / Unknown).
+ * si no, el estado de siempre (En línea / Sin conexión / Desconocido).
  */
 export function AssetStateBadge({
   asset,

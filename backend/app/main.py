@@ -36,6 +36,7 @@ from app.services.background import (
     run_sensor_maintenance,
     run_threat_intel,
     run_vulnerability_engine,
+    run_vulnerability_sources,
     sweep_offline_assets,
 )
 from app.services.discovery_runner import stop_discovery_runner
@@ -106,6 +107,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     "threat-intel", settings.threat_intel_eval_interval_seconds, run_threat_intel
                 )
             )
+        # Fase 6C.4: descarga opt-in de NVD/OSV (sin VULN_SOURCE_SYNC_ENABLED no hay job).
+        if settings.vuln_enabled and settings.vuln_source_sync_enabled:
+            jobs.append(PeriodicJob("vulnerability-sources", 300, run_vulnerability_sources))
         # Fase 5C.2: limpieza automática de descubiertos elegibles. Opt-in explícito.
         if settings.asset_auto_cleanup:
             jobs.append(

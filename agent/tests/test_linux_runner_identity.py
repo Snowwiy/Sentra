@@ -142,10 +142,15 @@ def test_default_event_source_follows_platform(tmp_path: Path) -> None:
     from sentra_agent import runner
     from sentra_agent.events import EventCollector
     from sentra_agent.linux_events import LinuxJournalCollector
+    from sentra_agent.macos_events import MacUnifiedLogCollector
 
     source = runner.default_event_source(tmp_path)
-    expected = LinuxJournalCollector if sys.platform.startswith("linux") else EventCollector
-    assert isinstance(source, expected)
+    if sys.platform.startswith("linux"):
+        assert isinstance(source, LinuxJournalCollector)
+    elif sys.platform == "darwin":
+        assert isinstance(source, MacUnifiedLogCollector)
+    else:
+        assert isinstance(source, EventCollector)
 
 
 # --- Identidad del equipo ------------------------------------------------------------------

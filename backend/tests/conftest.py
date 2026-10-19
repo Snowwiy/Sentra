@@ -96,6 +96,25 @@ os.environ["SNMP_MAX_ROWS_PER_TABLE"] = "10000"
 os.environ["SNMP_JOB_DEADLINE_SECONDS"] = "300"
 os.environ["SNMP_EDGE_PORT_MAX_MACS"] = "3"
 os.environ["SNMP_HISTORY_RETENTION_DAYS"] = ""
+# Fase 6C.3: retención del inventario Wi-Fi con su valor por defecto (sin purga).
+os.environ["WLAN_HISTORY_RETENTION_DAYS"] = ""
+# Fase 6C.4: fuentes oficiales del catálogo. Un .env con descargas activadas o una API key de
+# NVD no debe cambiar lo que comprueban los tests (ninguno sale a Internet).
+os.environ["VULN_SOURCE_SYNC_ENABLED"] = "false"
+os.environ["VULN_SOURCE_AUTO_SYNC"] = ""
+os.environ["VULN_SOURCE_SYNC_INTERVAL_HOURS"] = "12"
+os.environ["VULN_SOURCE_STALE_HOURS"] = "72"
+os.environ["VULN_SOURCE_URLS"] = ""
+os.environ["VULN_SOURCE_MAX_DOWNLOAD_MB"] = "256"
+os.environ["VULN_SOURCE_MAX_RECORDS"] = "500000"
+os.environ["VULN_SOURCE_MAX_RETRIES"] = "4"
+os.environ["VULN_OSV_ECOSYSTEMS"] = "Debian,Ubuntu,AlmaLinux,Rocky Linux"
+os.environ["VULN_NVD_RESULTS_PER_PAGE"] = "2000"
+os.environ["VULN_NVD_MAX_PAGES_PER_RUN"] = "100"
+os.environ["VULN_NVD_INITIAL_DAYS"] = "120"
+os.environ["NVD_API_KEY"] = ""
+os.environ["NVD_API_KEY_FILE"] = ""
+os.environ["VULN_BUILTIN_PRODUCT_MAP"] = "true"
 # test_viewer_cannot_mutate_anything recorre todas las rutas mutables con un mismo usuario y
 # desde 6B son más de 120 (el límite por defecto por minuto): sin esto respondería 429.
 os.environ["API_MUTATIONS_PER_USER_PER_MINUTE"] = "1000"
@@ -249,7 +268,9 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
                 " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"
                 " reports, site_networks, sensor_enrollment_tokens, sensors,"
-                " network_devices, snmp_credential_profiles"
+                " network_devices, snmp_credential_profiles, wlan_observations,"
+                " wlan_agent_reports, wlan_clients, wlan_bss, wlan_access_points,"
+                " wlan_configured_networks"
                 " RESTART IDENTITY CASCADE"
             )
         )

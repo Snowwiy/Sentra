@@ -1,0 +1,8 @@
+#!/bin/bash
+# preinstall del .pkg de Sentra Agent: detiene el LaunchDaemon si ya estaba cargado
+# (actualización) para que el runtime no se sustituya mientras se ejecuta.
+set -u
+if /bin/launchctl print system/com.sentra.agent >/dev/null 2>&1; then
+  /bin/launchctl bootout system/com.sentra.agent 2>/dev/null || true
+fi
+exit 0

@@ -15,6 +15,7 @@ import { LocalAIPage } from "./pages/LocalAIPage";
 import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { RiskPage } from "./pages/RiskPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { UsersPage } from "./pages/UsersPage";
 import { LoadingState } from "./components/StateViews";
 
@@ -35,6 +36,7 @@ const VulnerabilityDetailPage = lazy(() =>
 const VulnerabilityCatalogPage = lazy(() =>
   import("./pages/VulnerabilityCatalogPage").then((m) => ({ default: m.VulnerabilityCatalogPage })),
 );
+const CveDetailPage = lazy(() => import("./pages/CveDetailPage").then((m) => ({ default: m.CveDetailPage })));
 // Fase 5C: Threat Intelligence en su propio chunk.
 const ThreatIntelPage = lazy(() => import("./pages/ThreatIntelPage").then((m) => ({ default: m.ThreatIntelPage })));
 const ThreatIndicatorDetailPage = lazy(() =>
@@ -68,6 +70,8 @@ const InfrastructurePage = lazy(() =>
 const InfrastructureDevicePage = lazy(() =>
   import("./pages/InfrastructureDevicePage").then((m) => ({ default: m.InfrastructureDevicePage })),
 );
+// Fase 6C.3: inventario Wi-Fi / AP / WLAN en su propio chunk.
+const WlanPage = lazy(() => import("./pages/WlanPage").then((m) => ({ default: m.WlanPage })));
 const infrastructureFallback = <LoadingState label="Cargando infraestructura…" />;
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
@@ -155,9 +159,21 @@ export function AppRoutes() {
           <Route
             path="vulnerabilities/catalog"
             element={
-              <RequirePermission permission="vulnerabilities:admin">
+              // Fase 6C.4: el estado del catálogo lo ve cualquier lector; las acciones de
+              // importación y sincronización se ocultan sin vulnerabilities:admin.
+              <RequirePermission permission="vulnerabilities:read">
                 <Suspense fallback={incidentsFallback}>
                   <VulnerabilityCatalogPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="vulnerabilities/catalog/cves/:cveId"
+            element={
+              <RequirePermission permission="vulnerabilities:read">
+                <Suspense fallback={incidentsFallback}>
+                  <CveDetailPage />
                 </Suspense>
               </RequirePermission>
             }
@@ -270,6 +286,7 @@ export function AppRoutes() {
               </RequirePermission>
             }
           />
+          <Route path="settings" element={<SettingsPage />} />
           <Route
             path="settings/ai"
             element={
@@ -314,6 +331,16 @@ export function AppRoutes() {
               <RequirePermission permission="monitoring:read">
                 <Suspense fallback={infrastructureFallback}>
                   <InfrastructureDevicePage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="wlan"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={<LoadingState label="Cargando Wi-Fi…" />}>
+                  <WlanPage />
                 </Suspense>
               </RequirePermission>
             }

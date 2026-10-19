@@ -1,0 +1,4 @@
+wlp2s0:wifi:connected
+p2p-dev-wlp2s0:wifi-p2p:disconnected
+enp0s31f6:ethernet:unavailable
+lo:loopback:connected (externally)

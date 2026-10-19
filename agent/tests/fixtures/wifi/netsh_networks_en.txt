@@ -1,0 +1,50 @@
+
+Interface name : Wi-Fi 
+There are 3 networks currently visible. 
+
+SSID 1 : Oficina-5G
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP 
+    BSSID 1                 : 7c:10:c9:aa:bb:cc
+         Signal             : 92%  
+         Radio type         : 802.11ax
+         Band               : 5 GHz
+         Channel            : 44 
+         Bss Load:
+             Connected Stations:        3
+             Channel Utilization:       21 (8 %)
+             Medium Available Capacity: 31250 (1000000 us/s)
+         Basic rates (Mbps) : 6 12 24
+         Other rates (Mbps) : 9 18 36 48 54
+    BSSID 2                 : 7c:10:c9:aa:bb:cd
+         Signal             : 40%  
+         Radio type         : 802.11n
+         Band               : 2.4 GHz
+         Channel            : 11 
+         Basic rates (Mbps) : 1 2 5.5 11
+         Other rates (Mbps) : 6 9 12 18 24 36 48 54
+
+SSID 2 : 
+    Network type            : Infrastructure
+    Authentication          : WPA2-Personal
+    Encryption              : CCMP 
+    BSSID 1                 : 9a:8b:7c:6d:5e:4f
+         Signal             : 30%  
+         Radio type         : 802.11ac
+         Band               : 5 GHz
+         Channel            : 100 
+         Basic rates (Mbps) : 6 12 24
+         Other rates (Mbps) : 9 18 36 48 54
+
+SSID 3 : Cafeteria
+    Network type            : Infrastructure
+    Authentication          : Open
+    Encryption              : None 
+    BSSID 1                 : 00:1a:2b:3c:4d:5e
+         Signal             : 55%  
+         Radio type         : 802.11n
+         Channel            : 6 
+         Basic rates (Mbps) : 1 2 5.5 11
+         Other rates (Mbps) : 6 9 12 18 24 36 48 54
+

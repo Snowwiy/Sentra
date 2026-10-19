@@ -1,4 +1,4 @@
-"""Inventario SNMP de solo lectura (Fase 6B).
+"""Inventario SNMP de solo lectura (Fase 6B; módulo wlan en la Fase 6C.3).
 
 El sensor solo hace GET y GETBULK sobre un catálogo cerrado de MIBs (catalog.py). No existe
 en este paquete ninguna operación SET ni forma de pedir un OID arbitrario: el servidor envía
@@ -11,7 +11,18 @@ job snmp_inventory.
 
 from importlib.util import find_spec
 
-MODULES: tuple[str, ...] = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan")
+# Fase 6C.3: "wlan" (APs, BSS, WLANs y clientes; IEEE802dot11-MIB, AIRESPACE y UniFi). El
+# servidor solo lo pide a sensores que declaran snmp.wlan (0.4.0+); un 0.3.0 nunca lo recibe.
+MODULES: tuple[str, ...] = (
+    "system",
+    "entity",
+    "interfaces",
+    "lldp",
+    "cdp",
+    "bridge",
+    "vlan",
+    "wlan",
+)
 
 
 def snmp_available() -> bool:

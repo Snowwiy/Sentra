@@ -1,0 +1,79 @@
+{
+  "SPAirPortDataType" : [
+    {
+      "spairport_airport_interfaces" : [
+        {
+          "_name" : "en0",
+          "spairport_airdrop_channel" : 149,
+          "spairport_caps_airdrop" : "spairport_caps_supported",
+          "spairport_status_information" : "spairport_status_connected",
+          "spairport_supported_channels" : [
+            {
+              "spairport_channel_band" : "spairport_channel_band_2_4ghz",
+              "spairport_channel_number" : "1"
+            }
+          ],
+          "spairport_supported_phymodes" : "802.11 a/b/g/n/ac/ax",
+          "spairport_wireless_card_type" : "Wi-Fi  (0x14E4, 0x4388)",
+          "spairport_wireless_country_code" : "ES",
+          "spairport_wireless_firmware_version" : "wl0: Sep 14 2024 05:02:09 version 23.20.3.0.41.51.155 FWID 01-1b2a7b1c",
+          "spairport_wireless_locale" : "ETSI",
+          "spairport_wireless_mac_address" : "a4:83:e7:12:34:56",
+          "spairport_current_network_information" : {
+            "_name" : "Oficina-5G",
+            "spairport_network_channel" : "149 (5GHz, 80MHz)",
+            "spairport_network_country_code" : "ES",
+            "spairport_network_mcs" : 11,
+            "spairport_network_phymode" : "802.11ax",
+            "spairport_network_rate" : 1201,
+            "spairport_network_type" : "spairport_network_type_station",
+            "spairport_security_mode" : "spairport_security_mode_wpa3_transition",
+            "spairport_signal_noise" : "-48 dBm / -93 dBm",
+            "spairport_network_bssid" : "7c:10:c9:aa:bb:cc"
+          },
+          "spairport_airport_other_local_wireless_networks" : [
+            {
+              "_name" : "Vecino",
+              "spairport_network_channel" : "6 (2GHz, 20MHz)",
+              "spairport_network_phymode" : "802.11b/g/n",
+              "spairport_network_type" : "spairport_network_type_station",
+              "spairport_security_mode" : "spairport_security_mode_wpa2_personal",
+              "spairport_signal_noise" : "-71 dBm / -94 dBm"
+            },
+            {
+              "_name" : "Invitados",
+              "spairport_network_channel" : "37 (6GHz, 160MHz)",
+              "spairport_network_phymode" : "802.11ax",
+              "spairport_network_type" : "spairport_network_type_station",
+              "spairport_security_mode" : "pairport_security_mode_none",
+              "spairport_signal_noise" : "-80 dBm / -95 dBm"
+            }
+          ]
+        },
+        {
+          "_name" : "awdl0",
+          "spairport_supported_channels" : [
+            {
+              "spairport_channel_band" : "spairport_channel_band_2_4ghz",
+              "spairport_channel_number" : "1"
+            }
+          ],
+          "spairport_wireless_mac_address" : "6e:1f:20:aa:bb:cc"
+        },
+        {
+          "_name" : "llw0",
+          "spairport_wireless_mac_address" : "6e:1f:20:aa:bb:cd"
+        }
+      ],
+      "spairport_software_information" : {
+        "spairport_corewlan_version" : "16.0 (1657)",
+        "spairport_corewlankit_version" : "16.0 (1657)",
+        "spairport_diagnostics_version" : "11.0 (1163)",
+        "spairport_extra_version" : "17.0 (1830)",
+        "spairport_family_version" : "12.0 (1200.13.0)",
+        "spairport_profiler_version" : "15.0 (1502)",
+        "spairport_utility_version" : "6.3.9 (639.18)"
+      }
+    }
+  ]
+}

@@ -331,11 +331,11 @@ describe("LifecyclePanel", () => {
 });
 
 describe("LifecyclePanel (Fase 5C.2)", () => {
-  it("distinguishes Online, Offline, Stale, cleanup candidate and Archived", () => {
+  it("distinguishes online, offline, stale, cleanup candidate and Archived", () => {
     const states = [
-      [{ status: "online", lifecycle_state: "active" }, "Online", "status--online"],
-      [{ status: "offline", lifecycle_state: "offline" }, "Offline", "status--offline"],
-      [{ status: "offline", lifecycle_state: "stale" }, "Stale", "status--stale"],
+      [{ status: "online", lifecycle_state: "active" }, "En línea", "status--online"],
+      [{ status: "offline", lifecycle_state: "offline" }, "Sin conexión", "status--offline"],
+      [{ status: "offline", lifecycle_state: "stale" }, "Inactivo", "status--stale"],
       [{ status: "offline", lifecycle_state: "cleanup_candidate" }, "Candidato a limpieza", "status--cleanup"],
       [{ status: "online", lifecycle_state: "archived" }, "Archivado", "status--archived"],
       // Servidor anterior a 5C.2: archived_at sigue marcando el archivado.
@@ -354,7 +354,7 @@ describe("LifecyclePanel (Fase 5C.2)", () => {
       <LifecyclePanel asset={asset({ lifecycle_state: "stale", missed_discovery_scans: 4, last_activity_at: new Date().toISOString() })} onChanged={() => undefined} />,
     );
     const summary = screen.getByLabelText("Ciclo de vida");
-    expect(summary).toHaveTextContent("Stale");
+    expect(summary).toHaveTextContent("Inactivo");
     expect(summary).toHaveTextContent("4 escaneos completos sin verlo");
     expect(summary).toHaveTextContent("Descubierto");
     expect(summary).toHaveTextContent("última actividad");

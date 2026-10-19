@@ -1,15 +1,15 @@
 import type { SensorEnrollmentState, SensorJobStatus, SensorStatus, VersionStatus } from "../../api/types";
 
 export const SENSOR_STATUS_LABELS: Record<SensorStatus, string> = {
-  online: "Online",
-  offline: "Offline",
-  stale: "Stale",
+  online: "En línea",
+  offline: "Sin conexión",
+  stale: "Inactivo",
   pending: "Pendiente",
   disabled: "Deshabilitado",
   revoked: "Revocado",
 };
 
-// Offline y Stale solo dicen que el sensor no reporta: nunca que esté comprometido o borrado.
+// «Sin conexión» e «Inactivo» solo dicen que el sensor no reporta: nunca que esté comprometido o borrado.
 export const SENSOR_STATUS_HELP: Record<SensorStatus, string> = {
   online: "Reporta con normalidad",
   offline: "Sin heartbeat reciente. No significa que esté comprometido ni borrado: puede estar apagado o sin red.",

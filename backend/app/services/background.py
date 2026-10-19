@@ -223,6 +223,33 @@ def run_threat_intel() -> None:
         ThreatIntelMatcher(session, config).run()
 
 
+def run_vulnerability_sources() -> None:
+    """Fase 6C.4: sincroniza NVD/OSV pedidas por un admin o vencidas (VULN_SOURCE_AUTO_SYNC).
+
+    Solo con VULN_SOURCE_SYNC_ENABLED=true (due_sources devuelve [] si no). Cada fuente tiene
+    su propio advisory lock (la CLI no se pisa con el job). Un fallo queda en la fila de la
+    fuente y en su historial; el catálogo anterior se sigue usando.
+    """
+    # Import local: el módulo arrastra los adapters y el cliente HTTP (solo si hay job).
+    from app.core.exceptions import VulnerabilitySourceConflictError
+    from app.vulnerabilities.source_sync import SYSTEM as SOURCES_ACTOR
+    from app.vulnerabilities.source_sync import VulnerabilitySourceSyncer
+
+    settings = get_settings()
+    with get_sessionmaker()() as session:
+        syncer = VulnerabilitySourceSyncer(session, settings, lock_engine=get_engine)
+        for key in syncer.due_sources():
+            try:
+                outcome = syncer.sync(key, "scheduled", SOURCES_ACTOR)
+            except VulnerabilitySourceConflictError:
+                continue
+            if outcome.status == "failed":
+                logger.warning(
+                    "vulnerability source sync failed",
+                    extra={"source": outcome.source, "error": outcome.error_code},
+                )
+
+
 def purge_old_data() -> None:
     policy = RetentionPolicy.from_settings(get_settings())
     with get_sessionmaker()() as session:
@@ -292,7 +319,8 @@ def run_sensor_maintenance() -> None:
 
 def run_network_maintenance() -> None:
     """Fase 6B: encola las consultas SNMP periódicas vencidas (SNMP_POLL_INTERVAL_MINUTES) y
-    aplica la retención opt-in del historial de red (SNMP_HISTORY_RETENTION_DAYS)."""
+    aplica la retención opt-in del historial de red (SNMP_HISTORY_RETENTION_DAYS) y, desde la
+    Fase 6C.3, la del inventario Wi-Fi (WLAN_HISTORY_RETENTION_DAYS)."""
     from app.services.network_jobs import run_network_maintenance as maintain
 
     with get_sessionmaker()() as session:

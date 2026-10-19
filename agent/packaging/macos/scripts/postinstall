@@ -1,0 +1,7 @@
+#!/bin/bash
+# postinstall del .pkg de Sentra Agent: permisos, lanzador con un Python seguro, LaunchDaemon
+# y rotación de logs. Una actualización reinicia el agente con la misma identidad; una
+# instalación nueva espera a `sentra-agent-setup --server URL --token-file FICHERO`.
+# La salida queda en /var/log/install.log.
+set -euo pipefail
+exec /bin/bash /Library/Sentra/Agent/share/install-sentra-agent.sh --package-postinstall

@@ -96,6 +96,24 @@ administrador). El propio servicio se enrola con el token de un solo uso, cifra 
 DPAPI y borra el de instalación. Estado en `%ProgramData%\Sentra\Agent`. Guía completa,
 upgrade, re-enrolamiento y desinstalación: [docs/agent-windows-installation.md](../docs/agent-windows-installation.md).
 
+## Install on macOS (Fase 6C.5, agente 0.4.0)
+
+Mac con Apple Silicon o Intel, macOS 13 o posterior y Python ≥ 3.12 de python.org (el
+instalador comprueba que root pueda confiar en él). LaunchDaemon `com.sentra.agent` como root;
+el token del agente va al keychain del sistema (Security.framework), nunca a un fichero en claro
+salvo con `--credential-store file` explícito.
+
+```bash
+(umask 077; printf 'Token de instalación: '; read -rs t && printf '%s\n' "$t" > enrollment.token); echo
+sudo installer -pkg ./sentra-agent-0.4.0-macos-arm64-unsigned.pkg -target /
+sudo /Library/Sentra/Agent/bin/sentra-agent-setup --server https://SERVER --token-file ./enrollment.token
+```
+
+Eventos: subconjunto fijo del Unified Logging (sshd, sudo, su, Compartir pantalla, authd).
+Wi-Fi pasivo en Windows, Linux y macOS (campo `wireless` del inventario, sin escaneo activo ni
+contraseñas). Guía completa, decisiones de seguridad y lo que falta validar en un Mac físico:
+[docs/agent-macos-installation.md](../docs/agent-macos-installation.md).
+
 ## Not yet
 
 No auto-update and no MSI yet (Windows uses a zip + PowerShell installer). A manual run

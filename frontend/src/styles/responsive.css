@@ -1,0 +1,56 @@
+/*
+ * Sentra UI 6C: ajustes responsive por módulo.
+ *
+ * Cada regla corrige una causa concreta medida con qa/ui_responsive.cjs (anchos mínimos,
+ * columnas rígidas, hijos flex que no encogen). Ninguna oculta el desbordamiento con
+ * overflow-x: hidden en la página: el contenido debe seguir siendo accesible.
+ */
+
+/* Tablas: antes todas las celdas eran nowrap y una sola columna de texto largo (nombre de
+   host, detalle de alerta) obligaba al scroll interno incluso en escritorio. Las cabeceras
+   siguen en una línea; las celdas pueden partir texto. */
+.table td {
+  white-space: normal;
+}
+
+.table td.nowrap,
+.table td .nowrap,
+.table td time {
+  white-space: nowrap;
+}
+
+/* Campos "inline" (etiqueta y control en la misma fila): con poco ancho la fila se parte y
+   el control ocupa lo disponible en lugar de salirse del panel (IA local, 320-360 px). */
+.form-field--inline {
+  flex-wrap: wrap;
+  min-width: 0;
+}
+
+.form-field--inline .input {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Títulos de panel sin toolbar (Informes > Historial) quedaban pegados al borde. */
+.panel.stack:not(.panel--padded) > .panel__title {
+  padding: var(--space-4) var(--space-4) 0;
+}
+
+/* Las barras de filtros de los paneles: los select se encogen hasta su contenido mínimo. */
+.panel__toolbar .input,
+.panel__toolbar .input--select {
+  min-width: 0;
+  max-width: 100%;
+}
+
+/* Hijos de pilas y paneles: sin min-width: 0 su ancho mínimo es el de su contenido más ancho
+   (un select con opciones largas) y empujan al panel fuera de la columna. */
+.stack > *,
+.panel > * {
+  min-width: 0;
+}
+
+.input--select {
+  max-width: 100%;
+  text-overflow: ellipsis;
+}

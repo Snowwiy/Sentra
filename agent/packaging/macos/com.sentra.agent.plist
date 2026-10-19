@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Sentra Agent: LaunchDaemon de macOS (Fase 6C.5). Se instala en
+  /Library/LaunchDaemons/com.sentra.agent.plist (root:wheel 0644: launchd rechaza un plist
+  que otros usuarios puedan modificar).
+
+  - Corre como root: el token propio del agente va al keychain del sistema, que solo root
+    puede modificar, y el inventario (conexiones, launchd del sistema, log unificado) necesita
+    root en macOS. No pide permisos de TCC (Acceso total al disco, Localización).
+  - RunAtLoad: arranca al iniciar el equipo. KeepAlive/SuccessfulExit=false: launchd lo
+    relanza solo si termina con error o se cae; una parada limpia (SIGTERM, código 0) no se
+    relanza. ThrottleInterval impide reinicios más seguidos que cada 30 s.
+  - El propio agente rota su log JSON (/Library/Logs/Sentra/agent.log, 5 x 1 MB) y no
+    escribe en la consola (- -no-console-log); launchd.log solo recoge salidas fuera del
+    logging (una traza antes de configurarlo) y lo rota newsyslog (com.sentra.agent.conf).
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.sentra.agent</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Library/Sentra/Agent/bin/sentra-agent</string>
+    <string>--config</string>
+    <string>/Library/Sentra/Agent/agent.toml</string>
+    <string>--no-console-log</string>
+  </array>
+  <key>UserName</key>
+  <string>root</string>
+  <key>GroupName</key>
+  <string>wheel</string>
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+  <key>ThrottleInterval</key>
+  <integer>30</integer>
+  <key>ExitTimeOut</key>
+  <integer>30</integer>
+  <key>ProcessType</key>
+  <string>Standard</string>
+  <key>WorkingDirectory</key>
+  <string>/Library/Sentra/Agent/state</string>
+  <!-- 077 en octal: todo lo que cree el agente es solo de root. -->
+  <key>Umask</key>
+  <integer>63</integer>
+  <key>StandardOutPath</key>
+  <string>/Library/Logs/Sentra/launchd.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Library/Logs/Sentra/launchd.log</string>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <key>LC_ALL</key>
+    <string>C</string>
+  </dict>
+</dict>
+</plist>

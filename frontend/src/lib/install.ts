@@ -1,5 +1,6 @@
 // Install instructions for the Linux agent (agent/packaging/linux, docs/agent-linux-installation.md)
-// y para Windows (agent/packaging/windows, docs/agent-windows-installation.md).
+// y para Windows (agent/packaging/windows, docs/agent-windows-installation.md)
+// y macOS (agent/packaging/macos, docs/agent-macos-installation.md).
 // Pure functions: the one-time token only passes through here to build the text the operator
 // copies; nothing is stored or logged.
 
@@ -170,6 +171,62 @@ export function windowsInstallSteps(options: {
     );
   }
   steps.push({ title: "Comprueba el servicio", command: "Get-Service SentraAgent" });
+  return steps;
+}
+
+export type MacInstallPackage = "pkg" | "tarball";
+export type MacArchitecture = "arm64" | "x86_64";
+
+/**
+ * Comandos para el Mac, en orden, en Terminal (zsh por defecto, también bash 3.2).
+ * El instalador de macOS solo acepta el token por archivo (--token-file): se escribe con un
+ * aviso sin eco en un archivo 0600 y nunca aparece en una línea de comandos, en `ps` ni en el
+ * historial; el instalador lo borra al registrarse. `printf` + `read -rs` en vez de
+ * `read -rsp` porque en zsh -p no es el aviso sino la lectura de un coproceso.
+ * El .pkg sale sin firmar ni notarizar: Gatekeeper no lo abre con doble clic, por eso se
+ * instala con `installer` desde Terminal (ver docs/agent-macos-installation.md).
+ */
+export function macosInstallSteps(options: {
+  serverUrl: string;
+  pkg: MacInstallPackage;
+  arch: MacArchitecture;
+}): InstallStep[] {
+  const { serverUrl, pkg, arch } = options;
+  const server = checkServerUrl(serverUrl);
+  if (!server.valid) throw new Error("URL del servidor no válida");
+
+  const name = `sentra-agent-*-macos-${arch}`;
+  const steps: InstallStep[] = [
+    {
+      title: "Guarda el token en un archivo privado: pega el token cuando lo pida (no se muestra ni queda en el historial)",
+      command: `(umask 077; printf 'Token de instalación: '; read -rs t && printf '%s\\n' "$t" > ${TOKEN_FILE}); echo`,
+    },
+  ];
+  const serverArg = `--server ${shellQuote(server.url)} --token-file ./${TOKEN_FILE}`;
+  if (pkg === "pkg") {
+    steps.push(
+      {
+        title: `Instala el paquete (${name}-unsigned.pkg)`,
+        command: `sudo installer -pkg ./${name}-unsigned.pkg -target /`,
+      },
+      {
+        title: "Registra y arranca el agente (el archivo del token se borra al terminar)",
+        command: `sudo /Library/Sentra/Agent/bin/sentra-agent-setup ${serverArg}`,
+      },
+    );
+  } else {
+    steps.push(
+      {
+        title: `Extrae el paquete (${name}.tar.gz)`,
+        command: `tar xzf ${name}.tar.gz`,
+      },
+      {
+        title: "Instala, registra y arranca el agente (el archivo del token se borra al terminar)",
+        command: `sudo ./${name}/install-sentra-agent.sh ${serverArg}`,
+      },
+    );
+  }
+  steps.push({ title: "Comprueba el servicio", command: "sudo launchctl print system/com.sentra.agent" });
   return steps;
 }
 

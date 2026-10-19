@@ -155,22 +155,22 @@ describe("AgentsPage", () => {
     renderPage();
     expect(await screen.findByText("ravenslg")).toBeInTheDocument();
     const stats = screen.getByRole("region", { name: "Agentes por estado" });
-    for (const [label, value] of [["Total", 4], ["Online", 1], ["Offline", 1], ["Revoked", 1]] as const) {
+    for (const [label, value] of [["Total", 4], ["En línea", 1], ["Sin conexión", 1], ["Revocados", 1]] as const) {
       expect(within(stats).getByText(label).nextSibling).toHaveTextContent(String(value));
     }
     const rows = screen.getAllByRole("row").slice(1);
     const stateOf = (name: string) => rows.find((r) => r.textContent?.includes(name))!;
-    expect(within(stateOf("ravenslg")).getByText("Online")).toBeInTheDocument();
-    expect(within(stateOf("linux-off")).getByText("Offline")).toBeInTheDocument();
-    expect(within(stateOf("linux-revoked")).getAllByText("Revoked").length).toBeGreaterThan(0);
-    expect(within(stateOf("linux-new")).getByText("Pending")).toBeInTheDocument();
+    expect(within(stateOf("ravenslg")).getByText("En línea")).toBeInTheDocument();
+    expect(within(stateOf("linux-off")).getByText("Sin conexión")).toBeInTheDocument();
+    expect(within(stateOf("linux-revoked")).getAllByText("Revocado").length).toBeGreaterThan(0);
+    expect(within(stateOf("linux-new")).getByText("Pendiente")).toBeInTheDocument();
     expect(within(stateOf("linux-revoked")).getByRole("button", { name: "Reactivar…" })).toBeInTheDocument();
   });
 
   it("filters by state from the summary cards", async () => {
     renderPage();
     await screen.findByText("ravenslg");
-    fireEvent.click(screen.getByRole("button", { name: /Revoked/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Revocados/ }));
     expect(screen.queryByText("ravenslg")).not.toBeInTheDocument();
     expect(screen.getByText("linux-revoked")).toBeInTheDocument();
   });
@@ -258,6 +258,49 @@ describe("Add agent wizard", () => {
     fireEvent.click(within(dialog).getByRole("tab", { name: "Archivo (-TokenFile)" }));
     expect(commands().join("\n")).toContain("-TokenFile .\\enrollment.token");
     expect(commands().join("\n")).not.toContain(TOKEN);
+  });
+
+  it("macOS: token restringido a macos, pasos con macosInstallSteps y aviso de paquete sin firmar", async () => {
+    routes["POST /console/enrollment-tokens"] = () => ({
+      status: 201,
+      body: { ...tokenRow({ expected_platform: "macos" }), token: TOKEN },
+    });
+    const dialog = await openWizard();
+    fireEvent.click(within(dialog).getByRole("radio", { name: /macOS/ }));
+    fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
+    expect(dialog).toHaveTextContent("Plataforma macOS · un solo uso");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Generar token de instalación" }));
+    await within(dialog).findByLabelText("Token de instalación");
+
+    const create = calls.find((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")!;
+    expect(JSON.parse(create.init.body as string)).toEqual({ expected_platform: "macos", max_uses: 1 });
+    expect(dialog).toHaveTextContent("no está firmado ni notarizado");
+    const commands = () => within(dialog).getAllByText((_, el) => el?.tagName === "PRE").map((el) => el.textContent);
+    expect(commands().join("\n")).toContain("sudo installer -pkg ./sentra-agent-*-macos-arm64-unsigned.pkg -target /");
+    expect(commands().join("\n")).toContain("sudo launchctl print system/com.sentra.agent");
+    // El token nunca va en un comando: el instalador de macOS solo admite --token-file.
+    expect(commands().join("\n")).not.toContain(TOKEN);
+    expect(dialog).not.toHaveTextContent("Paquete Debian");
+
+    fireEvent.change(within(dialog).getByLabelText("Arquitectura"), { target: { value: "x86_64" } });
+    fireEvent.change(within(dialog).getByLabelText("Paquete"), { target: { value: "tarball" } });
+    expect(commands().join("\n")).toContain("tar xzf sentra-agent-*-macos-x86_64.tar.gz");
+    expect(commands().join("\n")).toContain("--token-file ./enrollment.token");
+  });
+
+  it("muestra macOS como plataforma de agentes y de tokens", async () => {
+    routes["GET /agents"] = () => ({
+      body: {
+        summary: { ...SUMMARY, total: 1 },
+        items: [agent({ hostname: "mac-ana", os_name: "Darwin", platform: "macos" })],
+      },
+    });
+    routes["GET /console/enrollment-tokens"] = () => ({ body: { items: [tokenRow({ expected_platform: "macos" })] } });
+    renderPage();
+    const row = (await screen.findByText("mac-ana")).closest("tr")!;
+    expect(within(row).getByText("macOS")).toBeInTheDocument();
+    const tokens = await screen.findByRole("region", { name: "Tokens de instalación" });
+    await waitFor(() => expect(within(tokens).getByText("macOS")).toBeInTheDocument());
   });
 
   it("suggests the server URL, warns about HTTP and loopback and validates it", async () => {
@@ -426,7 +469,7 @@ describe("Revocation", () => {
     await waitFor(() => expect(within(row).getByRole("button", { name: "Reactivar…" })).toBeEnabled());
     fireEvent.click(within(row).getByRole("button", { name: "Reactivar…" }));
     const confirm = screen.getByRole("dialog", { name: "Reactivar agente" });
-    expect(confirm).toHaveTextContent("Re-enrollment required");
+    expect(confirm).toHaveTextContent("Requiere volver a registrarse");
     fireEvent.click(within(confirm).getByRole("button", { name: "Reactivar" }));
 
     const wizard = await screen.findByRole("dialog", { name: "Añadir agente" });
@@ -485,7 +528,7 @@ describe("Revocation", () => {
     renderPage();
     const panel = await screen.findByRole("region", { name: "Tokens de instalación" });
     await within(panel).findByText("pc-ana");
-    for (const state of ["Active", "Consumed", "Expired", "Revoked"]) {
+    for (const state of ["Activo", "Usado", "Caducado", "Revocado"]) {
       expect(within(panel).getByText(state)).toBeInTheDocument();
     }
     expect(within(panel).getAllByRole("button", { name: "Revocar" })).toHaveLength(1); // only active

@@ -12,7 +12,18 @@ SNMP_SCHEMA_VERSION = 1
 
 # Módulos en el orden en que el sensor los consulta. "system" siempre va: sin él no hay
 # identidad del equipo y el resto no se puede interpretar.
-MODULES: tuple[str, ...] = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan")
+# Fase 6C.3: "wlan" (IEEE802dot11-MIB, AIRESPACE-WIRELESS-MIB, UBNT-UniFi-MIB) solo se pide a
+# sensores que declaran snmp.wlan (0.4.0+): un sensor 0.3.0 rechazaría un módulo desconocido.
+MODULES: tuple[str, ...] = (
+    "system",
+    "entity",
+    "interfaces",
+    "lldp",
+    "cdp",
+    "bridge",
+    "vlan",
+    "wlan",
+)
 MODULE_CAPABILITY = {name: f"snmp.{name}" for name in MODULES}
 VERSION_CAPABILITY = {"v3": "snmp.v3", "v2c": "snmp.v2c"}
 SNMP_CAPABILITIES = frozenset(MODULE_CAPABILITY.values()) | frozenset(VERSION_CAPABILITY.values())
@@ -170,4 +181,5 @@ def evidence_source(module: str) -> str:
         "vlan": "snmp:Q-BRIDGE-MIB",
         "entity": "snmp:ENTITY-MIB",
         "system": "snmp:SNMPv2-MIB",
+        "wlan": "snmp:IEEE802dot11-MIB/AIRESPACE-WIRELESS-MIB/UBNT-UniFi-MIB",
     }[module]

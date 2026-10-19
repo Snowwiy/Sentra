@@ -1,4 +1,5 @@
 from datetime import datetime
+from typing import Literal
 from uuid import UUID
 
 from app.schemas.common import ResponseModel
@@ -34,12 +35,31 @@ class DashboardDetections(ResponseModel):
     by_severity: dict[str, int]
 
 
+EvaluationState = Literal[
+    "no_catalog",
+    "pending",
+    "insufficient_catalog",
+    "vulnerabilities_found",
+    "no_vulnerabilities",
+]
+
+
 class DashboardVulnerabilities(ResponseModel):
     # Fase 5B. Findings activos (open, acknowledged, mitigating) con evidencia confirmed o
     # probable, por severidad. Los potenciales van aparte: nunca cuentan como confirmados.
     by_severity: dict[str, int]
     potential: int
     assets_affected: int
+    # Fase 6C.4: distingue "no hay vulnerabilidades" de "no hay catálogo suficiente":
+    # no_catalog (ningún registro), pending (nada evaluado aún), insufficient_catalog (los
+    # activos evaluados no tienen ningún componente descrito por el catálogo),
+    # vulnerabilities_found o no_vulnerabilities. Campos añadidos: el contrato anterior sigue.
+    evaluation_state: EvaluationState = "no_catalog"
+    # Alguna fuente con registros sin actualizar en VULN_SOURCE_STALE_HOURS.
+    catalog_stale: bool = False
+    assets_evaluated: int = 0
+    assets_covered: int = 0
+    assets_pending: int = 0
 
 
 class DashboardSummary(ResponseModel):

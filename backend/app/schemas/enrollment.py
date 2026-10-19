@@ -7,7 +7,7 @@ from pydantic import Field
 from app.models.enrollment import EnrollmentTokenState
 from app.schemas.common import RequestModel, ResponseModel
 
-Platform = Literal["windows", "linux"]
+Platform = Literal["windows", "linux", "macos"]
 
 
 class EnrollmentTokenCreate(RequestModel):

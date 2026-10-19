@@ -33,6 +33,7 @@ def dashboard_summary(
         session,
         timedelta(seconds=settings.heartbeat_timeout_seconds),
         resolve_site(session, site_id),
+        catalog_stale_after=timedelta(hours=settings.vuln_source_stale_hours),
     )
     return service.summary(
         include_incidents=ctx.has(Permission.INCIDENTS_READ),

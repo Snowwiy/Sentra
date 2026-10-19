@@ -20,8 +20,8 @@ import { SiteScopeChip } from "../site/SiteSelector";
 
 const CARDS: { key: SensorStatus | ""; label: string; className: string }[] = [
   { key: "", label: "Total", className: "" },
-  { key: "online", label: "Online", className: "stat--online" },
-  { key: "offline", label: "Offline", className: "stat--offline" },
+  { key: "online", label: "En línea", className: "stat--online" },
+  { key: "offline", label: "Sin conexión", className: "stat--offline" },
   { key: "stale", label: "Stale", className: "" },
   { key: "pending", label: "Pendientes", className: "stat--unknown" },
   { key: "revoked", label: "Revocados", className: "stat--revoked" },

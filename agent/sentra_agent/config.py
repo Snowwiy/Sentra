@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
+from sentra_agent.credentials import resolve_store
+
 INSTALLATION_METHOD = re.compile(r"[a-z][a-z0-9_]{0,31}")
 
 
@@ -56,6 +58,17 @@ class AgentConfig:
     # Sin valor (ejecución manual o instalaciones anteriores) no se envía nada: los
     # servidores antiguos no conocen el campo.
     installation_method: str | None = None
+    # Fase 6C.5: dónde se guarda el token propio del agente. "auto" = DPAPI en Windows,
+    # Keychain en macOS (el daemon usa el keychain del sistema) y fichero 0600 en Linux.
+    # En macOS "file" es una elección explícita del administrador (fichero 0600 en un
+    # directorio 0700 del usuario del agente) para equipos sin Keychain utilizable; si el
+    # Keychain falla con "auto"/"keychain" el agente se detiene, nunca pasa a fichero solo.
+    credential_store: str = "auto"
+    # Fase 6C.5: estado Wi-Fi pasivo dentro del inventario (sin escaneo ni credenciales).
+    # Se puede desactivar; con intervalo 0 se lee en cada inventario y con otro valor como
+    # mucho una vez por ese intervalo (viaja en el inventario: nunca más a menudo que él).
+    wireless_enabled: bool = True
+    wireless_interval_seconds: int = 0
 
     def validate(self) -> "AgentConfig":
         parsed = urlparse(self.api_url)
@@ -82,6 +95,13 @@ class AgentConfig:
             self.installation_method
         ):
             raise ValueError("installation_method must match [a-z][a-z0-9_]{0,31}")
+        # Mismas reglas que credentials.resolve_store (keychain solo en macOS, Windows
+        # siempre DPAPI): un valor que no aplica aquí es un error de configuración.
+        resolve_store(self.credential_store)
+        if self.wireless_interval_seconds != 0 and not (
+            60 <= self.wireless_interval_seconds <= 86400
+        ):
+            raise ValueError("wireless_interval_seconds must be 0 or between 60 and 86400")
         return self
 
 
@@ -90,6 +110,15 @@ _ENV_PREFIX = "SENTRA_AGENT_"
 
 def _coerce(name: str, value: Any) -> Any:
     target = {f.name: f.type for f in fields(AgentConfig)}[name]
+    if target in (bool, "bool"):
+        if isinstance(value, bool):
+            return value
+        text = str(value).strip().lower()
+        if text in ("1", "true", "yes", "on"):
+            return True
+        if text in ("0", "false", "no", "off"):
+            return False
+        raise ValueError(f"{name} must be true or false, got {value!r}")
     if target in (int, "int"):
         return int(value)
     if target in (float, "float"):

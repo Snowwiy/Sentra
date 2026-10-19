@@ -7,3 +7,9 @@
 *.timer text eol=lf
 agent/packaging/linux/debian/* text eol=lf
 agent/pyproject.toml text eol=lf
+# Fase 6C.5: el paquete macOS (scripts del .pkg sin extensión, plist de launchd y newsyslog).
+agent/packaging/macos/scripts/* text eol=lf
+agent/packaging/macos/*.plist text eol=lf
+agent/packaging/macos/*.conf text eol=lf
+agent/packaging/macos/*.in text eol=lf
+agent/tests/fixtures/wifi/netsh_*.txt whitespace=-blank-at-eol,-blank-at-eof

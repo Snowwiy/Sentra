@@ -20,6 +20,7 @@ import { CriticalityBadge, RiskCell } from "../components/risk/RiskBadges";
 import { Pager } from "../components/ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { AssetStateBadge } from "../components/StatusBadge";
+import { VulnSummaryCard } from "../components/vulnerabilities/VulnSummaryCard";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { typeWithConfidence } from "../lib/identity";
@@ -41,10 +42,10 @@ import {
 type Filter = AssetStatus | "all";
 
 const STAT_CARDS: { key: Filter; label: string }[] = [
-  { key: "all", label: "Total Assets" },
-  { key: "online", label: "Online" },
-  { key: "offline", label: "Offline" },
-  { key: "unknown", label: "Unknown" },
+  { key: "all", label: "Total de activos" },
+  { key: "online", label: "En línea" },
+  { key: "offline", label: "Sin conexión" },
+  { key: "unknown", label: "Desconocidos" },
 ];
 
 // Fase 4M: el listado se pagina, filtra y ordena en el servidor. Nunca se descargan todos
@@ -352,13 +353,7 @@ export function DashboardPage() {
           {kpis.active_alerts} alertas activas
         </p>
       )}
-      {kpis?.vulnerabilities && (
-        <p className="muted small" aria-label="Resumen de vulnerabilidades">
-          <Link to="/vulnerabilities">Vulnerabilidades</Link>: críticas {kpis.vulnerabilities.by_severity.critical ?? 0} ·
-          altas {kpis.vulnerabilities.by_severity.high ?? 0} · {kpis.vulnerabilities.assets_affected} activos afectados
-          · {kpis.vulnerabilities.potential} potenciales sin confirmar
-        </p>
-      )}
+      {kpis?.vulnerabilities && <VulnSummaryCard data={kpis.vulnerabilities} />}
 
       {scopeId ? (
         // El resumen SOC de incidentes es global; con un site elegido se usan los KPIs del alcance.
@@ -436,7 +431,7 @@ export function DashboardPage() {
                   <th>CPU</th>
                   <th>RAM</th>
                   <th>Disco</th>
-                  <th>Last Seen</th>
+                  <th>Última actividad</th>
                 </tr>
               </thead>
               <tbody>
@@ -452,7 +447,7 @@ export function DashboardPage() {
                         <AssetName asset={asset} showIp={false} />
                       </td>
                       <td>
-                        {/* Fase 5C.2: Stale / Candidato a limpieza / Archivado ganan a Online/Offline. */}
+                        {/* Fase 5C.2: Inactivo / Candidato a limpieza / Archivado ganan a En línea / Sin conexión. */}
                         <AssetStateBadge asset={asset} />
                       </td>
                       <td>
