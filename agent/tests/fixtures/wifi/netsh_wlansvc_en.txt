@@ -1,0 +1,1 @@
+The Wireless AutoConfig Service (wlansvc) is not running.

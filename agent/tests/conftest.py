@@ -15,8 +15,10 @@ from typing import Any
 
 import pytest
 
+from sentra_agent import credentials, wifi
 from sentra_agent.client import SentraClient
 from sentra_agent.config import AgentConfig
+from sentra_agent.credentials import CredentialStoreUnavailableError
 from sentra_agent.identity import IdentityStore
 
 ENROLLMENT_KEY = "test-enrollment-key-0123456789"
@@ -272,3 +274,53 @@ def make_client(config: AgentConfig) -> SentraClient:
 
 def make_store(config: AgentConfig) -> IdentityStore:
     return IdentityStore(config.state_dir)
+
+
+class FakeKeychain:
+    """Keychain en memoria (Fase 6C.5): los tests nunca tocan el Keychain real del equipo.
+
+    También en macOS (CI): sin esto, cada IdentityStore escribiría en el keychain de login
+    del usuario del runner.
+    """
+
+    def __init__(self) -> None:
+        self.items: dict[str, str] = {}
+        self.available = True
+        self.calls: list[tuple[str, str]] = []
+
+    def check(self) -> None:
+        if not self.available:
+            raise CredentialStoreUnavailableError("Keychain locked or not writable (test)")
+
+    def get(self, account: str) -> str | None:
+        self.check()
+        self.calls.append(("get", account))
+        return self.items.get(account)
+
+    def set(self, account: str, secret: str) -> None:
+        self.check()
+        self.calls.append(("set", account))
+        self.items[account] = secret
+
+    def delete(self, account: str) -> None:
+        self.check()
+        self.calls.append(("delete", account))
+        self.items.pop(account, None)
+
+
+@pytest.fixture(autouse=True)
+def fake_keychain(monkeypatch: pytest.MonkeyPatch) -> FakeKeychain:
+    keychain = FakeKeychain()
+    monkeypatch.setattr(credentials, "keychain_factory", lambda: keychain)
+    return keychain
+
+
+@pytest.fixture(autouse=True)
+def _no_host_wireless(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """El agente de los tests no lee el Wi-Fi real del equipo (Fase 6C.5).
+
+    Los resultados no deben depender de si el equipo de pruebas tiene nmcli, netsh o un
+    adaptador; los tests del colector lo prueban con fixtures (marca `host_wireless`).
+    """
+    if request.node.get_closest_marker("host_wireless") is None:
+        monkeypatch.setattr(wifi, "collect_wireless", lambda platform=None: None)

@@ -41,6 +41,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "sensor-maintenance": _BASE + 13,
     # Fase 6B: consultas SNMP periódicas y retención opt-in del historial de red.
     "network-maintenance": _BASE + 14,
+    # Fase 6C.4: sincronización opt-in de fuentes oficiales del catálogo (NVD, OSV).
+    "vulnerability-sources": _BASE + 16,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.
@@ -55,6 +57,11 @@ THREAT_SOURCE_LOCK_BASE = _BASE + 0x10_000
 
 def threat_source_lock_key(source_id: int) -> int:
     return THREAT_SOURCE_LOCK_BASE + source_id
+
+
+# Fase 6C.4: una importación o sincronización a la vez por fuente oficial del catálogo (la
+# clave es fija por fuente, no por id de fila: la fila puede no existir todavía).
+VULN_SOURCE_LOCK_KEYS: dict[str, int] = {"nvd": _BASE + 0x20_001, "osv": _BASE + 0x20_002}
 
 
 @contextmanager

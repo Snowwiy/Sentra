@@ -24,8 +24,8 @@ export const RULE_LABELS: Record<AlertRule, string> = {
 
 const SEVERITY_LABELS: Record<AlertSeverity, string> = {
   info: "Info",
-  warning: "Warning",
-  critical: "Critical",
+  warning: "Advertencia",
+  critical: "Crítica",
 };
 
 export function SeverityBadge({ severity }: { severity: AlertSeverity }) {

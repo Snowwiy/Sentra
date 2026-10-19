@@ -1,6 +1,9 @@
 """Minimal JSON client for the Sentra API using only the standard library."""
 
 import json
+import os
+import ssl
+import sys
 import urllib.error
 import urllib.request
 from datetime import UTC, datetime
@@ -41,10 +44,26 @@ class ApiError(Exception):
         return error.get("code") if isinstance(error, dict) else None
 
 
+# Fase 6C.5: raíces de confianza que Apple mantiene en macOS. El Python de python.org trae su
+# propio OpenSSL sin certificados (hasta ejecutar "Install Certificates.command"), así que
+# sin esto toda conexión HTTPS fallaría la verificación. Se AÑADEN a las del Python: nunca se
+# desactiva ni se relaja la verificación.
+MACOS_SYSTEM_ROOTS = "/etc/ssl/cert.pem"
+
+
+def tls_context(platform: str | None = None, roots: str = MACOS_SYSTEM_ROOTS) -> ssl.SSLContext:
+    """Contexto TLS verificado (certificado y nombre) con las raíces del sistema."""
+    context = ssl.create_default_context()
+    if (platform or sys.platform) == "darwin" and os.path.isfile(roots):
+        context.load_verify_locations(cafile=roots)
+    return context
+
+
 class SentraClient:
     def __init__(self, api_url: str, timeout: float) -> None:
         self._base = api_url.rstrip("/") + "/api/v1"
         self._timeout = timeout
+        self._tls = tls_context()
 
     def _post(
         self, path: str, payload: dict[str, Any], extra_headers: dict[str, str] | None = None
@@ -64,7 +83,9 @@ class SentraClient:
         try:
             # The timeout covers connect and each socket read, so a hung server can never
             # block the agent loop indefinitely.
-            with urllib.request.urlopen(request, timeout=self._timeout) as response:  # noqa: S310
+            with urllib.request.urlopen(  # noqa: S310
+                request, timeout=self._timeout, context=self._tls
+            ) as response:
                 body: dict[str, Any] = json.loads(response.read() or b"{}")
                 return body
         except urllib.error.HTTPError as error:

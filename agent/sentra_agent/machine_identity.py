@@ -6,7 +6,8 @@ agente, el servidor puede proponer "este agente parece corresponder a un activo 
 
 Cómo se protege:
 - se lee un identificador que el sistema ya genera (Linux /etc/machine-id, Windows
-  MachineGuid); no se crea nada, no hace falta privilegio y no se leen números de serie;
+  MachineGuid, macOS IOPlatformUUID desde la Fase 6C.5); no se crea nada, no hace falta
+  privilegio y no se leen números de serie;
 - nunca sale del equipo en claro: se envía HMAC-SHA256(clave=id, mensaje=APP_ID), el mismo
   esquema que systemd recomienda para identificadores derivados por aplicación
   (sd_id128_get_machine_app_specific). Otra aplicación con el mismo id obtiene otro valor;
@@ -73,6 +74,14 @@ def _windows_raw() -> str | None:
     return value if isinstance(value, str) else None
 
 
+def _macos_raw() -> str | None:
+    # IOPlatformUUID (formato GUID, lo valida derive()). macos.platform_uuid solo extrae esa
+    # línea de la salida de ioreg: el número de serie que la acompaña nunca se lee.
+    from sentra_agent.macos import platform_uuid
+
+    return platform_uuid()
+
+
 _cached: tuple[bool, str | None] = (False, None)
 
 
@@ -81,7 +90,12 @@ def machine_id_hash() -> str | None:
     global _cached
     if _cached[0]:
         return _cached[1]
-    raw = _windows_raw() if sys.platform == "win32" else _linux_raw()
+    if sys.platform == "win32":
+        raw = _windows_raw()
+    elif sys.platform == "darwin":
+        raw = _macos_raw()
+    else:
+        raw = _linux_raw()
     result = derive(raw) if raw else None
     if result is None:
         logger.info("machine identity not available; duplicate detection uses other evidence")

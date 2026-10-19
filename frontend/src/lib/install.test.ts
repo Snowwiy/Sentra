@@ -4,6 +4,7 @@ import {
   installSteps,
   isEnrollmentToken,
   lifetimeMinutes,
+  macosInstallSteps,
   psQuote,
   shellQuote,
   timeLeft,
@@ -101,6 +102,36 @@ describe("windowsInstallSteps", () => {
     expect(text).toContain("-Server 'http://192.168.50.201:8000' -Reenroll");
     expect(() => windowsInstallSteps({ serverUrl: "http://x'; Remove-Item C:\\ #", method: "prompt" })).toThrow();
     expect(psQuote("a'b")).toBe("'a''b'");
+  });
+});
+
+describe("macosInstallSteps", () => {
+  const serverUrl = "https://sentra.example.lan:8443/";
+
+  it("pkg: installer from Terminal, then setup with a private token file", () => {
+    const steps = macosInstallSteps({ serverUrl, pkg: "pkg", arch: "arm64" });
+    const text = steps.map((s) => s.command).join("\n");
+    expect(steps.map((s) => s.command)).toEqual([
+      "(umask 077; printf 'Token de instalación: '; read -rs t && printf '%s\\n' \"$t\" > enrollment.token); echo",
+      "sudo installer -pkg ./sentra-agent-*-macos-arm64-unsigned.pkg -target /",
+      "sudo /Library/Sentra/Agent/bin/sentra-agent-setup --server 'https://sentra.example.lan:8443' --token-file ./enrollment.token",
+      "sudo launchctl print system/com.sentra.agent",
+    ]);
+    // zsh: -p en read no es un aviso; y el token nunca va en un comando.
+    expect(text).not.toContain("read -rsp");
+    expect(text).not.toContain("--token ");
+    expect(steps.some((s) => s.secret)).toBe(false);
+  });
+
+  it("tarball: extracts the Intel package and runs its installer", () => {
+    const text = macosInstallSteps({ serverUrl, pkg: "tarball", arch: "x86_64" }).map((s) => s.command).join("\n");
+    expect(text).toContain("tar xzf sentra-agent-*-macos-x86_64.tar.gz");
+    expect(text).toContain("sudo ./sentra-agent-*-macos-x86_64/install-sentra-agent.sh --server 'https://sentra.example.lan:8443' --token-file ./enrollment.token");
+    expect(text).not.toContain("sentra_et_");
+  });
+
+  it("rejects unsafe URLs", () => {
+    expect(() => macosInstallSteps({ serverUrl: "http://x'; rm -rf / #", pkg: "pkg", arch: "arm64" })).toThrow();
   });
 });
 

@@ -1,0 +1,5 @@
+*:7C\:10\:C9\:AA\:BB\:CC:Oficina-5G:44:5220 MHz:92:WPA2:wlp2s0
+ :7C\:10\:C9\:AA\:BB\:CD:Oficina-5G:11:2462 MHz:40:WPA2:wlp2s0
+ :9A\:8B\:7C\:6D\:5E\:4F::100:5500 MHz:30:WPA2 WPA3:wlp2s0
+ :00\:1A\:2B\:3C\:4D\:5E:Cafe\:Bar:6:2437 MHz:55::wlp2s0
+ :11\:22\:33\:44\:55\:66:Edificio-6G:37:6135 MHz:20:WPA3:wlp2s0

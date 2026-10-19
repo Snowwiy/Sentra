@@ -8,7 +8,7 @@ from uuid import UUID
 from app.models.asset import AssetStatus, MonitoringMethod
 from app.schemas.common import ResponseModel
 
-AgentPlatform = Literal["windows", "linux", "other"]
+AgentPlatform = Literal["windows", "linux", "macos", "other"]
 
 
 class CredentialStatus(enum.StrEnum):

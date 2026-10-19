@@ -738,6 +738,10 @@ def run_network_maintenance(session: Session, settings: Settings) -> dict[str, i
     counts = schedule_due_polls(session, settings)
     if settings.snmp_history_retention_days:
         counts.update(purge_history(session, settings.snmp_history_retention_days))
+    if settings.wlan_history_retention_days:
+        from app.services.wlan_service import purge_wlan_history
+
+        counts.update(purge_wlan_history(session, settings.wlan_history_retention_days))
     if any(counts.values()):
         logger.info("network maintenance", extra={f"network_{k}": v for k, v in counts.items()})
     return counts

@@ -24,6 +24,7 @@ import {
   VulnSeverityBadge,
 } from "../components/vulnerabilities/VulnBadges";
 import { EpssBadge, KevBadge } from "../components/threatintel/IntelBadges";
+import { CatalogStatusNote } from "../components/vulnerabilities/CatalogSources";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import type { SortState } from "../lib/listing";
 import { useDebounced } from "../lib/useDebounced";
@@ -180,10 +181,7 @@ export function VulnerabilitiesPage() {
               {SEVERITY_ORDER.filter((s) => s !== "informational")
                 .map((s) => `${SEVERITY_LABELS[s]}: ${o.by_severity[s] ?? 0}`)
                 .join(" · ")}{" "}
-              (confirmadas y probables activas) · {o.assets_affected} activos afectados · catálogo local:{" "}
-              {o.catalog_records} registros
-              {o.last_import_at ? `, importado ${formatRelative(o.last_import_at)}` : ", sin importar"}
-              {o.evaluation_pending > 0 && ` · ${o.evaluation_pending} activos pendientes de evaluar`}
+              (confirmadas y probables activas) · {o.assets_affected} activos afectados
             </p>
           )}
         </div>
@@ -191,20 +189,14 @@ export function VulnerabilitiesPage() {
           <Link className="button" to="/vulnerabilities/exposure">
             Exposición
           </Link>
-          {auth.can("vulnerabilities:admin") && (
-            <Link className="button" to="/vulnerabilities/catalog">
-              Catálogo
-            </Link>
-          )}
+          <Link className="button" to="/vulnerabilities/catalog">
+            Catálogo
+          </Link>
         </div>
       </div>
 
-      {o && o.catalog_records === 0 && (
-        <div className="banner" role="note">
-          No hay catálogo de vulnerabilidades importado. Sentra no consulta fuentes externas: un administrador debe
-          importar un catálogo local para evaluar el software inventariado.
-        </div>
-      )}
+      {/* Fase 6C.4: «sin vulnerabilidades» solo significa algo si hay catálogo al día. */}
+      <CatalogStatusNote />
 
       <section className="stats stats--6" aria-label="Resumen de vulnerabilidades">
         {CARDS.map((card) => (
@@ -309,8 +301,9 @@ export function VulnerabilitiesPage() {
           <ErrorState message={errorMessage(error)} onRetry={refresh} />
         ) : !data || data.items.length === 0 ? (
           <EmptyState title="Sin vulnerabilidades para este filtro">
-            Sentra compara el software inventariado por los agentes con el catálogo local. Un puerto abierto no es una
-            vulnerabilidad.
+            Sentra compara el software inventariado por los agentes con el catálogo (NVD, OSV o catálogos locales). Sin
+            catálogo o con un catálogo que no cubre ese software, que no haya resultados no significa que no haya
+            vulnerabilidades. Un puerto abierto no es una vulnerabilidad.
           </EmptyState>
         ) : (
           <>

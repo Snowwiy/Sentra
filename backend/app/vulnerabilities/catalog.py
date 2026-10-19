@@ -36,7 +36,9 @@ from pydantic import (
     model_validator,
 )
 
+from app.vulnerabilities import cpe as cpe_mod
 from app.vulnerabilities import normalize, versions
+from app.vulnerabilities.product_map import MAX_PRODUCTS, ProductIdentity, ProductIn
 from app.vulnerabilities.versions import Scheme, VersionError
 
 FORMAT = "sentra-vuln-catalog/1"
@@ -62,7 +64,8 @@ _EXTERNAL_ID = re.compile(r"^[A-Za-z][A-Za-z0-9]{1,15}-[A-Za-z0-9][A-Za-z0-9._:-
 _CVE = re.compile(r"^CVE-\d{4}-\d{4,7}$")
 _CWE = re.compile(r"^(?:CWE-\d{1,6}|NVD-CWE-Other|NVD-CWE-noinfo)$")
 _CVSS_SEGMENT = re.compile(r"^[A-Za-z]{1,3}:[A-Za-z0-9]{1,3}$")
-# CPE 2.3 "formatted string" (13 campos) o URI 2.2. Solo se guarda: no se usa para casar.
+# CPE 2.3 "formatted string" (13 campos) o URI 2.2. En `cpe` solo se guarda: para casar por
+# CPE hace falta una entrada de tipo "cpe" con `cpe_match` (Fase 6C.4).
 _CPE23 = re.compile(r"^cpe:2\.3:[aho*\-](?::(?:[^:\s\\]|\\.){1,200}){10}$")
 _CPE22 = re.compile(r"^cpe:/[aho](?::[^:\s]{0,200}){1,6}$")
 _PURL = re.compile(r"^pkg:[a-z][a-z0-9.+-]{0,30}/[^\s]{1,250}$")
@@ -194,6 +197,63 @@ class PackageIn(_Strict):
         return value.lower()
 
 
+# Versión de un límite de CPE (NVD): texto corto sin espacios ni caracteres de control. No se
+# exige que sea parseable: si no lo es en el esquema de la entrada, el matcher lo trata como
+# "no comparable" (potential), nunca como afectada.
+_CPE_VERSION = re.compile(r"^[^\s\x00-\x1f\x7f]{1,128}$")
+_DISTRO = re.compile(r"^[a-z][a-z0-9-]{1,30}(?::[a-z0-9.]{1,20}){0,2}$")
+
+
+class CpeMatchIn(_Strict):
+    """Un cpeMatch vulnerable de NVD: criterio CPE 2.3 y, si los hay, límites de versión."""
+
+    criteria: str = Field(max_length=cpe_mod.MAX_CPE_LENGTH)
+    version_start_including: str | None = Field(default=None, max_length=128)
+    version_start_excluding: str | None = Field(default=None, max_length=128)
+    version_end_including: str | None = Field(default=None, max_length=128)
+    version_end_excluding: str | None = Field(default=None, max_length=128)
+
+    @field_validator("criteria")
+    @classmethod
+    def _check_criteria(cls, value: str) -> str:
+        try:
+            cpe_mod.parse(value)
+        except cpe_mod.CpeError as exc:
+            raise ValueError(f"invalid CPE: {exc}") from None
+        return value
+
+    @field_validator(
+        "version_start_including",
+        "version_start_excluding",
+        "version_end_including",
+        "version_end_excluding",
+    )
+    @classmethod
+    def _check_bound(cls, value: str | None) -> str | None:
+        if value is not None and not _CPE_VERSION.match(value):
+            raise ValueError("invalid version bound")
+        return value
+
+    @model_validator(mode="after")
+    def _check(self) -> "CpeMatchIn":
+        if self.version_start_including and self.version_start_excluding:
+            raise ValueError("at most one lower bound")
+        if self.version_end_including and self.version_end_excluding:
+            raise ValueError("at most one upper bound")
+        bounded = any(
+            (
+                self.version_start_including,
+                self.version_start_excluding,
+                self.version_end_including,
+                self.version_end_excluding,
+            )
+        )
+        if bounded and cpe_mod.is_concrete(cpe_mod.parse(self.criteria).version):
+            # NVD usa o versión concreta en el criterio o un rango, nunca las dos cosas.
+            raise ValueError("a concrete CPE version cannot be combined with bounds")
+        return self
+
+
 _DEFAULT_SCHEME: dict[str, Scheme] = {
     "deb": "dpkg",
     "rpm": "rpm",
@@ -203,7 +263,9 @@ _DEFAULT_SCHEME: dict[str, Scheme] = {
 
 
 class AffectedIn(_Strict):
-    type: Literal["application", "os", "package"] = "application"
+    # cpe (Fase 6C.4): producto identificado por CPE 2.3 (NVD); casa solo con componentes que
+    # tienen un identificador declarado (product_map.py) o con la build de Windows.
+    type: Literal["application", "os", "package", "cpe"] = "application"
     product: str = Field(min_length=1, max_length=128)
     vendor: str | None = Field(default=None, max_length=128)
     # Nombres EXACTOS (se normalizan con normalize.normalize_name) bajo los que el
@@ -218,13 +280,28 @@ class AffectedIn(_Strict):
     os: Literal["windows", "linux-kernel"] | None = None
     version_scheme: Literal["generic", "semver", "windows_build", "dpkg", "rpm"] | None = None
     ranges: list[dict[str, Annotated[str, Field(min_length=1, max_length=128)]]] = Field(
-        min_length=1, max_length=20
+        default_factory=list, max_length=20
     )
+    # Solo type "cpe": cpeMatch vulnerables del mismo producto (los rangos salen de aquí).
+    cpe_match: list[CpeMatchIn] = Field(default_factory=list, max_length=50)
+    # Solo type "cpe": otros CPE que la configuración de NVD exige a la vez (operador AND,
+    # "running on/with"). Sentra no siempre puede verificarlos: limitan el estado.
+    conditions: list[Annotated[str, Field(max_length=cpe_mod.MAX_CPE_LENGTH)]] = Field(
+        default_factory=list, max_length=20
+    )
+    # Solo type "package": distribución y versión a la que se refieren los rangos
+    # ("debian:12", "ubuntu:22.04", "almalinux:9"). Rangos de otra distribución no valen.
+    distro: str | None = Field(default=None, max_length=64)
+    # Solo type "package": los nombres son paquetes FUENTE (Debian en OSV). El inventario dpkg
+    # informa paquetes binarios: coincidir por nombre no prueba que vengan de ese fuente.
+    source_package: bool = False
     fixed_version: str | None = Field(default=None, max_length=128)
     service_ports: list[Annotated[int, Field(ge=1, le=65535)]] = Field(
         default_factory=list, max_length=10
     )
-    platforms: list[Literal["windows", "linux"]] = Field(default_factory=list, max_length=2)
+    platforms: list[Literal["windows", "linux", "macos"]] = Field(
+        default_factory=list, max_length=3
+    )
     cpe: list[Annotated[str, Field(max_length=400)]] = Field(default_factory=list, max_length=20)
     purl: list[Annotated[str, Field(max_length=300)]] = Field(default_factory=list, max_length=20)
 
@@ -270,6 +347,16 @@ class AffectedIn(_Strict):
             raise ValueError("'packages' is only valid for type package")
         if self.type == "application" and not (self.names or self.product):
             raise ValueError("application entries need names")
+        if self.type != "package" and (self.distro is not None or self.source_package):
+            raise ValueError("'distro' and 'source_package' are only valid for type package")
+        if self.distro is not None and not _DISTRO.match(self.distro):
+            raise ValueError("invalid distro")
+        if self.type == "cpe":
+            return self._check_cpe_entry()
+        if self.cpe_match or self.conditions:
+            raise ValueError("'cpe_match' and 'conditions' are only valid for type cpe")
+        if not self.ranges:
+            raise ValueError("ranges: at least one range is required")
         scheme = self.scheme
         try:
             for range_ in self.ranges:
@@ -280,10 +367,35 @@ class AffectedIn(_Strict):
             raise ValueError(f"invalid version range: {exc}") from None
         return self
 
+    def _check_cpe_entry(self) -> "AffectedIn":
+        if not self.cpe_match:
+            raise ValueError("cpe entries need 'cpe_match'")
+        if self.ranges or self.names or self.publishers:
+            # La identidad y los rangos de una entrada cpe salen solo de cpe_match.
+            raise ValueError("cpe entries take ranges and identity only from cpe_match")
+        keys = {cpe_mod.parse(m.criteria).key for m in self.cpe_match}
+        if len(keys) != 1:
+            raise ValueError("all cpe_match entries must share part, vendor and product")
+        for condition in self.conditions:
+            try:
+                cpe_mod.parse(condition)
+            except cpe_mod.CpeError as exc:
+                raise ValueError(f"invalid condition CPE: {exc}") from None
+        return self
+
     @property
     def scheme(self) -> Scheme:
         if self.version_scheme is not None:
             return self.version_scheme
+        if self.type == "cpe":
+            first = cpe_mod.parse(self.cpe_match[0].criteria)
+            if (
+                first.part == "o"
+                and first.vendor == "microsoft"
+                and first.product.startswith("windows")
+            ):
+                return "windows_build"
+            return "generic"
         if self.type == "package":
             return _DEFAULT_SCHEME[self.packages[0].ecosystem]
         if self.type == "os" and self.os is not None:
@@ -294,6 +406,8 @@ class AffectedIn(_Strict):
         keys: list[str] = []
         if self.type == "os" and self.os is not None:
             keys.append(normalize.os_key(self.os))
+        elif self.type == "cpe":
+            keys.extend(cpe_mod.parse(m.criteria).key for m in self.cpe_match)
         elif self.type == "package":
             for package in self.packages:
                 key = normalize.package_key(package.ecosystem, package.name)
@@ -391,6 +505,29 @@ class VulnerabilityIn(_Strict):
         return severity_from_score(self.cvss.score, self.cvss.version)
 
 
+class SourceAffectedIn(AffectedIn):
+    """Entrada afectada que produce un adapter oficial (NVD, OSV): límites más amplios."""
+
+    ranges: list[dict[str, Annotated[str, Field(min_length=1, max_length=128)]]] = Field(
+        default_factory=list, max_length=200
+    )
+    cpe_match: list[CpeMatchIn] = Field(default_factory=list, max_length=500)
+    packages: list[PackageIn] = Field(default_factory=list, max_length=100)
+
+
+class SourceVulnerabilityIn(VulnerabilityIn):
+    """Registro normalizado de una fuente oficial (Fase 6C.4).
+
+    Igual que un registro local, salvo: puede no tener productos afectados (NVD "Awaiting
+    Analysis", CVE sin configuración: se importa para buscarlo y mostrar su KEV/EPSS, pero no
+    casa con nada) y admite más entradas, rangos y referencias. Las mismas defensas de texto,
+    URLs, identificadores y CVSS.
+    """
+
+    references: list[str] = Field(default_factory=list, max_length=200)
+    affected: list[SourceAffectedIn] = Field(default_factory=list, max_length=500)  # type: ignore[assignment]
+
+
 def _scalar_or_list(value: Any) -> Any:
     if isinstance(value, list):
         if len(value) > 20:
@@ -453,6 +590,9 @@ class ValidRecord:
     record: VulnerabilityIn
     severity: str
     content_hash: str
+    # Fase 6C.4: de dónde sale cada atributo del registro (fuente, adapter, recuperación). No
+    # forma parte de content_hash: una nueva descarga del mismo contenido no es un cambio.
+    provenance: dict[str, Any] | None = None
 
     @property
     def external_id(self) -> str:
@@ -468,6 +608,8 @@ class ParsedCatalog:
     size_bytes: int
     total: int = 0
     warnings: list[str] = field(default_factory=list)
+    # Fase 6C.4: identificadores de producto declarados (sección opcional `products`).
+    products: list[ProductIdentity] = field(default_factory=list)
 
 
 def check_depth(text: str, limit: int) -> None:
@@ -540,7 +682,7 @@ def parse_catalog(raw: bytes, limits: CatalogLimits) -> ParsedCatalog:
         raise CatalogFormatError(
             "catalog_invalid_format", f"Unsupported catalog format (expected {FORMAT})"
         )
-    unknown = set(document) - {"format", "source", "vulnerabilities"}
+    unknown = set(document) - {"format", "source", "vulnerabilities", "products"}
     if unknown:
         raise CatalogFormatError("catalog_invalid_format", "Unknown top-level keys in catalog")
     try:
@@ -554,6 +696,7 @@ def parse_catalog(raw: bytes, limits: CatalogLimits) -> ParsedCatalog:
         raise CatalogFormatError(
             "catalog_too_many_records", f"Catalog has more than {limits.max_records} records"
         )
+    products = _parse_products(document.get("products"), source.id)
     records: list[ValidRecord] = []
     invalid: list[InvalidRecord] = []
     seen: set[str] = set()
@@ -586,12 +729,48 @@ def parse_catalog(raw: bytes, limits: CatalogLimits) -> ParsedCatalog:
         sha256=hashlib.sha256(raw).hexdigest(),
         size_bytes=len(raw),
         total=len(items),
+        products=products,
     )
+
+
+def _parse_products(value: Any, source_key: str) -> list[ProductIdentity]:
+    """Sección `products`: identificadores inventario -> CPE. Una entrada inválida rechaza el
+    fichero (son pocas y un error aquí casaría productos equivocados)."""
+    if value is None:
+        return []
+    if not isinstance(value, list) or len(value) > MAX_PRODUCTS:
+        raise CatalogFormatError("catalog_invalid_products", "'products' must be a short list")
+    identities: list[ProductIdentity] = []
+    for index, item in enumerate(value):
+        try:
+            product = ProductIn.model_validate(item)
+        except ValidationError as exc:
+            _, message = _error_message(exc)
+            raise CatalogFormatError(
+                "catalog_invalid_products", f"products[{index}]: {message}"[:300]
+            ) from None
+        identities.extend(product.identities(source_key))
+    return identities
+
+
+# Campos de AffectedIn añadidos en la Fase 6C.4. Con su valor por defecto no entran en la
+# huella: un catálogo local que no los usa conserva la misma huella que antes (reimportarlo
+# no marca todos sus registros como "actualizados" ni reencola activos).
+_NEW_AFFECTED_DEFAULTS: dict[str, Any] = {
+    "cpe_match": [],
+    "conditions": [],
+    "distro": None,
+    "source_package": False,
+}
 
 
 def content_hash(record: VulnerabilityIn) -> str:
     """Huella estable del contenido funcional de un registro (orden de claves fijo)."""
     payload = record.model_dump(mode="json")
+    for entry in payload.get("affected") or []:
+        for key, default in _NEW_AFFECTED_DEFAULTS.items():
+            if key in entry and entry[key] == default:
+                del entry[key]
     return hashlib.sha256(
         json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode()
     ).hexdigest()

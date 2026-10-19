@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Protocol
 from uuid import UUID, uuid4
 
+from sentra_agent import wifi
 from sentra_agent.buffer import BUFFER_FILE, SampleBuffer
 from sentra_agent.client import ApiError, SentraClient, TransportError
 from sentra_agent.collectors import HostInfo, collect_host_info, collect_metrics
@@ -29,6 +30,7 @@ from sentra_agent.commands import (
     result_body,
 )
 from sentra_agent.config import AgentConfig
+from sentra_agent.credentials import resolve_store
 from sentra_agent.events import EventCollector
 from sentra_agent.identity import Identity, IdentityStore
 from sentra_agent.inventory import collect_inventory
@@ -62,12 +64,29 @@ class EventSource(Protocol):
 
 
 def default_event_source(state_dir: Path) -> EventSource:
-    """Visor de eventos en Windows, journal en Linux (Fase 5C.1); nada en otros sistemas."""
+    """Visor de eventos en Windows, journal en Linux (Fase 5C.1), Unified Logging en macOS
+    (Fase 6C.5); nada en otros sistemas."""
     if sys.platform.startswith("linux"):
         from sentra_agent.linux_events import LinuxJournalCollector
 
         return LinuxJournalCollector(state_dir)
+    if sys.platform == "darwin":
+        from sentra_agent.macos_events import MacUnifiedLogCollector
+
+        return MacUnifiedLogCollector(state_dir)
     return EventCollector(state_dir)
+
+
+def default_wireless(config: AgentConfig) -> Callable[[bool], dict[str, Any] | None]:
+    """Lector Wi-Fi pasivo según la configuración (Fase 6C.5); desactivado = nunca se lee."""
+    if not config.wireless_enabled:
+        return lambda force: None
+    # Búsqueda en el módulo en cada lectura (no al crear el agente) para que los tests puedan
+    # sustituir wifi.collect_wireless sin depender del hardware del equipo de pruebas.
+    collector = wifi.WirelessCollector(
+        config.wireless_interval_seconds, collect=lambda: wifi.collect_wireless()
+    )
+    return lambda force: collector.snapshot(force=force)
 
 
 class EnrollmentKeyMissingError(Exception):
@@ -110,6 +129,7 @@ class Agent:
         events: EventSource | None = None,
         stop_event: threading.Event | None = None,
         processes: Callable[[], dict[str, Any]] | None = None,
+        wireless: Callable[[bool], dict[str, Any] | None] | None = None,
     ) -> None:
         self.config = config
         self.client = client
@@ -119,6 +139,9 @@ class Agent:
         self.inventory = inventory
         self.events: EventSource = events or default_event_source(config.state_dir)
         self.processes = processes or ProcessSampler().snapshot
+        # Fase 6C.5: estado Wi-Fi pasivo; viaja como campo opcional `wireless` del inventario
+        # (un servidor anterior lo rechaza como desconocido y _send_adapting lo quita).
+        self.wireless = wireless or default_wireless(config)
         self._events_sent_at: float | None = None
         # Fase 5C.1: última cobertura de eventos enviada y cuándo (se reenvía al cambiar o
         # cada COVERAGE_REFRESH_SECONDS para que el servidor sepa que sigue vigente).
@@ -526,7 +549,7 @@ class Agent:
         )
         if not due:
             return
-        snapshot = self.inventory()
+        snapshot = self._inventory_snapshot(force_wireless=False)
         try:
             self._send_inventory(token, snapshot)
         except ApiError as exc:
@@ -536,6 +559,22 @@ class Agent:
             # large payload every cycle.
             logger.warning("inventory rejected", extra={"body": exc.body})
         self._inventory_sent_at = now
+
+    def _inventory_snapshot(self, force_wireless: bool) -> dict[str, Any]:
+        snapshot = self.inventory()
+        if ("wireless",) in self._unsupported.get("inventory", set()):
+            # El servidor no conoce el campo: no se ejecutan netsh/nmcli/system_profiler para
+            # nada durante el resto de esta ejecución.
+            return snapshot
+        try:
+            wireless = self.wireless(force_wireless)
+        except Exception:
+            # Nunca debería pasar (collect_wireless no lanza): el inventario sale igual.
+            logger.exception("wireless collection failed")
+            wireless = None
+        if wireless is not None:
+            snapshot["wireless"] = wireless
+        return snapshot
 
     def _send_inventory(self, token: str, snapshot: dict[str, Any]) -> None:
         self._send_adapting(
@@ -641,7 +680,8 @@ class Agent:
         }
 
     def _command_inventory(self, token: str) -> tuple[str, dict[str, Any]]:
-        snapshot = self.inventory()
+        # Un inventario pedido por un operador lleva una lectura Wi-Fi nueva.
+        snapshot = self._inventory_snapshot(force_wireless=True)
         self._send_inventory(token, snapshot)
         self._inventory_sent_at = time.monotonic()
         counts = {key: len(value) for key, value in snapshot.items() if isinstance(value, list)}
@@ -672,11 +712,20 @@ class Agent:
     def _command_diagnostics(self, token: str) -> tuple[str, dict[str, Any]]:
         # Solo estado operativo: nunca tokens, claves, rutas de credenciales ni la config
         # completa (que puede llevar la clave de enrollment legacy).
+        host = self.host_info()
         return "Agent diagnostics", {
-            "agent_version": self.host_info().agent_version,
+            "agent_version": host.agent_version,
             "platform": sys.platform,
             "os": platform.system(),
+            "os_version": host.os_version,
+            # Arquitectura del equipo (host) y del proceso: difieren bajo Rosetta 2.
+            "architecture": host.architecture,
+            "process_architecture": platform.machine(),
+            "rosetta": _rosetta(),
             "python": platform.python_version(),
+            # Solo el tipo de almacén ("keychain", "dpapi", "file"), nunca su contenido.
+            "credential_store": _credential_store(self.config.credential_store),
+            "wireless_enabled": self.config.wireless_enabled,
             "uptime_seconds": int(time.monotonic() - self._started_at),
             "intervals": {
                 "cycle": self.config.interval_seconds,
@@ -757,6 +806,22 @@ def _source_coverage(source: EventSource) -> dict[str, str] | None:
         logger.exception("event coverage unavailable")
         return None
     return dict(value) if isinstance(value, dict) and value else None
+
+
+def _rosetta() -> bool | None:
+    """True si el agente corre traducido por Rosetta 2 (solo macOS); None en otro sistema."""
+    if sys.platform != "darwin":
+        return None
+    from sentra_agent.macos import platform_info
+
+    return platform_info(platform.machine()).rosetta
+
+
+def _credential_store(store: str) -> str:
+    try:
+        return resolve_store(store)
+    except ValueError:
+        return "invalid"
 
 
 def _raise_if_forbidden(exc: ApiError) -> None:

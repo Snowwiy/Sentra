@@ -26,6 +26,7 @@ from app.services.alert_service import AlertService, AlertThresholds
 from app.services.change_detection import admin_changes, diff_inventory
 from app.services.identification import refresh_identity
 from app.services.reconciliation import adopt_discovered, interface_identity, primary_mac
+from app.services.wlan_ingest import ingest_agent_wireless
 from app.vulnerabilities.queue import mark_dirty
 
 # Services start one by one after a reboot: their state changes are not news then.
@@ -74,6 +75,10 @@ class InventoryService:
         applied = self._session.execute(upsert).first() is not None
         now = datetime.now(UTC)
         record_contact(self._session, asset, now)
+        if data.wireless is not None:
+            # Fase 6C.3: va al inventario Wi-Fi del site del activo, con su propia regla de
+            # orden (un informe wireless más antiguo que el último no sustituye nada).
+            ingest_agent_wireless(self._session, asset, data.wireless, now)
         if applied:
             # Changes and rules only from the snapshot that is now current; a stale one is
             # older information than what the dashboard already shows.

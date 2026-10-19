@@ -154,7 +154,9 @@ def test_capabilities_are_declared_to_the_server(
 def test_capabilities_by_platform() -> None:
     assert "collect_events" in capabilities("win32")
     assert "collect_events" in capabilities("linux")
-    assert "collect_events" not in capabilities("darwin")
+    # Fase 6C.5: macOS tiene una fuente real (Unified Logging); un sistema sin fuente no.
+    assert "collect_events" in capabilities("darwin")
+    assert "collect_events" not in capabilities("freebsd14")
 
 
 def test_parse_command_accepts_only_the_allowlist() -> None:

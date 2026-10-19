@@ -30,7 +30,10 @@ import socket
 import ssl
 import tempfile
 import time
+from collections.abc import Mapping
 from dataclasses import dataclass
+from datetime import UTC, datetime
+from email.utils import parsedate_to_datetime
 from typing import IO
 from urllib.parse import urljoin, urlsplit
 
@@ -52,10 +55,45 @@ _CGNAT = ipaddress.ip_network("100.64.0.0/10")
 class FetchError(Exception):
     """Fallo de descarga con un código estable y un mensaje sin datos sensibles."""
 
-    def __init__(self, code: str, message: str) -> None:
+    def __init__(
+        self,
+        code: str,
+        message: str,
+        *,
+        status: int | None = None,
+        retry_after: float | None = None,
+    ) -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        # Fase 6C.4: estado HTTP (429, 503...) y Retry-After en segundos, para reintentar
+        # respetando lo que pide la fuente (NVD limita la frecuencia de peticiones).
+        self.status = status
+        self.retry_after = retry_after
+
+
+# Cabeceras que un llamador puede añadir (la API key de NVD). Nunca se registran ni se
+# devuelven en errores. Cualquier otra cabecera se rechaza: no hay cabeceras arbitrarias.
+EXTRA_HEADERS = frozenset({"apiKey"})
+# Retry-After mayor que esto se acota (una fuente no puede bloquear el job indefinidamente).
+MAX_RETRY_AFTER = 3600.0
+
+
+def retry_after_seconds(value: str | None, now: datetime | None = None) -> float | None:
+    """Retry-After en segundos (entero o fecha HTTP), acotado; None si no es válido."""
+    if not value:
+        return None
+    text = value.strip()
+    if text.isdigit():
+        return min(float(text), MAX_RETRY_AFTER)
+    try:
+        when = parsedate_to_datetime(text)
+    except (TypeError, ValueError):
+        return None
+    if when.tzinfo is None:
+        when = when.replace(tzinfo=UTC)
+    delta = (when - (now or datetime.now(UTC))).total_seconds()
+    return min(max(delta, 0.0), MAX_RETRY_AFTER)
 
 
 @dataclass(frozen=True)
@@ -251,28 +289,39 @@ def fetch(
     *,
     etag: str | None = None,
     last_modified: str | None = None,
+    headers: Mapping[str, str] | None = None,
 ) -> FetchResult:
-    """GET con todas las defensas. El llamador debe cerrar FetchResult (fichero temporal)."""
+    """GET con todas las defensas. El llamador debe cerrar FetchResult (fichero temporal).
+
+    `headers`: solo las de EXTRA_HEADERS (API key de NVD). No se reenvían a un host distinto
+    tras una redirección: una redirección a otro sitio nunca recibe la credencial.
+    """
+    extra = dict(headers or {})
+    if set(extra) - EXTRA_HEADERS:
+        raise FetchError("blocked_destination", "Unsupported request header")
     deadline = _Deadline(policy.total_timeout)
+    origin_host = (urlsplit(url).hostname or "").lower()
     current = url
     for _ in range(policy.max_redirects + 1):
         scheme, host, port, target = check_url(current, policy)
-        headers = {
+        request_headers = {
             "User-Agent": USER_AGENT,
             "Accept": "*/*",
             # Sin compresión de transporte: el tamaño leído es el tamaño real.
             "Accept-Encoding": "identity",
         }
         if etag:
-            headers["If-None-Match"] = etag
+            request_headers["If-None-Match"] = etag
         if last_modified:
-            headers["If-Modified-Since"] = last_modified
+            request_headers["If-Modified-Since"] = last_modified
+        if extra and host == origin_host:
+            request_headers.update(extra)
         conn = _connect(scheme, host, port, policy, deadline)
         try:
             try:
                 if conn.sock is not None:
                     conn.sock.settimeout(min(policy.read_timeout, deadline.left()))
-                conn.request("GET", target, headers=headers)
+                conn.request("GET", target, headers=request_headers)
                 response = conn.getresponse()
                 if response.status in (301, 302, 303, 307, 308):
                     location = response.getheader("Location")
@@ -291,7 +340,12 @@ def fetch(
                         if response.status in (408, 429) or response.status >= 500
                         else "http_error"
                     )
-                    raise FetchError(code, f"Source answered HTTP {response.status}")
+                    raise FetchError(
+                        code,
+                        f"Source answered HTTP {response.status}",
+                        status=response.status,
+                        retry_after=retry_after_seconds(response.getheader("Retry-After")),
+                    )
                 declared = response.getheader("Content-Length")
                 if declared and declared.isdigit() and int(declared) > policy.max_bytes:
                     raise FetchError(

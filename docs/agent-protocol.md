@@ -78,9 +78,18 @@ Header `X-Enrollment-Key: <key>`.
 ```
 
 `installation_method` (Fase 4F) es opcional: lo envían solo los agentes instalados por un
-instalador que lo configura (`windows_service`); patrón `^[a-z][a-z0-9_]{0,31}$`. Si un
+instalador que lo configura (`windows_service`, o `macos_launchd` en macOS); patrón
+`^[a-z][a-z0-9_]{0,31}$`. Si un
 servidor anterior lo rechaza (422 `extra_forbidden`), el agente deja de enviarlo en esa
 ejecución y sigue funcionando.
+
+macOS (Fase 6C.5, agente 0.4.0): `os_name` es `"macOS"`, `os_version` la versión y la
+compilación de `sw_vers` (`"15.1 (24B83)"`) y `architecture` la arquitectura **nativa** del
+hardware (`arm64` o `x86_64`), también cuando el Python corre bajo Rosetta (eso solo aparece en
+el diagnóstico). Un agente anterior ejecutado en un Mac informaba `"Darwin"`; el servidor trata
+ambos como plataforma `macos` (tokens con `expected_platform: "macos"`, gestión de agentes y
+catálogo de Response). `machine_id_hash` se deriva de `IOPlatformUUID` (HMAC, nunca el número
+de serie).
 
 | Status | Meaning |
 |--------|---------|
@@ -153,6 +162,47 @@ Body: `agent_id`, `collected_at` and the lists `interfaces`, `users`, `processes
 - `accounts[]`: local accounts with `name`, `enabled`, `is_admin`, `last_logon` (all but `name`
   nullable when the host does not tell). **Never passwords, hashes, tokens or other secrets.**
 - `network`: `{"gateways": [...], "dns_servers": [...]}` (IPv4/IPv6 addresses, ≤ 16 each).
+- macOS (Fase 6C.5): `services[]` son los trabajos de launchd (`launchctl list`), `software[]`
+  los paquetes `.app` de `/Applications` (y un nivel de subcarpetas) más los recibos de
+  paquetes de terceros, `accounts[]` las cuentas de `dscl` (root y UID ≥ 500, sin las de servicio) y `network` la ruta
+  por defecto y los DNS de `scutil --dns`. `software_source` va `null` en macOS hasta que el
+  esquema del inventario admita un valor propio.
+
+### Campo opcional `wireless` (Fase 6C.5)
+
+Wi-Fi **pasivo**: lo que el sistema ya sabe (red conectada y redes de su último escaneo), sin
+escaneo activo y sin leer contraseñas ni perfiles. Lo envía el agente 0.4.0 en Windows
+(`netsh wlan show interfaces` / `show networks mode=bssid`), Linux (`nmcli`, `--rescan no`) y
+macOS (`system_profiler SPAirPortDataType -json`). Un servidor que aún no lo conoce responde
+422 `extra_forbidden` y el agente lo quita y reintenta (ver "Compatibility"). Se desactiva con
+`wireless_enabled = false`; `wireless_interval_seconds` (0 = con cada inventario, o
+60–86400) limita la frecuencia.
+
+```json
+"wireless": {
+  "status": "ok",
+  "source": "macos_system_profiler",
+  "collected_at": "2026-10-16T10:00:00+00:00",
+  "interfaces": [
+    {"name": "en0", "mac": "aa:bb:cc:dd:ee:ff", "connected_ssid": "Oficina",
+     "connected_bssid": "11:22:33:44:55:66"}
+  ],
+  "networks": [
+    {"ssid": "Oficina", "bssid": "11:22:33:44:55:66", "channel": 36, "frequency_mhz": 5180,
+     "band": "5", "security": "WPA2 Personal", "signal_dbm": -52, "signal_quality": 96,
+     "phy_mode": "802.11ax", "connected": true}
+  ]
+}
+```
+
+- `status`: `ok`, `no_adapter`, `permission_limited` (el sistema oculta parte de los datos:
+  Localización en macOS 14.4+ y Windows 11, por ejemplo), `unsupported` (falta la
+  herramienta) o `error`. Con un estado distinto de `ok` las listas pueden venir vacías.
+- `source`: `macos_system_profiler`, `windows_netsh` o `linux_nmcli`.
+- `interfaces` ≤ 8; `networks` ≤ 256. Cualquier campo que el sistema no dé es `null`
+  (`band` es `"2.4"`, `"5"`, `"6"` o `null`; `signal_quality` 0–100).
+- Longitudes que recorta el agente: `ssid` y `name` ≤ 64, `security` ≤ 64, `phy_mode` ≤ 32;
+  `mac`/`bssid` en minúsculas con dos puntos.
 
 When a snapshot replaces an older one, the server records the differences in
 `GET /assets/{id}/changes`: services added/removed/started/stopped/start type changed,
@@ -211,3 +261,53 @@ them).
 ```
 
 Validation errors add `details` with the failing fields.
+
+## Wi-Fi: campo `wireless` de POST /inventory (Fase 6C.3)
+
+Campo opcional de primer nivel de `POST /inventory`. Un agente anterior no lo envía y nada
+cambia; un servidor anterior a 6C.3 lo rechaza con 422 `extra_forbidden` y el agente lo quita
+y reintenta (ver "Compatibility between agent and server versions"). Es una observación
+pasiva de lo que el sistema operativo ya sabe: el agente no lanza escaneos activos propios,
+no usa modo monitor y nunca envía claves, perfiles ni credenciales Wi-Fi.
+
+```json
+{
+  "agent_id": "3f6c1c1e-6b1a-4c55-9e0e-2a7f1c9d8b10",
+  "collected_at": "2026-10-16T10:00:00+00:00",
+  "wireless": {
+    "status": "ok",
+    "source": "windows_netsh",
+    "collected_at": "2026-10-16T09:59:58+00:00",
+    "interfaces": [
+      {"name": "Wi-Fi", "mac": "3C-2E-F9-00-00-01",
+       "connected_ssid": "corp-wifi", "connected_bssid": "00:ca:fe:00:00:10"}
+    ],
+    "networks": [
+      {"ssid": "corp-wifi", "bssid": "00:ca:fe:00:00:10", "channel": 6, "frequency_mhz": 2437,
+       "band": "2.4", "security": "WPA2-Personal/CCMP", "signal_dbm": -48,
+       "signal_quality": 90, "phy_mode": "802.11ax", "connected": true}
+    ]
+  }
+}
+```
+
+| Campo | Tipo y límites |
+|---|---|
+| `status` | `ok`, `no_adapter`, `permission_limited`, `unsupported` o `error` (obligatorio) |
+| `source` | `macos_system_profiler`, `windows_netsh` o `linux_nmcli` (obligatorio) |
+| `collected_at` | ISO 8601 con zona horaria (obligatorio); no más de 5 minutos en el futuro |
+| `interfaces` | Máximo 8: `name` (1–64, obligatorio), `mac`, `connected_ssid` (≤ 64), `connected_bssid` (todos nullable) |
+| `networks` | Máximo 256: `ssid` (≤ 64, null si oculta), `bssid`, `channel` (1–233), `frequency_mhz` (2400–7125), `band` (`"2.4"`, `"5"`, `"6"` o null), `security` (≤ 64, texto tal cual lo da el SO), `signal_dbm` (−120–0), `signal_quality` (0–100), `phy_mode` (≤ 32), `connected` (bool, por defecto false) |
+
+- MACs y BSSIDs con `:` o `-` (`AA:BB:CC:DD:EE:FF` o `aa-bb-...`); otra forma es 422. Una MAC
+  bien formada pero inutilizable (todo ceros, multicast) se descarta sin rechazar el
+  inventario. Texto sin caracteres de control. Campos desconocidos: 422.
+- Lo que el SO no da se envía como null o se omite; nunca se inventa (p. ej. canal 1 sin
+  frecuencia ni banda: el servidor no adivina si es 2,4 o 6 GHz).
+- Con `status` distinto de `ok` se pueden enviar las redes que sí se vieron; el servidor las
+  acepta como evidencia positiva y no deduce nada de las que falten. Con `ok`, una conexión
+  propia que ya no se informa pasa a desconectada.
+- Un informe más antiguo que el último recibido de ese agente se ignora (201 igualmente).
+- El servidor guarda la observación en el inventario Wi-Fi del site del activo (fuente
+  `agent`, confianza `observed`); no entra en el documento de inventario ni en sus cambios.
+  Detalle en [wlan-discovery.md](wlan-discovery.md).

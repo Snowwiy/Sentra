@@ -94,6 +94,7 @@ export const VALUE_LABELS: Record<string, string> = {
   informational: "Informativo",
   windows: "Windows",
   linux: "Linux",
+  macos: "macOS",
   other: "Otra",
   open: "Abierto",
   closed: "Cerrado",

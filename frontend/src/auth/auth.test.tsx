@@ -161,6 +161,8 @@ describe("sesión", () => {
     routes["GET /auth/me"] = () => ({ body: session("admin", "csrf-abc") });
     routes["POST /auth/logout"] = () => ({ status: 204 });
     renderAt("/");
+    // Fase 6C: cerrar sesión está en el menú de usuario de la cabecera.
+    fireEvent.click(await screen.findByRole("button", { name: /^Sesión de / }));
     fireEvent.click(await screen.findByRole("button", { name: "Cerrar sesión" }));
     await screen.findByRole("heading", { name: "Iniciar sesión" });
     const logout = calls.find((c) => c.path === "/auth/logout")!;
@@ -171,6 +173,8 @@ describe("sesión", () => {
     routes["GET /auth/me"] = () => ({ body: session("viewer") });
     routes["POST /auth/logout"] = () => ({ status: 204 });
     renderAt("/");
+    // Fase 6C: cerrar sesión está en el menú de usuario de la cabecera.
+    fireEvent.click(await screen.findByRole("button", { name: /^Sesión de / }));
     fireEvent.click(await screen.findByRole("button", { name: "Cerrar sesión" }));
     expect(await screen.findByRole("heading", { name: "Iniciar sesión" })).toBeInTheDocument();
     const before = calls.length;

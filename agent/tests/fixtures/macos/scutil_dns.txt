@@ -1,0 +1,34 @@
+DNS configuration
+
+resolver #1
+  search domain[0] : home.arpa
+  nameserver[0] : 192.168.1.1
+  nameserver[1] : fd00::1
+  if_index : 14 (en0)
+  flags    : Request A records, Request AAAA records
+  reach    : 0x00020002 (Reachable,Directly Reachable Address)
+
+resolver #2
+  domain   : local
+  options  : mdns
+  timeout  : 5
+  flags    : Request A records, Request AAAA records
+  reach    : 0x00000000 (Not Reachable)
+  order    : 300000
+
+resolver #3
+  domain   : 254.169.in-addr.arpa
+  options  : mdns
+  timeout  : 5
+  flags    : Request A records, Request AAAA records
+  reach    : 0x00000000 (Not Reachable)
+  order    : 300200
+
+DNS configuration (for scoped queries)
+
+resolver #1
+  search domain[0] : home.arpa
+  nameserver[0] : 192.168.1.1
+  if_index : 14 (en0)
+  flags    : Scoped, Request A records
+  reach    : 0x00020002 (Reachable,Directly Reachable Address)

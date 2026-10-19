@@ -33,8 +33,8 @@ const PAGE_SIZE = 50;
 const LEVEL_CARDS: RiskLevel[] = ["critical", "high", "medium", "low"];
 
 const STATUS_OPTIONS: { value: AssetStatus; label: string }[] = [
-  { value: "online", label: "Online" },
-  { value: "offline", label: "Offline" },
+  { value: "online", label: "En línea" },
+  { value: "offline", label: "Sin conexión" },
   { value: "unknown", label: "Desconocido" },
 ];
 

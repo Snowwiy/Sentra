@@ -5,9 +5,9 @@ import { eventTypeLabel } from "../lib/linuxEvents";
 
 const LEVEL_LABELS: Record<EventLevel, string> = {
   info: "Info",
-  warning: "Warning",
+  warning: "Advertencia",
   error: "Error",
-  critical: "Critical",
+  critical: "Crítico",
 };
 
 // Reuses the alert severity palette so "critical" looks the same everywhere.
@@ -47,7 +47,7 @@ export function EventTable({
             {showAsset && <th>Activo</th>}
             {linux ? (
               <>
-                <th>Fuente</th>
+                <th className="col-secondary">Fuente</th>
                 <th>Tipo</th>
                 <th>Usuario</th>
                 <th>Origen/IP</th>
@@ -78,7 +78,7 @@ export function EventTable({
               )}
               {linux ? (
                 <>
-                  <td className="nowrap">{event.provider}</td>
+                  <td className="nowrap col-secondary">{event.provider}</td>
                   <td className="nowrap">{eventTypeLabel(event.event_type)}</td>
                   <td className="nowrap mono small">{event.data?.user ?? "—"}</td>
                   <td className="nowrap mono small">{event.data?.source_ip ?? "—"}</td>

@@ -2,6 +2,7 @@
 
 import platform
 import socket
+import sys
 import time
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -12,6 +13,7 @@ import psutil
 
 from sentra_agent import __version__
 from sentra_agent.machine_identity import machine_id_hash
+from sentra_agent.macos import platform_info
 
 
 @dataclass(frozen=True)
@@ -33,7 +35,26 @@ class HostInfo:
         return payload
 
 
+def _os_name() -> str:
+    # Fase 6C.5: en macOS platform.system() devuelve "Darwin" (el núcleo); el servidor y el
+    # panel muestran el producto, como hacen con Windows y Linux.
+    if sys.platform == "darwin":
+        return "macOS"
+    return platform.system() or "unknown"
+
+
+def _architecture() -> str:
+    if sys.platform == "darwin":
+        # Arquitectura del Mac, no la del proceso: bajo Rosetta 2 platform.machine() dice
+        # x86_64 en un Apple Silicon. La del proceso va en el diagnóstico del agente.
+        return platform_info(platform.machine()).native_architecture
+    return platform.machine() or "unknown"
+
+
 def _os_version() -> str:
+    if sys.platform == "darwin":
+        # "15.1 (24B83)" de sw_vers; si no estuviera, la versión de platform.mac_ver().
+        return platform_info(platform.machine()).os_version or platform.mac_ver()[0] or "unknown"
     if platform.system() == "Windows":
         # release() gives the marketing version ("11"), version() the build ("10.0.26200").
         return f"{platform.release()} (build {platform.version()})"
@@ -57,9 +78,9 @@ def primary_ip() -> str:
 def collect_host_info() -> HostInfo:
     return HostInfo(
         hostname=socket.gethostname()[:255],
-        os_name=platform.system() or "unknown",
+        os_name=_os_name(),
         os_version=_os_version()[:128] or "unknown",
-        architecture=(platform.machine() or "unknown")[:32],
+        architecture=_architecture()[:32] or "unknown",
         primary_ip=primary_ip(),
         agent_version=__version__,
         machine_id_hash=machine_id_hash(),

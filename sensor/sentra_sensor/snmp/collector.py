@@ -15,9 +15,14 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sentra_sensor.snmp.mibs import READERS, Record
+from sentra_sensor.snmp.mibs import READERS as _MIB_READERS
+from sentra_sensor.snmp.mibs import ModuleResult, Record
 from sentra_sensor.snmp.transport import SnmpError, SnmpMalformedError, SnmpTransport
 from sentra_sensor.snmp.walker import Budget, StopWalkError, Walker
+from sentra_sensor.snmp.wlan import wlan as _wlan
+
+# Fase 6C.3: el módulo wlan vive en su propio fichero (adaptadores por MIB) y se suma aquí.
+READERS: dict[str, Callable[[Walker], ModuleResult]] = {**_MIB_READERS, "wlan": _wlan}
 
 logger = logging.getLogger("sentra_sensor.snmp")
 

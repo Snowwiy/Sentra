@@ -54,7 +54,7 @@ MonitoringStatus = Literal[
 EvidenceFreshness = Literal["recent", "historical", "none"]
 PollStatus = Literal["queued", "running", "succeeded", "partial", "failed", "cancelled", "expired"]
 PollTrigger = Literal["manual", "scheduled"]
-ModuleName = Literal["system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan"]
+ModuleName = Literal["system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan", "wlan"]
 ModuleStatus = Literal["complete", "partial", "unsupported", "failed", "skipped"]
 # Taxonomía de errores que la UI muestra diferenciados (docs, sección Troubleshooting).
 SnmpErrorCode = Literal[
@@ -588,6 +588,8 @@ class PollCounts(ResponseModel):
     vlans: int = 0
     mac_entries: int = 0
     records: int = 0
+    # Fase 6C.3: los recuentos wlan_* se guardan en la consulta pero no se exponen aquí (el
+    # contrato del dashboard no cambia); el inventario Wi-Fi tiene su API en /network/wlan.
 
 
 class PollChanges(ResponseModel):

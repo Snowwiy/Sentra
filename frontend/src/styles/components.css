@@ -1,0 +1,680 @@
+/*
+ * Sentra UI 6C: componentes del design system.
+ *
+ * Se cargan después de las hojas de módulo para unificar el aspecto de todas las páginas con
+ * las mismas clases que ya usan (page__header, panel, stat, table, modal, banner...), sin
+ * reescribir el marcado de cada módulo.
+ */
+
+/* Página */
+
+.page {
+  gap: var(--space-5);
+  min-width: 0;
+}
+
+.page__header {
+  flex-wrap: wrap;
+  align-items: flex-end;
+  row-gap: var(--space-3);
+  min-width: 0;
+}
+
+/* El bloque de título se encoge antes que las acciones; las acciones bajan de línea. */
+.page__header > :first-child {
+  flex: 1 1 280px;
+  min-width: 0;
+}
+
+.page__header > .actions,
+.page__header > div:last-child:not(:first-child) {
+  flex: 0 1 auto;
+  min-width: 0;
+}
+
+.page__header h1 {
+  overflow-wrap: anywhere;
+}
+
+.page__header p {
+  margin: var(--space-1) 0 0;
+  max-width: 80ch;
+}
+
+.back {
+  display: inline-flex;
+  align-items: center;
+  min-height: 28px;
+  font-size: var(--fs-sm);
+}
+
+.section-title {
+  margin: 0;
+  font-size: var(--fs-xs);
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--text-subtle);
+}
+
+/* Paneles y tarjetas */
+
+.panel {
+  min-width: 0;
+  background: var(--surface);
+  border-color: var(--border);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-1);
+}
+
+.panel--padded {
+  padding: var(--space-4);
+}
+
+.panel__toolbar {
+  min-height: 52px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.panel__toolbar > * {
+  min-width: 0;
+}
+
+.panel__title,
+.panel__toolbar h2 {
+  font-size: var(--fs-md);
+}
+
+/* Métricas */
+
+.stats {
+  grid-template-columns: repeat(auto-fit, minmax(min(150px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+.stat {
+  min-width: 0;
+  min-height: 92px;
+  padding: var(--space-4);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius-lg);
+  transition:
+    background-color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease);
+}
+
+.stat:hover {
+  background: var(--surface-2);
+}
+
+.stat__label {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.stat__value {
+  font-size: var(--fs-metric);
+  overflow-wrap: anywhere;
+}
+
+/* Tablas: el scroll horizontal, cuando hace falta, queda dentro de la tabla. */
+
+.table-wrap {
+  max-width: 100%;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scrollbar-width: thin;
+}
+
+.table th {
+  padding: 10px 14px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+
+.table td {
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  vertical-align: middle;
+}
+
+.table tbody tr:first-child td {
+  border-top: 0;
+}
+
+.table__row--link {
+  cursor: pointer;
+}
+
+.table__row--link:hover td,
+.table tbody tr:focus-within td {
+  background: var(--surface-2);
+}
+
+/*
+ * Tabla apilada: en pantallas estrechas cada fila pasa a ser una tarjeta con "etiqueta: valor"
+ * (data-label, copiado de la cabecera por src/ui/stackTables.ts). Ninguna columna se pierde:
+ * solo cambia la disposición. table--nostack lo desactiva para rejillas que ya caben.
+ */
+@media (max-width: 767.98px) {
+  .content .table:not(.table--nostack) {
+    white-space: normal;
+  }
+
+  .content .table:not(.table--nostack) thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+  }
+
+  .content .table:not(.table--nostack),
+  .content .table:not(.table--nostack) tbody,
+  .content .table:not(.table--nostack) tr,
+  .content .table:not(.table--nostack) td {
+    display: block;
+    width: 100%;
+  }
+
+  .content .table:not(.table--nostack) tr {
+    padding: var(--space-3) var(--space-4);
+    border-top: 1px solid var(--border);
+  }
+
+  .content .table:not(.table--nostack) tbody tr:first-child {
+    border-top: 0;
+  }
+
+  /* flex (no grid): el texto y los elementos de una celda forman un solo bloque tras la
+     etiqueta; con grid cada nodo de texto ocuparía una fila de la rejilla. */
+  .content .table:not(.table--nostack) td {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 6px;
+    padding: 3px 0;
+    border: 0;
+    white-space: normal;
+  }
+
+  .content .table:not(.table--nostack) td:not([data-label]) {
+    display: block;
+  }
+
+  .content .table:not(.table--nostack) td[data-label]::before {
+    content: attr(data-label);
+    flex: 0 0 34%;
+    min-width: 84px;
+    font-size: var(--fs-xs);
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--text-subtle);
+  }
+
+  /* Celdas sin cabecera (acciones, casillas) no muestran etiqueta vacía. */
+  .content .table:not(.table--nostack) td[data-label=""]::before {
+    content: none;
+  }
+}
+
+/* Columnas secundarias: en pantallas medianas se ocultan si la fila tiene detalle propio. */
+@media (min-width: 768px) and (max-width: 1199.98px) {
+  .table .col-secondary {
+    display: none;
+  }
+}
+
+/* Badges y estados */
+
+.badge,
+.status,
+.role-badge {
+  white-space: nowrap;
+}
+
+.role-badge {
+  padding: 1px 8px;
+  font-size: var(--fs-xs);
+}
+
+/* Banners y notificaciones */
+
+.banner {
+  border-radius: var(--radius);
+  overflow-wrap: anywhere;
+}
+
+.toast-region {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 90;
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  width: min(380px, calc(100vw - 2 * var(--space-4)));
+  pointer-events: none;
+}
+
+.toast {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  color: var(--text);
+  background: var(--surface-3);
+  border: 1px solid var(--border-strong);
+  border-left: 3px solid var(--accent);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-2);
+  pointer-events: auto;
+  animation: fade-in var(--dur) var(--ease);
+}
+
+.toast--ok {
+  border-left-color: var(--ok);
+}
+
+.toast--warn {
+  border-left-color: var(--warn);
+}
+
+.toast--crit {
+  border-left-color: var(--crit);
+}
+
+.toast__body {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* Estados: vacío, carga, error, skeleton */
+
+.state {
+  overflow-wrap: anywhere;
+  text-align: center;
+}
+
+.skeleton {
+  display: block;
+  height: 0.9em;
+  background: linear-gradient(90deg, var(--surface-2) 0%, var(--surface-3) 50%, var(--surface-2) 100%);
+  background-size: 200% 100%;
+  border-radius: var(--radius-sm);
+  animation: shimmer 1.4s linear infinite;
+}
+
+.skeleton-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  padding: var(--space-4);
+}
+
+@keyframes shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skeleton {
+    animation: none;
+  }
+}
+
+/* Formularios */
+
+.form-field {
+  min-width: 0;
+}
+
+.form-field > span:first-child,
+.form-field > label {
+  font-size: var(--fs-sm);
+  color: var(--text-muted);
+}
+
+.form-field__error {
+  font-size: var(--fs-sm);
+  color: var(--crit);
+}
+
+.form-field__hint {
+  font-size: var(--fs-sm);
+  color: var(--text-subtle);
+}
+
+/* Rejilla de formulario: varias columnas mientras quepan, una sola en pantallas estrechas. */
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(240px, 100%), 1fr));
+  gap: var(--space-3) var(--space-4);
+}
+
+.form-grid--wide > .form-field--full {
+  grid-column: 1 / -1;
+}
+
+.fields,
+.fields--inline,
+.detail-grid,
+.panels-2 {
+  min-width: 0;
+}
+
+.fields > *,
+.detail-grid > *,
+.panels-2 > * {
+  min-width: 0;
+}
+
+/* Filtros */
+
+.filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-end;
+  gap: var(--space-2) var(--space-3);
+  min-width: 0;
+}
+
+.filter-bar > * {
+  min-width: 0;
+}
+
+.filter-bar .input {
+  width: auto;
+  min-width: 140px;
+  max-width: 100%;
+}
+
+/* Modales: siempre dentro del viewport; la cabecera (con cerrar) y las acciones quedan
+   visibles y el cuerpo hace scroll interno, sin doble scroll con la página. */
+
+.modal-backdrop {
+  align-items: center;
+  padding: var(--space-4);
+  overflow: hidden;
+  background: rgb(2 5 10 / 0.72);
+  animation: fade-in var(--dur) var(--ease);
+}
+
+.modal {
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100%);
+  max-height: calc(100vh - 2 * var(--space-4));
+  max-height: calc(100dvh - 2 * var(--space-4));
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-3);
+}
+
+.modal--wide {
+  width: min(880px, 100%);
+}
+
+.modal__header {
+  flex: none;
+  gap: var(--space-3);
+  min-height: 56px;
+  padding: var(--space-3) var(--space-4);
+}
+
+.modal__header h2 {
+  min-width: 0;
+  font-size: var(--fs-lg);
+  overflow-wrap: anywhere;
+}
+
+.modal__body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--space-4);
+}
+
+.modal__actions {
+  position: sticky;
+  bottom: calc(-1 * var(--space-4));
+  flex-wrap: wrap;
+  margin: var(--space-4) calc(-1 * var(--space-4)) calc(-1 * var(--space-4));
+  padding: var(--space-3) var(--space-4);
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+}
+
+@media (max-width: 767.98px) {
+  .modal-backdrop {
+    align-items: flex-end;
+    padding: 0;
+  }
+
+  .modal,
+  .modal--wide {
+    width: 100%;
+    max-height: calc(100dvh - var(--space-4));
+    border-radius: var(--radius-lg) var(--radius-lg) 0 0;
+  }
+
+  .modal__actions .button {
+    flex: 1 1 auto;
+  }
+}
+
+/* Panel lateral de detalle */
+
+.side-panel-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 55;
+}
+
+.side-panel {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  width: min(560px, 100vw);
+  background: var(--surface);
+  border-left: 1px solid var(--border-strong);
+  box-shadow: var(--shadow-3);
+  animation: fade-in var(--dur) var(--ease);
+}
+
+.side-panel .modal__body {
+  flex: 1;
+}
+
+/* Segmented y pestañas: con muchas opciones pasan a scroll propio en lugar de desbordar. */
+
+.segmented {
+  max-width: 100%;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.segmented__item {
+  min-height: 34px;
+  white-space: nowrap;
+}
+
+.tabs {
+  min-width: 0;
+}
+
+.tabs__item {
+  min-height: var(--hit);
+}
+
+/* Bloques de código y comandos: scroll propio, nunca ensanchan la página. */
+
+.command-box,
+.code-block,
+pre {
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* Elección de estilo (Configuración) */
+
+.option-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(200px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+.option-card {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  padding: var(--space-4);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: border-color var(--dur) var(--ease);
+}
+
+.option-card:hover {
+  border-color: var(--border-strong);
+}
+
+.option-card:has(input:checked) {
+  border-color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--accent);
+}
+
+.option-card:has(input:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.option-card__head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
+}
+
+.option-card__head input {
+  accent-color: var(--accent);
+}
+
+.link-cards {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(min(260px, 100%), 1fr));
+  gap: var(--space-3);
+}
+
+.link-card {
+  display: flex;
+  gap: var(--space-3);
+  padding: var(--space-4);
+  color: var(--text);
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.link-card:hover {
+  border-color: var(--accent);
+  text-decoration: none;
+}
+
+.link-card svg {
+  flex: none;
+  color: var(--accent);
+}
+
+/* Disponibilidad de datos (WLAN, catálogo): "no disponible" no es un cero. */
+.na {
+  color: var(--text-subtle);
+  font-style: italic;
+}
+
+/* Fieldset sin marco: agrupa opciones para lectores de pantalla sin cambiar el aspecto. */
+.fieldset--plain {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  min-width: 0;
+}
+
+.block {
+  display: block;
+}
+
+/* Wi-Fi / AP / WLAN (Fase 6C.3) */
+
+/* Grupo de badges en una celda o campo: parte de línea en lugar de ensanchar la tabla. */
+.wlan-badges {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+  min-width: 0;
+}
+
+/* Indicadores de disponibilidad por fuente: una tarjeta por fuente, en columna en móvil. */
+.wlan-sources {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr));
+  gap: var(--space-3);
+  padding: 0 var(--space-4) var(--space-4);
+}
+
+.wlan-source {
+  display: grid;
+  gap: var(--space-2);
+  min-width: 0;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-2);
+}
+
+.wlan-source__head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.wlan-source p {
+  margin: 0;
+}
+
+/* Panel lateral del detalle de un AP: el fondo se oscurece y un clic fuera lo cierra. */
+.side-panel-layer--dim {
+  background: rgb(2 5 10 / 0.6);
+}
+
+.wlan-section + .wlan-section {
+  margin-top: var(--space-5);
+}
+
+.wlan-section > h3 {
+  margin: 0 0 var(--space-2);
+  font-size: var(--fs-md);
+}
+
+.stat--warn {
+  border-left-color: var(--warn);
+}

@@ -5,6 +5,9 @@ Sentra no descarga nada. Un conector futuro (NVD, OSV, avisos de fabricante...) 
 implementación de `VulnerabilitySource` que produzca el mismo formato sentra-vuln-catalog/1:
 pasará por la misma validación, previsualización, importación y auditoría, sin tocar el
 matcher ni el motor. Activarlo será una decisión explícita (y una fase propia).
+
+Fase 6C.4: NVD y OSV llegan por sus adapters (app/vulnerabilities/adapters) y el servicio de
+fuentes oficiales; su descarga por red es opt-in (app/vulnerabilities/source_sync.py).
 """
 
 from dataclasses import dataclass

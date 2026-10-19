@@ -6,6 +6,7 @@ from pydantic import AwareDatetime, BaseModel, Field, IPvAnyAddress, field_valid
 
 from app.schemas.common import BIGINT_MAX, RequestModel, ResponseModel
 from app.schemas.telemetry import MAX_FUTURE_SKEW
+from app.schemas.wlan import WirelessReport
 
 # Upper bounds keep one request from storing an unbounded document; they sit well above what
 # a normal workstation or server reports.
@@ -142,6 +143,10 @@ class InventorySections(BaseModel):
 class InventoryCreate(InventorySections, RequestModel):
     agent_id: UUID
     collected_at: AwareDatetime
+    # Fase 6C.3: observación Wi-Fi pasiva del sistema operativo. Opcional (los agentes
+    # antiguos no la envían) y fuera de InventorySections a propósito: no se guarda en el
+    # documento de inventario ni entra en el diff de cambios; va al inventario Wi-Fi del site.
+    wireless: WirelessReport | None = None
 
     @field_validator("collected_at")
     @classmethod

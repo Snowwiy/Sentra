@@ -27,8 +27,8 @@ const STATUS_FILTERS: { key: StatusFilter; label: string }[] = [
 ];
 
 const SEVERITIES: { value: AlertSeverity; label: string }[] = [
-  { value: "critical", label: "Critical" },
-  { value: "warning", label: "Warning" },
+  { value: "critical", label: "Crítica" },
+  { value: "warning", label: "Advertencia" },
   { value: "info", label: "Info" },
 ];
 

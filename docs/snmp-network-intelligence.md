@@ -158,6 +158,7 @@ otros pueden leerlo. La CLI nunca imprime la clave.
 | cdp | CISCO-CDP-MIB | caché de vecinos CDP |
 | bridge | BRIDGE-MIB, Q-BRIDGE-MIB | dirección del bridge, mapa puerto → ifIndex, tabla MAC (Q-BRIDGE si existe; si no, la clásica) |
 | vlan | Q-BRIDGE-MIB | VLANs estáticas y actuales, puertos con y sin etiqueta, PVID |
+| wlan (Fase 6C.3, sensor 0.4.0, capacidad `snmp.wlan`) | IEEE802dot11-MIB, AIRESPACE-WIRELESS-MIB, UBNT-UniFi-MIB | APs, radios, BSS, WLANs y clientes; ver [wlan-discovery.md](wlan-discovery.md) |
 
 La evidencia en bruto (registros por módulo, `network_poll_records`) se guarda aparte de la
 interpretación (tablas de inventario). Un módulo que el equipo no implementa es

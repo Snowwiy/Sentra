@@ -1,133 +1,7 @@
-:root {
-  --bg: #0b1016;
-  --surface: #121a23;
-  --surface-2: #17212c;
-  --border: #223041;
-  --text: #dbe4ee;
-  --text-muted: #8394a7;
-  --accent: #38bdf8;
-  --ok: #22c55e;
-  --warn: #f59e0b;
-  --crit: #ef4444;
-  --idle: #64748b;
-  --radius: 8px;
-  --font: "Inter", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --mono: "JetBrains Mono", "Cascadia Mono", Consolas, ui-monospace, monospace;
-
-  color-scheme: dark;
-  font-family: var(--font);
-  font-size: 14px;
-  line-height: 1.5;
-  color: var(--text);
-  background: var(--bg);
-  -webkit-font-smoothing: antialiased;
-}
-
-*,
-*::before,
-*::after {
-  box-sizing: border-box;
-}
-
-body {
-  margin: 0;
-  background: var(--bg);
-}
-
-a {
-  color: var(--accent);
-  text-decoration: none;
-}
-
-a:hover {
-  text-decoration: underline;
-}
-
-h1,
-h2 {
-  margin: 0;
-  font-weight: 600;
-}
-
-h1 {
-  font-size: 1.5rem;
-}
-
-h2 {
-  font-size: 0.95rem;
-}
-
-.muted {
-  color: var(--text-muted);
-}
-
-.small {
-  font-size: 0.8rem;
-  margin: 2px 0 0;
-}
-
-.mono {
-  font-family: var(--mono);
-  font-size: 0.85em;
-}
-
-.strong {
-  font-weight: 600;
-  color: var(--text);
-}
-
-/* Layout */
-
-.app {
-  min-height: 100vh;
-}
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  display: flex;
-  align-items: center;
-  gap: 24px;
-  height: 52px;
-  padding: 0 24px;
-  background: var(--surface);
-  border-bottom: 1px solid var(--border);
-}
-
-.brand {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  letter-spacing: 0.04em;
-  color: var(--text);
-}
-
-.brand:hover {
-  text-decoration: none;
-}
-
-.topbar__nav {
-  display: flex;
-  gap: 16px;
-  flex: 1;
-}
-
-.topbar__nav a {
-  color: var(--text-muted);
-}
-
-.topbar__nav a:hover {
-  color: var(--text);
-  text-decoration: none;
-}
-
-.content {
-  max-width: 1400px;
-  margin: 0 auto;
-  padding: 24px;
-}
+/*
+ * Hojas de cada módulo. Los tokens, la base y la estructura de la aplicación están en
+ * src/styles/ (Fase 6C) y se cargan antes que este fichero (ver main.tsx).
+ */
 
 .page {
   display: flex;
@@ -144,45 +18,6 @@ h2 {
 
 .back {
   font-size: 0.85rem;
-}
-
-/* Controls */
-
-.button {
-  padding: 6px 14px;
-  font: inherit;
-  color: var(--text);
-  background: var(--surface-2);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  cursor: pointer;
-}
-
-.button:hover:not(:disabled) {
-  border-color: var(--accent);
-}
-
-.button:disabled {
-  opacity: 0.6;
-  cursor: default;
-}
-
-.input {
-  width: 260px;
-  max-width: 100%;
-  padding: 6px 10px;
-  font: inherit;
-  color: var(--text);
-  background: var(--bg);
-  border: 1px solid var(--border);
-  border-radius: 6px;
-}
-
-.input:focus,
-.button:focus-visible,
-.stat:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 1px;
 }
 
 /* Health indicator */
@@ -1226,14 +1061,6 @@ td > .badge:first-child {
 
 .login__brand {
   font-size: 1.1rem;
-}
-
-.userbar {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: 16px;
-  white-space: nowrap;
 }
 
 .role-badge {

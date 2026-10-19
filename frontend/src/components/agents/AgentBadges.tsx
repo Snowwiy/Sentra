@@ -11,10 +11,10 @@ export function agentState(agent: Agent): AgentState {
 }
 
 const STATE_LABELS: Record<AgentState, string> = {
-  online: "Online",
-  offline: "Offline",
-  revoked: "Revoked",
-  pending: "Pending",
+  online: "En línea",
+  offline: "Sin conexión",
+  revoked: "Revocado",
+  pending: "Pendiente",
 };
 
 const STATE_TITLES: Record<AgentState, string> = {
@@ -42,9 +42,9 @@ export function AgentStateBadge({ agent }: { agent: Agent }) {
 }
 
 export const CREDENTIAL_LABELS: Record<CredentialStatus, string> = {
-  active: "Active",
-  revoked: "Revoked",
-  re_enrollment_required: "Re-enrollment required",
+  active: "Activa",
+  revoked: "Revocada",
+  re_enrollment_required: "Requiere volver a registrarse",
 };
 
 const CREDENTIAL_CLASSES: Record<CredentialStatus, string> = {
@@ -58,10 +58,10 @@ export function CredentialBadge({ status }: { status: CredentialStatus }) {
 }
 
 export const TOKEN_STATE_LABELS: Record<EnrollmentTokenState, string> = {
-  active: "Active",
-  consumed: "Consumed",
-  expired: "Expired",
-  revoked: "Revoked",
+  active: "Activo",
+  consumed: "Usado",
+  expired: "Caducado",
+  revoked: "Revocado",
 };
 
 const TOKEN_STATE_CLASSES: Record<EnrollmentTokenState, string> = {
@@ -78,5 +78,12 @@ export function TokenStateBadge({ state }: { state: EnrollmentTokenState }) {
 export const PLATFORM_LABELS: Record<Agent["platform"], string> = {
   linux: "Linux",
   windows: "Windows",
+  macos: "macOS",
   other: "Otra",
 };
+
+/** Etiqueta de una plataforma que llega como texto libre (p. ej. expected_platform de un token). */
+export function platformLabel(value: string | null | undefined): string | null {
+  if (!value) return null;
+  return (PLATFORM_LABELS as Record<string, string>)[value] ?? value;
+}

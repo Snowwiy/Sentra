@@ -10,7 +10,8 @@ Esquemas soportados (los declara cada entrada del catálogo, nunca se adivinan):
 - semver: Semantic Versioning 2.0 estricto (prerelease incluido, build ignorado);
 - windows_build: build de Windows solo numérico ("10.0.19045" o "10.0.19045.4529");
 - dpkg: algoritmo de comparación de Debian (epoch, upstream, revision, "~");
-- rpm: algoritmo rpmvercmp (epoch, version, release, "~" y "^").
+- rpm: algoritmo rpmvercmp (epoch, version, release, "~" y "^"). Una versión instalada sin
+  epoch frente a un límite con epoch > 0 no es comparable (el agente no informa el epoch).
 
 Truncado: "10.0.26100" frente a "10.0.26100.2314" no es comparable (falta el componente que
 decide), pero "9.1" frente a "9.1.0" sí (los componentes que faltan son ceros).
@@ -376,7 +377,31 @@ def compare(
         return _compare_semver(a, b)
     if a.scheme == "dpkg":
         return _compare_dpkg(a, b)
+    if _rpm_epoch_unknown(a, b, a_exact, b_exact):
+        return None
     return _compare_rpm(a, b)
+
+
+def _rpm_epoch_unknown(a: ParsedVersion, b: ParsedVersion, a_exact: bool, b_exact: bool) -> bool:
+    """Fase 6C.4: versión instalada rpm sin epoch frente a un límite con epoch > 0.
+
+    El agente consulta rpm con %{VERSION}-%{RELEASE} (sin %{EPOCH}): que no aparezca no
+    significa epoch 0. Si el límite de la fuente declara un epoch distinto de 0 (OSV de Red
+    Hat, "1:3.0.7-28.el9"), suponer 0 marcaría como vulnerable un paquete parcheado.
+    """
+    for installed, exact, bound, bound_exact in (
+        (a, a_exact, b, b_exact),
+        (b, b_exact, a, a_exact),
+    ):
+        if (
+            bound_exact
+            and not exact
+            and ":" not in installed.raw
+            and ":" in bound.raw
+            and int(str(bound.key[0])) != 0
+        ):
+            return True
+    return False
 
 
 # --- Rangos declarativos -------------------------------------------------------------------------

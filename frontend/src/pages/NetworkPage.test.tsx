@@ -283,7 +283,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     const auto = await screen.findByRole("region", { name: "Descubrimiento automático" });
     await waitFor(() => expect(within(auto).getByText("ON")).toBeInTheDocument());
     expect(within(auto).getByText("60 minutos")).toBeInTheDocument();
-    expect(within(auto).getByText(/Completed/)).toBeInTheDocument();
+    expect(within(auto).getByText(/Completado/)).toBeInTheDocument();
   });
 
   it("sin redes configuradas: avisa y deshabilita el botón", async () => {
@@ -306,7 +306,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     routes["GET /discovery/jobs"] = () => ({ body: { items: [COMPLETED] } });
     renderPage("viewer");
     const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
-    await waitFor(() => expect(within(history).getByText("Completed")).toBeInTheDocument());
+    await waitFor(() => expect(within(history).getByText("Completado")).toBeInTheDocument());
     expect(screen.queryByRole("button", { name: "Iniciar descubrimiento" })).not.toBeInTheDocument();
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
   });
@@ -502,14 +502,14 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     });
     renderPage();
     const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
-    await within(history).findByText("Completed");
+    await within(history).findByText("Completado");
     const headers = within(history).getAllByRole("columnheader").map((h) => h.textContent);
     expect(headers).toEqual([
       "Fecha/hora", "Red", "Ejecución", "Estado", "Encontrados", "Nuevos", "Actualizados", "Duración", "Perfil", "Origen",
     ]);
-    expect(within(history).getByText("Cancelled")).toBeInTheDocument();
-    expect(within(history).getByText("Failed")).toBeInTheDocument();
-    expect(within(history).getByText("Dashboard")).toBeInTheDocument();
+    expect(within(history).getByText("Cancelado")).toBeInTheDocument();
+    expect(within(history).getByText("Fallido")).toBeInTheDocument();
+    expect(within(history).getByText("Consola")).toBeInTheDocument();
     expect(within(history).getByText("CLI")).toBeInTheDocument();
     expect(within(history).getByText("Programado")).toBeInTheDocument();
     expect(within(history).getAllByText("3 puertos TCP · ICMP · DNS")).toHaveLength(3);
@@ -527,7 +527,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
 });
 
 describe("NetworkPage: identificación de dispositivos", () => {
-  it("presenta nombre, IP, tipo en español, NIC y Managed frente a Discovered", async () => {
+  it("presenta nombre, IP, tipo en español, NIC y Gestionado frente a Descubierto", async () => {
     const phone = {
       ...asset("192.168.50.141"),
       device_name: "MNA-LX9",
@@ -565,7 +565,7 @@ describe("NetworkPage: identificación de dispositivos", () => {
     expect(within(row("192.168.50.141")).getByText("Huawei")).toBeInTheDocument();
     expect(within(row("192.168.50.108")).getByRole("link", { name: "Consola probable" })).toBeInTheDocument();
     expect(within(row("192.168.50.108")).getByText("NIC Realtek")).toBeInTheDocument();
-    expect(within(row("192.168.50.66")).getByText("Managed")).toBeInTheDocument();
+    expect(within(row("192.168.50.66")).getByText("Gestionado")).toBeInTheDocument();
     expect(within(row("192.168.50.66")).getByText("PC")).toBeInTheDocument();
     expect(within(row("192.168.50.12")).getByRole("link", { name: "Dispositivo desconocido" })).toBeInTheDocument();
     expect(within(row("192.168.50.12")).getByText("Desconocido")).toBeInTheDocument();

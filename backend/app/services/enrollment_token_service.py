@@ -28,6 +28,7 @@ from app.core.exceptions import (
     SiteNotFoundError,
     UnauthorizedError,
 )
+from app.core.platforms import is_macos
 from app.core.security import (
     ENROLLMENT_TOKEN_PREFIX,
     MAX_CREDENTIAL_LENGTH,
@@ -46,6 +47,16 @@ from app.schemas.enrollment import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _platform_matches(expected: str, os_name: str) -> bool:
+    # Windows y Linux conservan la comparación por subcadena de siempre. El agente de macOS
+    # informa "macOS" (o "Darwin" uno anterior), que no contiene la palabra "macos" en todos
+    # los casos, así que se usa la regla común de app.core.platforms.
+    if expected == "macos":
+        return is_macos(os_name)
+    return expected in os_name.lower()
+
 
 INVALID_TOKEN = "Invalid enrollment token"  # noqa: S105  (an error message)
 
@@ -140,7 +151,7 @@ class EnrollmentTokenService:
         reason = None
         if state != EnrollmentTokenState.ACTIVE:
             reason = state.value
-        elif row.expected_platform and row.expected_platform not in host.os_name.lower():
+        elif row.expected_platform and not _platform_matches(row.expected_platform, host.os_name):
             reason = "platform mismatch"
         elif row.expected_hostname and row.expected_hostname.lower() != host.hostname.lower():
             reason = "hostname mismatch"

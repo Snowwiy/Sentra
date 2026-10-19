@@ -785,10 +785,23 @@ def test_u_result_size_is_bounded(client: TestClient, db: Session) -> None:
 
 
 def test_v_unsupported_platform_is_blocked(client: TestClient) -> None:
-    agent = _agent(client, os_name="Darwin", os_version="14")
+    agent = _agent(client, os_name="FreeBSD", os_version="14")
     error = _error(_execute(client, "collect_inventory", agent["asset_id"]), 409,
                    "response_blocked")  # fmt: skip
     assert "unsupported_platform" in {d.get("code") for d in error["details"]}
+
+
+@pytest.mark.parametrize("os_name", ["macOS", "Darwin"])
+def test_v_macos_agent_receives_read_only_commands(client: TestClient, os_name: str) -> None:
+    # Fase 6C.5: el agente de macOS informa "macOS"; uno anterior en un Mac, "Darwin".
+    agent = _agent(client, os_name=os_name, os_version="15.1 (24B83)", architecture="arm64")
+    _ok(_execute(client, "collect_events", agent["asset_id"]))
+    [command] = _ok(_poll(client, agent["agent_id"]))["commands"]
+    assert command["type"] == "collect_events"
+    action = next(
+        a for a in client.get(f"{R}/actions").json()["items"] if a["id"] == "collect_events"
+    )
+    assert action["supported_platforms"] == ["linux", "macos", "windows"]
 
 
 def test_w_unsupported_or_unknown_capability_is_blocked(client: TestClient) -> None:

@@ -43,6 +43,10 @@ function AssignmentFields({
 
   const profileOptions = (profiles.data?.items ?? []).filter((p) => p.site_id === siteId && p.status === "active");
   const sensorOptions = (sensors.data?.items ?? []).filter((s) => s.site_id === siteId && s.status !== "revoked");
+  const hasProfile = Boolean(form.profileId) || (!canListProfiles && Boolean(current?.profile));
+  const missing = [!hasProfile && "un perfil SNMP", !form.sensorId && "un sensor del site"].filter(
+    (item): item is string => Boolean(item),
+  );
 
   return (
     <>
@@ -92,10 +96,25 @@ function AssignmentFields({
         </select>
         {sensors.error && <span className="muted small">No se pudieron cargar los sensores: {errorMessage(sensors.error)}</span>}
       </label>
+      {/* Fase 6C: la consulta periódica necesita perfil SNMP y sensor del mismo site. Sin
+          ellos no se ofrece como si fuera a funcionar: se explica qué falta y dónde crearlo. */}
+      {missing.length > 0 && (
+        <div className="banner banner--warn" role="note">
+          Para consultar este equipo falta {missing.join(" y ")}.{" "}
+          {!profiles.loading && canListProfiles && profileOptions.length === 0 && (
+            <>No hay perfiles SNMP activos en este site: créalos en Infraestructura → Perfiles SNMP. </>
+          )}
+          {!sensors.loading && sensorOptions.length === 0 && (
+            <>No hay sensores en este site: enrola uno en Sensores. </>
+          )}
+          Puedes registrar el equipo ahora y asignarlos después.
+        </div>
+      )}
       <label className="checkbox">
         <input
           type="checkbox"
           checked={form.monitoring}
+          disabled={missing.length > 0 && !form.monitoring}
           onChange={(e) => onChange({ ...form, monitoring: e.target.checked })}
         />{" "}
         Consultar periódicamente

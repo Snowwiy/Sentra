@@ -38,9 +38,10 @@ export function HealthIndicator() {
   }
 
   return (
-    <span className={`health health--${tone}`} title={detail || undefined}>
+    <span className={`health health--${tone}`} title={[label, detail].filter(Boolean).join(" · ")}>
       <span className="health__dot" aria-hidden="true" />
-      {label}
+      {/* En pantallas estrechas solo queda el punto de color; el texto sigue para lectores. */}
+      <span className="health__label">{label}</span>
       {serverVersion && <span className="health__version">v{serverVersion}</span>}
     </span>
   );

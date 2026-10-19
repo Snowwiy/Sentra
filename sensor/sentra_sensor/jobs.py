@@ -28,7 +28,8 @@ KNOWN_JOB_TYPES = frozenset(
     {JOB_TYPE_DISCOVERY_BASIC, JOB_TYPE_DISCOVERY_ADVANCED, JOB_TYPE_SNMP_INVENTORY}
 )
 SNMP_SCHEMA_VERSION = 1
-SNMP_MODULES = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan")
+# Fase 6C.3: "wlan" al final (los módulos se consultan en este orden).
+SNMP_MODULES = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan", "wlan")
 SNMP_AUTH_PROTOCOLS = frozenset({"sha", "sha224", "sha256", "sha384", "sha512"})
 SNMP_PRIV_PROTOCOLS = frozenset({"aes128", "aes192", "aes256"})
 SNMP_PARAMETER_KEYS = frozenset(

@@ -9,6 +9,10 @@ File format (version 2):
      "token_issued_at": "2026-10-04T01:00:00+00:00"}
 
 Version 1 files (token in plain text) are read and immediately rewritten encrypted.
+
+Fase 6C.5: en macOS `token` es una referencia al Keychain ({"scheme": "macos-keychain",
+"value": "agent-<agent_id>"}) y el token vive solo allí. Si el almacén configurado cambia
+(p. ej. de "file" a "keychain"), el token se migra al nuevo al arrancar y se borra del viejo.
 """
 
 import json
@@ -21,7 +25,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from sentra_agent.credentials import CredentialError, protect_token, unprotect_token
+from sentra_agent.credentials import (
+    CredentialError,
+    CredentialStoreUnavailableError,
+    check_store,
+    forget_token,
+    protect_token,
+    stored_scheme,
+    unprotect_token,
+)
 
 logger = logging.getLogger("sentra_agent")
 
@@ -69,10 +81,17 @@ def write_atomic(path: Path, content: str, private: bool = True) -> None:
 
 
 class IdentityStore:
-    def __init__(self, state_dir: Path) -> None:
+    def __init__(self, state_dir: Path, credential_store: str = "auto") -> None:
         self.path = state_dir / IDENTITY_FILE
+        self.credential_store = credential_store
+        # Última forma guardada del token: permite borrar la copia del Keychain cuando el
+        # token se descarta o se migra a otro almacén.
+        self._stored: object = None
 
     def load_or_create(self) -> Identity:
+        # Fallo explícito antes de nada si el almacén elegido no funciona (Keychain
+        # bloqueado o ausente): nunca se enrola para luego no poder guardar el token.
+        check_store(self.credential_store, self.path.parent)
         if self.path.exists():
             try:
                 return self._load()
@@ -112,6 +131,11 @@ class IdentityStore:
         elif stored is not None:
             try:
                 identity.token = unprotect_token(stored)
+                self._stored = stored
+            except CredentialStoreUnavailableError:
+                # El almacén no responde (no es que el token sea de otro equipo): no se
+                # descarta nada y el agente se detiene con el error.
+                raise
             except CredentialError as exc:
                 # Typically the file was copied from another user or machine. The agent keeps
                 # its agent_id and enrolls again, which rotates the token server side.
@@ -121,16 +145,38 @@ class IdentityStore:
                 identity.token = None
                 identity.token_issued_at = None
                 self.save(identity)
+            else:
+                if isinstance(stored, dict) and stored.get("scheme") != stored_scheme(
+                    self.credential_store
+                ):
+                    # Cambio de almacén en la configuración: se guarda en el nuevo y save()
+                    # borra la copia del anterior.
+                    self.save(identity)
+                    logger.info("agent token moved to the configured credential store")
         return identity
 
     def save(self, identity: Identity) -> None:
+        previous = self._stored
+        stored = (
+            protect_token(identity.token, self.credential_store, f"agent-{identity.agent_id}")
+            if identity.token
+            else None
+        )
         payload = {
             "version": FORMAT_VERSION,
             "agent_id": str(identity.agent_id),
             "asset_id": str(identity.asset_id) if identity.asset_id else None,
-            "token": protect_token(identity.token) if identity.token else None,
+            "token": stored,
             "token_issued_at": identity.token_issued_at.isoformat()
             if identity.token_issued_at
             else None,
         }
         write_atomic(self.path, json.dumps(payload, indent=2))
+        self._stored = stored
+        if previous is not None and previous != stored:
+            # Token descartado (401, revocación) o migrado: no queda ninguna copia en el
+            # Keychain que ya no se use. Un fallo aquí no impide seguir: solo se registra.
+            try:
+                forget_token(previous)
+            except CredentialError as exc:
+                logger.warning("old keychain item not deleted", extra={"error": str(exc)})

@@ -572,6 +572,17 @@ export interface DashboardVulnerabilities {
   by_severity: Record<string, number>;
   potential: number;
   assets_affected: number;
+  /** Fase 6C.4: distingue «sin vulnerabilidades» de «catálogo insuficiente para saberlo». */
+  evaluation_state:
+    | "no_catalog"
+    | "pending"
+    | "insufficient_catalog"
+    | "vulnerabilities_found"
+    | "no_vulnerabilities";
+  catalog_stale: boolean;
+  assets_evaluated: number;
+  assets_covered: number;
+  assets_pending: number;
 }
 
 export interface DashboardSummary {
@@ -1123,7 +1134,7 @@ export interface Exposure {
 
 // --- Agent management (Agentes page) --------------------------------------------------------
 
-export type AgentPlatform = "windows" | "linux" | "other";
+export type AgentPlatform = "windows" | "linux" | "macos" | "other";
 
 /** active: valid own token · revoked: cut off by an operator · re_enrollment_required: no
  * valid token, must enroll again with a new one-time token. */
@@ -1210,7 +1221,7 @@ export interface EnrollmentTokenList {
 export interface EnrollmentTokenRequest {
   ttl_minutes?: number;
   max_uses?: number;
-  expected_platform?: "windows" | "linux";
+  expected_platform?: "windows" | "linux" | "macos";
   expected_hostname?: string;
   note?: string;
   /** Fase 5F: sin valor, el agente queda en el site por defecto. */
@@ -2665,6 +2676,23 @@ export interface FindingEvidence {
   instances?: FindingEvidenceInstance[];
   rule?: Record<string, unknown>;
   checks?: FindingCheck[];
+  /** Fase 6C.4: registro del catálogo que produjo el finding. */
+  catalog?: { source: string; adapter: string; record_version: number };
+  /** Fase 6C.4: por qué identificador casó (clave exacta, build de Windows o CPE declarado). */
+  identity?: FindingIdentity;
+  /** Fase 6C.4: solo si casó por CPE; el cpeMatch y el rango que decidieron. */
+  cpe_match?: { criteria: string | null; range: string | null };
+}
+
+export interface FindingIdentity {
+  /** exact_key | windows_build | product_map */
+  method: string;
+  identifier: string;
+  cpe?: string;
+  inventory_key?: string;
+  declared_by?: string;
+  publishers?: string[];
+  editions?: string[];
 }
 
 export interface FindingCheck {
@@ -2871,6 +2899,207 @@ export interface ExposureItem {
 export interface ExposureOverview {
   items: ExposureItem[];
   total: number;
+}
+
+// --- Fase 6C.4: fuentes oficiales del catálogo (NVD, OSV, KEV/EPSS, catálogo local) ----------
+
+export type VulnSourceFreshness = "never" | "fresh" | "stale";
+
+/** GET /vulnerabilities/sources: nunca trae la API key de NVD ni URLs completas (solo el host). */
+export interface VulnerabilitySource {
+  source: string;
+  name: string;
+  /** nvd | osv | local_catalog | cisa_kev | first_epss */
+  adapter: string;
+  category: "catalog" | "threat_intel";
+  provides: string[];
+  status: string;
+  freshness: VulnSourceFreshness;
+  enabled: boolean;
+  network: boolean;
+  auto_sync: boolean;
+  records: number;
+  identifier_count: number;
+  product_count: number;
+  revision: number;
+  last_attempt_at: IsoDateTime | null;
+  last_success_at: IsoDateTime | null;
+  next_sync_at: IsoDateTime | null;
+  sync_requested_at: IsoDateTime | null;
+  last_error: string | null;
+  last_error_message: string | null;
+  cursor: IsoDateTime | null;
+  endpoint_host: string | null;
+}
+
+export interface VulnerabilitySourceList {
+  items: VulnerabilitySource[];
+  sync_enabled: boolean;
+  nvd_api_key_configured: boolean;
+  stale_after_hours: number;
+  /** Fuente (nvd, osv, local_catalog) -> atributo -> de dónde sale. */
+  attribute_sources: Record<string, Record<string, string>>;
+}
+
+export interface VulnSourceSync {
+  id: number;
+  kind: string;
+  trigger: string;
+  status: string;
+  actor: string;
+  started_at: IsoDateTime;
+  finished_at: IsoDateTime | null;
+  duration_ms: number | null;
+  format: string | null;
+  content_sha256: string | null;
+  window_start: IsoDateTime | null;
+  window_end: IsoDateTime | null;
+  requests: number;
+  records_seen: number;
+  records_new: number;
+  records_updated: number;
+  records_unchanged: number;
+  records_retired: number;
+  records_invalid: number;
+  records_skipped: number;
+  assets_queued: number;
+  error_code: string | null;
+  error_message: string | null;
+  details: Record<string, unknown> | null;
+}
+
+export interface VulnSourceSyncList {
+  source: string;
+  items: VulnSourceSync[];
+  total: number;
+}
+
+/** Fuentes oficiales que admiten importación de fichero y sincronización. */
+export type OfficialVulnSource = "nvd" | "osv";
+
+export interface VulnSourceInvalidRecord {
+  index: number;
+  record_id: string | null;
+  code: string;
+  message: string;
+}
+
+export interface VulnSourcePreview {
+  source: string;
+  adapter: string;
+  format: string;
+  sha256: string;
+  size_bytes: number;
+  total: number;
+  valid: number;
+  new: number;
+  updated: number;
+  unchanged: number;
+  retired: number;
+  invalid: number;
+  skipped: number;
+  skipped_reasons: Record<string, number>;
+  invalid_records: VulnSourceInvalidRecord[];
+  assets_to_evaluate: number;
+  cursor: IsoDateTime | null;
+  existing_source: boolean;
+}
+
+export interface VulnSourceImportResult {
+  source: string;
+  revision: number;
+  sha256: string;
+  new: number;
+  updated: number;
+  unchanged: number;
+  retired: number;
+  invalid: number;
+  skipped: number;
+  assets_queued: number;
+  sync_id: number;
+}
+
+export interface VulnSourceSyncRequested {
+  source: string;
+  status: "queued";
+  requested_at: IsoDateTime;
+  requested_by: string;
+  full: boolean;
+}
+
+export interface CatalogStatus {
+  state: "no_catalog" | "stale" | "ready";
+  records: number;
+  cves: number;
+  sources: number;
+  by_adapter: Record<string, number>;
+  last_success_at: IsoDateTime | null;
+  stale_sources: string[];
+  known_exploited_available: boolean;
+  epss_available: boolean;
+  evaluation: { assets_evaluated: number; assets_covered: number; assets_pending: number };
+}
+
+export interface CatalogRecordItem {
+  source: string;
+  adapter: string;
+  vulnerability_id: string;
+  cve_id: string | null;
+  title: string;
+  severity: VulnSeverity;
+  cvss_score: number | null;
+  cvss_version: string | null;
+  published_at: IsoDateTime | null;
+  modified_at: IsoDateTime | null;
+  known_exploited: boolean;
+  epss_score: number | null;
+  affected: number;
+  findings: number;
+  /** nvd_rejected | osv_withdrawn | null */
+  retired: string | null;
+}
+
+export interface CatalogRecordPage {
+  items: CatalogRecordItem[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface CveSourceRecord {
+  source: string;
+  source_name: string;
+  adapter: string;
+  vulnerability_id: string;
+  record_version: number;
+  imported_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  title: string;
+  description: string | null;
+  severity: VulnSeverity;
+  source_severity: string | null;
+  cvss_version: string | null;
+  cvss_score: number | null;
+  cvss_vector: string | null;
+  published_at: IsoDateTime | null;
+  modified_at: IsoDateTime | null;
+  aliases: string[];
+  references: string[];
+  cwe: string[];
+  remediation: string | null;
+  affected: Record<string, unknown>[];
+  /** Procedencia por atributo (adapter, recuperación, huella y origen de cada campo). */
+  provenance: Record<string, unknown> | null;
+  retired: string | null;
+}
+
+export interface CveDetail {
+  cve_id: string;
+  records: CveSourceRecord[];
+  /** Contexto KEV/EPSS de Threat Intelligence, o null sin datos. */
+  exploitation: Record<string, unknown> | null;
+  findings: { total: number; active: number; assets: number };
+  attribute_sources: Record<string, Record<string, string>>;
 }
 
 // --- Fase 5C: Threat Intelligence ---------------------------------------------------------------
@@ -4137,4 +4366,366 @@ export interface NetworkPollList {
   total: number;
   limit: number;
   offset: number;
+}
+
+// --- Fase 6C.3: inventario Wi-Fi / AP / WLAN (/api/v1/network/wlan) ---------------------------
+// Mismos nombres que los esquemas del backend (app/schemas/wlan.py) para que el test de
+// contrato pueda compararlos. Lo que la fuente no informa llega como null: la UI no lo suple.
+
+export type WlanBand = "2.4" | "5" | "6";
+export type WlanSource = "snmp_ieee802dot11" | "snmp_airespace" | "snmp_unifi" | "agent";
+export type WlanConfidence = "reported_by_device" | "observed";
+/** Clasificación manual. No existe "rogue": la UI nunca la ofrece ni la deduce. */
+export type WlanAuthorizationStatus = "unknown" | "authorized" | "external";
+export type WlanApReportedStatus = "up" | "down" | "transitional" | "unknown";
+/** Derivada al leer: "historical" es solo evidencia antigua, nunca "activo". */
+export type WlanFreshness = "recent" | "historical";
+export type WlanProtection =
+  | "open"
+  | "owe"
+  | "wep"
+  | "wpa"
+  | "wpa_wpa2"
+  | "wpa2"
+  | "wpa2_wpa3"
+  | "wpa3"
+  | "rsn"
+  | "legacy"
+  | "unknown";
+export type WlanIdentityConfidence = "confirmed" | "probable" | "observation_only";
+export type WlanClientState =
+  | "associated"
+  | "authenticated"
+  | "connected"
+  | "idle"
+  | "power_save"
+  | "disassociated"
+  | "pending"
+  | "probing"
+  | "excluded"
+  | "unknown";
+export type WlanFindingCode = "open_network" | "wep" | "wpa1" | "wpa1_allowed" | "legacy_privacy" | "tkip_allowed";
+export type WlanSourceAvailability = "available" | "partial" | "unavailable" | "not_configured";
+export type WlanCorrelationBasis = "agent_self" | "mac_match" | "agent_reported_mac";
+export type WlanUnlinkTarget = "asset" | "network_device" | "all";
+
+export interface WlanDeviceRef {
+  device_id: string;
+  display_name: string;
+}
+
+export interface WlanAssetRef {
+  asset_id: string;
+  display_name: string;
+}
+
+export interface WlanSensorRef {
+  sensor_id: string;
+  name: string;
+}
+
+export interface WlanApRef {
+  access_point_id: string;
+  display_name: string;
+}
+
+export interface WlanRadio {
+  slot: number;
+  band: WlanBand | null;
+  channel: number | null;
+  ssid: string | null;
+  standard: string | null;
+  status: "up" | "down" | null;
+  clients: number | null;
+}
+
+/** Configuración insegura: informativa, sin efecto en el Risk Engine. */
+export interface WlanConfigFinding {
+  code: WlanFindingCode;
+  severity: "info";
+  contributes_to_risk: false;
+  detail: string;
+}
+
+export interface WlanLinkEvidence {
+  basis: "management_ip" | "mac" | "source_device";
+  value: string;
+  method: "automatic" | "manual";
+  at: string;
+  by: string | null;
+}
+
+export interface WlanAccessPointRead {
+  access_point_id: string;
+  site_id: string;
+  site_name: string;
+  display_name: string;
+  name: string | null;
+  vendor: string | null;
+  model: string | null;
+  serial_number: string | null;
+  firmware: string | null;
+  location: string | null;
+  management_ip: string | null;
+  ethernet_mac: string | null;
+  radio_mac: string | null;
+  reported_status: WlanApReportedStatus;
+  source: WlanSource;
+  confidence: WlanConfidence;
+  reported_by: WlanDeviceRef | null;
+  sensor: WlanSensorRef | null;
+  network_device: WlanDeviceRef | null;
+  asset: WlanAssetRef | null;
+  authorization_status: WlanAuthorizationStatus;
+  authorization_reason: string | null;
+  authorization_by: string | null;
+  authorization_at: string | null;
+  present: boolean;
+  freshness: WlanFreshness;
+  first_seen_at: string;
+  last_seen_at: string;
+  radios: WlanRadio[];
+  bss_count: number;
+  client_count: number;
+  ssids: string[];
+  version: number;
+}
+
+export interface WlanAccessPointList {
+  items: WlanAccessPointRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WlanObservationRead {
+  observation_id: number;
+  entity: "access_point" | "bss" | "client";
+  entity_id: string;
+  source: WlanSource;
+  confidence: WlanConfidence;
+  observed_at: string;
+  received_at: string;
+  poll_id: string | null;
+  sensor: WlanSensorRef | null;
+  reported_by: WlanDeviceRef | null;
+  agent_asset: WlanAssetRef | null;
+  data: Record<string, string | number | boolean | null>;
+}
+
+export interface WlanObservationList {
+  items: WlanObservationRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WlanBssRead {
+  bss_id: string;
+  site_id: string;
+  site_name: string;
+  bssid: string;
+  bssid_randomized: boolean;
+  ssid: string | null;
+  band: WlanBand | null;
+  channel: number | null;
+  frequency_mhz: number | null;
+  protection: WlanProtection | null;
+  protection_reported: string | null;
+  standard: string | null;
+  signal_dbm: number | null;
+  signal_quality: number | null;
+  client_count: number | null;
+  /** Siempre null en esta fase: ninguna fuente da una VLAN verificable. */
+  vlan_id: number | null;
+  access_point: WlanApRef | null;
+  source: WlanSource;
+  sources: WlanSource[];
+  confidence: WlanConfidence;
+  reported_by: WlanDeviceRef | null;
+  last_agent: WlanAssetRef | null;
+  authorization_status: WlanAuthorizationStatus;
+  authorization_reason: string | null;
+  authorization_by: string | null;
+  authorization_at: string | null;
+  findings: WlanConfigFinding[];
+  present: boolean;
+  freshness: WlanFreshness;
+  first_seen_at: string;
+  last_seen_at: string;
+  last_snmp_seen_at: string | null;
+  last_agent_seen_at: string | null;
+  version: number;
+}
+
+export interface WlanBssList {
+  items: WlanBssRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WlanAccessPointDetail extends WlanAccessPointRead {
+  link_suppressed: boolean;
+  link_evidence: Partial<Record<"asset" | "network_device", WlanLinkEvidence>>;
+  bss: WlanBssRead[];
+  findings: WlanConfigFinding[];
+  /** Las 50 observaciones más recientes del AP y de sus BSS (el resto, por /observations). */
+  observations: WlanObservationRead[];
+}
+
+/** Agregado por (site, SSID): el mismo SSID en dos sites son dos filas. */
+export interface WlanSsidRead {
+  site_id: string;
+  site_name: string;
+  ssid: string | null;
+  bss_count: number;
+  bss_recent: number;
+  access_point_count: number;
+  bands: WlanBand[];
+  protections: WlanProtection[];
+  sources: WlanSource[];
+  configured_on_controllers: number;
+  controller_client_count: number | null;
+  client_count: number | null;
+  authorized_bss: number;
+  external_bss: number;
+  unknown_bss: number;
+  findings: WlanFindingCode[];
+  last_seen_at: string;
+}
+
+export interface WlanSsidList {
+  items: WlanSsidRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WlanClientRead {
+  client_id: string;
+  site_id: string;
+  site_name: string;
+  mac: string | null;
+  mac_randomized: boolean;
+  bssid: string | null;
+  ssid: string | null;
+  access_point: WlanApRef | null;
+  radio_slot: number | null;
+  band: WlanBand | null;
+  standard: string | null;
+  state: WlanClientState;
+  source: WlanSource;
+  identity_confidence: WlanIdentityConfidence;
+  asset: WlanAssetRef | null;
+  correlation_basis: WlanCorrelationBasis | null;
+  reported_by: WlanDeviceRef | null;
+  present: boolean;
+  freshness: WlanFreshness;
+  first_seen_at: string;
+  last_seen_at: string;
+}
+
+export interface WlanClientList {
+  items: WlanClientRead[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface WlanSourceStatus {
+  source: "snmp" | "agent";
+  availability: WlanSourceAvailability;
+  /** SNMP: sensores con snmp.wlan. Agente: agentes con informe wireless. */
+  reporters: number;
+  /** SNMP: estado del módulo wlan en la última consulta de cada equipo. Agente: estado del informe. */
+  by_status: Record<string, number>;
+  last_seen_at: string | null;
+  detail: string;
+}
+
+export interface WlanOverview {
+  site_id: string | null;
+  access_points: number;
+  access_points_recent: number;
+  access_points_by_authorization: Record<string, number>;
+  access_points_by_status: Record<string, number>;
+  bss: number;
+  bss_recent: number;
+  bss_observed_only: number;
+  bss_by_band: Record<string, number>;
+  ssids: number;
+  clients: number;
+  clients_recent: number;
+  clients_by_identity: Record<string, number>;
+  insecure_bss: number;
+  findings_by_code: Record<string, number>;
+  sources: WlanSourceStatus[];
+  risk_engine_contribution: false;
+}
+
+export interface WlanAuthorizationUpdate {
+  status: WlanAuthorizationStatus;
+  reason?: string;
+  /** Concurrencia optimista: si no coincide, 409 wlan_version_conflict. */
+  version?: number;
+}
+
+export interface WlanLinkRequest {
+  asset_id?: string;
+  network_device_id?: string;
+}
+
+export interface WlanUnlinkRequest {
+  target?: WlanUnlinkTarget;
+  reason?: string;
+}
+
+export interface WlanAccessPointQuery {
+  siteId?: string;
+  ssid?: string;
+  band?: WlanBand;
+  status?: WlanApReportedStatus;
+  authorization?: WlanAuthorizationStatus;
+  freshness?: WlanFreshness;
+  present?: boolean;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WlanBssQuery {
+  siteId?: string;
+  ssid?: string;
+  band?: WlanBand;
+  authorization?: WlanAuthorizationStatus;
+  source?: WlanSource;
+  confidence?: WlanConfidence;
+  protection?: WlanProtection;
+  accessPointId?: string;
+  freshness?: WlanFreshness;
+  insecure?: boolean;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WlanSsidQuery {
+  siteId?: string;
+  band?: WlanBand;
+  q?: string;
+  limit?: number;
+  offset?: number;
+}
+
+export interface WlanClientQuery {
+  siteId?: string;
+  ssid?: string;
+  bssid?: string;
+  accessPointId?: string;
+  identity?: WlanIdentityConfidence;
+  state?: WlanClientState;
+  present?: boolean;
+  freshness?: WlanFreshness;
+  limit?: number;
+  offset?: number;
 }

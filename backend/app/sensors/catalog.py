@@ -43,7 +43,7 @@ REQUIRED_CAPABILITY = {
 }
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.3.0"
+SENSOR_RUNTIME_VERSION = "0.4.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

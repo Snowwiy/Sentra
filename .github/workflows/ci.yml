@@ -55,6 +55,82 @@ jobs:
       - run: mypy sentra_agent tests
       - run: pytest
 
+  # Fase 6C.5: agente nativo de macOS en Apple Silicon y en Intel. Las etiquetas de runner
+  # (macos-15 = arm64, macos-15-intel = x86_64) deben confirmarse en la documentación de
+  # GitHub Actions antes de dar el job por bueno: las imágenes de macOS cambian a menudo.
+  agent-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: macos-15
+            arch: arm64
+          - runner: macos-15-intel
+            arch: x86_64
+    runs-on: ${{ matrix.runner }}
+    defaults:
+      run:
+        working-directory: agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: Check the runner architecture
+        run: test "$(uname -m)" = "${{ matrix.arch }}"
+      - run: pip install -e ".[dev]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy sentra_agent tests
+      - run: mypy --platform darwin sentra_agent tests
+      - run: pytest
+      # Importa los módulos nativos y serializa un inventario y un heartbeat reales del runner
+      # (sin servidor): detecta en un Mac de verdad lo que los fixtures de Linux no ven.
+      - name: Import and serialize on macOS
+        run: |
+          python - <<'PY'
+          import dataclasses
+          import json
+          import platform
+          from sentra_agent import collectors, inventory, macos, wifi
+          info = macos.platform_info(platform.machine())
+          assert info.native_architecture in ("arm64", "x86_64"), info
+          host = dataclasses.asdict(collectors.collect_host_info())
+          assert host["os_name"] == "macOS", host
+          json.dumps(inventory.collect_inventory())
+          wireless = wifi.collect_wireless("darwin")
+          assert wireless is None or wireless["status"] in (
+              "ok", "no_adapter", "permission_limited", "unsupported", "error"
+          ), wireless
+          print(json.dumps({"host": host, "wireless_status": wireless and wireless["status"]}))
+          PY
+      # Paquete sin firmar (no hay certificados de Apple en CI): solo comprueba que se construye
+      # y que la estructura del .pkg es la esperada.
+      - name: Build the unsigned pkg
+        run: |
+          packaging/macos/build-pkg.sh --out "$RUNNER_TEMP/dist"
+          ls -l "$RUNNER_TEMP/dist"
+          pkgutil --check-signature "$RUNNER_TEMP"/dist/*-unsigned.pkg || true
+          pkgutil --expand "$RUNNER_TEMP"/dist/*-unsigned.pkg "$RUNNER_TEMP/expanded"
+          test -f "$RUNNER_TEMP/expanded/Distribution"
+
+  # El sensor no tenía job propio: se ejecuta con el extra snmp para cubrir también SNMPv3.
+  sensor:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: sensor
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - run: pip install -e ".[dev,snmp]"
+      - run: ruff check .
+      - run: ruff format --check .
+      - run: mypy .
+      - run: pytest
+
   frontend:
     runs-on: ubuntu-latest
     defaults:

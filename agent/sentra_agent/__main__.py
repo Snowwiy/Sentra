@@ -12,7 +12,9 @@ from urllib.parse import urlparse
 from sentra_agent import __version__
 from sentra_agent.client import SentraClient
 from sentra_agent.config import AgentConfig, load_config
+from sentra_agent.credentials import CredentialStoreUnavailableError, check_store
 from sentra_agent.enrollment import (
+    EXIT_CREDENTIAL_STORE,
     EXIT_ENROLLED,
     EXIT_NO_CREDENTIAL,
     EXIT_REJECTED,
@@ -26,7 +28,14 @@ from sentra_agent.runner import Agent
 from sentra_agent.winservice import NotRunningAsServiceError, dispatch
 
 # Re-exported: the Linux installer tests import the exit codes from here.
-__all__ = ["EXIT_ENROLLED", "EXIT_NO_CREDENTIAL", "EXIT_REJECTED", "EXIT_UNREACHABLE", "main"]
+__all__ = [
+    "EXIT_CREDENTIAL_STORE",
+    "EXIT_ENROLLED",
+    "EXIT_NO_CREDENTIAL",
+    "EXIT_REJECTED",
+    "EXIT_UNREACHABLE",
+    "main",
+]
 
 
 def _warn_if_cleartext(api_url: str) -> None:
@@ -65,7 +74,7 @@ def _run_service(config: AgentConfig) -> int:
         agent = Agent(
             config,
             SentraClient(config.api_url, config.request_timeout_seconds),
-            IdentityStore(config.state_dir),
+            IdentityStore(config.state_dir, config.credential_store),
             stop_event=stop,
         )
         bootstrap_service_enrollment(agent, stop)
@@ -102,6 +111,12 @@ def main(argv: list[str] | None = None) -> int:
         help="run under the Windows Service Control Manager (set by the Windows installer)",
     )
     parser.add_argument(
+        "--no-console-log",
+        action="store_true",
+        help="log only to the rotating file (used by the macOS LaunchDaemon, whose console"
+        " output would otherwise grow without rotation)",
+    )
+    parser.add_argument(
         "--enroll",
         action="store_true",
         help="enroll if not enrolled yet, then exit (exit code tells the result; used by"
@@ -126,7 +141,10 @@ def main(argv: list[str] | None = None) -> int:
 
     # Un servicio no tiene consola: solo el archivo de log rotado.
     log_file = configure_logging(
-        config.state_dir, config.log_level, config.log_dir, console=not args.service
+        config.state_dir,
+        config.log_level,
+        config.log_dir,
+        console=not (args.service or args.no_console_log),
     )
     logging.getLogger("sentra_agent").info("logging to file", extra={"path": str(log_file)})
     _warn_if_cleartext(config.api_url)
@@ -140,12 +158,24 @@ def main(argv: list[str] | None = None) -> int:
         if hasattr(signal, name):
             signal.signal(getattr(signal, name), lambda *_: stop.set())
 
-    agent = Agent(
-        config,
-        SentraClient(config.api_url, config.request_timeout_seconds),
-        IdentityStore(config.state_dir),
-        stop_event=stop,
-    )
+    try:
+        # Fase 6C.5: antes de enrolar o cargar el token, el almacén elegido debe funcionar
+        # (Keychain en macOS). Si no, se para aquí con un mensaje claro: nunca se enrola
+        # para luego perder el token ni se guarda en claro sin que lo pida la configuración.
+        check_store(config.credential_store, config.state_dir)
+        agent = Agent(
+            config,
+            SentraClient(config.api_url, config.request_timeout_seconds),
+            IdentityStore(config.state_dir, config.credential_store),
+            stop_event=stop,
+        )
+    except CredentialStoreUnavailableError as exc:
+        logging.getLogger("sentra_agent").error(
+            "credential store unavailable; the agent will not enroll or report",
+            extra={"error": str(exc), "credential_store": config.credential_store},
+        )
+        print(f"credential store unavailable: {exc}")
+        return EXIT_CREDENTIAL_STORE
     if args.enroll:
         return _enroll(agent)
     try:

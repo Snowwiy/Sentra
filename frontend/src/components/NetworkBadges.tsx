@@ -2,9 +2,9 @@ import type { MonitoringMethod } from "../api/types";
 
 /** DISCOVERED → MONITORED → MANAGED, as in the hybrid monitoring model. */
 export const METHOD_LABELS: Record<MonitoringMethod, string> = {
-  discovered: "Discovered",
-  agentless: "Monitored",
-  agent: "Managed",
+  discovered: "Descubierto",
+  agentless: "Monitorizado",
+  agent: "Gestionado",
 };
 
 const METHOD_TITLES: Record<MonitoringMethod, string> = {

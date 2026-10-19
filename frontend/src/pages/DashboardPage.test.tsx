@@ -3,7 +3,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Asset } from "../api/types";
+import type { Asset, DashboardVulnerabilities } from "../api/types";
 import { WithRole } from "../test/auth";
 import { DashboardPage } from "./DashboardPage";
 
@@ -74,6 +74,8 @@ let assetCalls: URL[];
 let summaryCalls: number;
 // Total del servidor (todas las páginas); por defecto, los items de la página.
 let serverTotal: number | undefined;
+// Bloque vulnerabilities del resumen (Fase 6C.4); undefined = el rol no lo recibe.
+let vulnSummary: DashboardVulnerabilities | undefined;
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -83,6 +85,7 @@ beforeEach(() => {
   assetCalls = [];
   summaryCalls = 0;
   serverTotal = undefined;
+  vulnSummary = undefined;
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
@@ -114,6 +117,7 @@ beforeEach(() => {
           incidents: { active: 3, critical: 1, unassigned: 2 },
           detections: { active: 5, by_severity: { high: 5 } },
           active_alerts: 4,
+          ...(vulnSummary ? { vulnerabilities: vulnSummary } : {}),
         });
       }
       if (path === "/alerts" || path === "/events") return json(200, { items: [], total: 0 });
@@ -209,7 +213,7 @@ describe("DashboardPage · paginación en servidor (Fase 4M)", () => {
     await screen.findByText("b-db");
     fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
     await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("offset")).toBe("50"));
-    fireEvent.click(screen.getByRole("button", { name: /Offline/ }));
+    fireEvent.click(screen.getByRole("button", { name: /Sin conexión/ }));
     await waitFor(() => {
       const params = assetCalls.at(-1)!.searchParams;
       expect(params.get("status")).toBe("offline");
@@ -222,7 +226,7 @@ describe("DashboardPage · paginación en servidor (Fase 4M)", () => {
 });
 
 describe("DashboardPage · ciclo de vida (Fase 5C.2)", () => {
-  it("muestra Stale, Candidato a limpieza y Archivado en la columna de estado", async () => {
+  it("muestra Inactivo, Candidato a limpieza y Archivado en la columna de estado", async () => {
     items = [
       asset("viejo", { status: "offline", lifecycle_state: "stale" }),
       asset("purgable", { status: "offline", lifecycle_state: "cleanup_candidate" }),
@@ -231,10 +235,10 @@ describe("DashboardPage · ciclo de vida (Fase 5C.2)", () => {
     ];
     renderPage();
     const rowOf = async (name: string) => (await screen.findByText(name)).closest("tr") as HTMLElement;
-    expect(within(await rowOf("viejo")).getByText("Stale")).toBeInTheDocument();
+    expect(within(await rowOf("viejo")).getByText("Inactivo")).toBeInTheDocument();
     expect(within(await rowOf("purgable")).getByText("Candidato a limpieza")).toBeInTheDocument();
     expect(within(await rowOf("retirado")).getByText("Archivado")).toHaveAttribute("title", "Retirado");
-    expect(within(await rowOf("vivo")).getByText("Online")).toBeInTheDocument();
+    expect(within(await rowOf("vivo")).getByText("En línea")).toBeInTheDocument();
   });
 
   it("el filtro de ciclo de vida se envía al servidor", async () => {
@@ -244,5 +248,77 @@ describe("DashboardPage · ciclo de vida (Fase 5C.2)", () => {
     await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("cleanup_candidate"));
     fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "stale" } });
     await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("stale"));
+  });
+});
+
+describe("DashboardPage: tarjeta de vulnerabilidades (Fase 6C.4)", () => {
+  const base: DashboardVulnerabilities = {
+    by_severity: {},
+    potential: 0,
+    assets_affected: 0,
+    evaluation_state: "no_vulnerabilities",
+    catalog_stale: false,
+    assets_evaluated: 8,
+    assets_covered: 6,
+    assets_pending: 0,
+  };
+
+  function renderDashboard() {
+    return render(
+      <MemoryRouter>
+        <WithRole role="viewer">
+          <DashboardPage />
+        </WithRole>
+      </MemoryRouter>,
+    );
+  }
+
+  it("sin vulnerabilidades solo cuando el catálogo cubre lo evaluado, con cobertura", async () => {
+    vulnSummary = base;
+    renderDashboard();
+    const card = await screen.findByRole("region", { name: "Resumen de vulnerabilidades" });
+    expect(within(card).getByText("Sin vulnerabilidades conocidas")).toHaveClass("badge--ok");
+    expect(within(card).getByLabelText("Cobertura de la evaluación")).toHaveTextContent(
+      "8 activos evaluados · 6 cubiertos por el catálogo · 0 pendientes",
+    );
+    expect(within(card).queryByText("Catálogo desactualizado")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["no_catalog", "Sin catálogo"],
+    ["insufficient_catalog", "Catálogo insuficiente"],
+    ["pending", "Evaluación pendiente"],
+  ] as const)("%s no se presenta como «sin vulnerabilidades»", async (state, label) => {
+    vulnSummary = { ...base, evaluation_state: state, assets_pending: state === "pending" ? 3 : 0 };
+    renderDashboard();
+    const card = await screen.findByRole("region", { name: "Resumen de vulnerabilidades" });
+    expect(within(card).getByText(label)).not.toHaveClass("badge--ok");
+    expect(within(card).queryByText("Sin vulnerabilidades conocidas")).not.toBeInTheDocument();
+  });
+
+  it("con vulnerabilidades muestra los recuentos y avisa del catálogo desactualizado", async () => {
+    vulnSummary = {
+      ...base,
+      evaluation_state: "vulnerabilities_found",
+      by_severity: { critical: 2, high: 5 },
+      assets_affected: 3,
+      potential: 4,
+      catalog_stale: true,
+    };
+    renderDashboard();
+    const card = await screen.findByRole("region", { name: "Resumen de vulnerabilidades" });
+    expect(within(card).getByText("Vulnerabilidades encontradas")).toBeInTheDocument();
+    expect(card).toHaveTextContent("Críticas 2 · altas 5 · medias 0 · bajas 0 · 3 activos afectados · 4 potenciales sin confirmar");
+    expect(within(card).getByText("Catálogo desactualizado")).toBeInTheDocument();
+    expect(within(card).getByRole("link", { name: "Ver el estado del catálogo" })).toHaveAttribute(
+      "href",
+      "/vulnerabilities/catalog",
+    );
+  });
+
+  it("sin el bloque (rol sin vulnerabilities:read) no hay tarjeta", async () => {
+    renderDashboard();
+    await screen.findByLabelText("Resumen de la plataforma");
+    expect(screen.queryByRole("region", { name: "Resumen de vulnerabilidades" })).not.toBeInTheDocument();
   });
 });

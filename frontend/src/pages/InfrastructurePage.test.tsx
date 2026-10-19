@@ -226,6 +226,21 @@ describe("InfrastructurePage: equipos", () => {
   });
 });
 
+describe("InfrastructurePage: registro sin sensor (Fase 6C)", () => {
+  it("explica qué falta y no ofrece la consulta periódica como si fuera a funcionar", async () => {
+    routes["GET /sensors"] = () => ({ body: { items: [], summary: {} } });
+    routes["GET /network/candidates"] = () => ({ body: { items: [] } });
+    renderPage("admin");
+    fireEvent.click(await screen.findByRole("button", { name: "Registrar equipo" }));
+    const dialog = screen.getByRole("dialog", { name: "Registrar equipo de red" });
+    fireEvent.change(within(dialog).getByLabelText("Site"), { target: { value: BRANCH_SITE_ID } });
+    const note = await within(dialog).findByRole("note");
+    expect(note).toHaveTextContent("falta un perfil SNMP y un sensor del site");
+    await waitFor(() => expect(within(dialog).getByRole("note")).toHaveTextContent("No hay sensores en este site"));
+    expect(within(dialog).getByRole("checkbox", { name: "Consultar periódicamente" })).toBeDisabled();
+  });
+});
+
 describe("InfrastructurePage: perfiles SNMP", () => {
   async function openProfiles() {
     renderPage("admin");

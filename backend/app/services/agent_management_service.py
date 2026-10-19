@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import ConflictError, NotFoundError
+from app.core.platforms import is_macos
 from app.models.asset import Asset, AssetStatus
 from app.repositories.asset_repository import AssetRepository
 from app.schemas.agent_management import (
@@ -48,6 +49,8 @@ def agent_platform(os_name: str | None) -> AgentPlatform:
         return "windows"
     if "linux" in name:
         return "linux"
+    if is_macos(os_name):
+        return "macos"
     return "other"
 
 

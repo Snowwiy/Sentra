@@ -8,6 +8,7 @@ contraseña del último admin (`reset-password`) y operar sin dashboard.
 
 import argparse
 import getpass
+import json
 import secrets
 import sys
 from collections.abc import Callable
@@ -27,12 +28,13 @@ from app.core.exceptions import (
     NotFoundError,
     PolicyError,
     SecretStoreUnavailableError,
+    SentraError,
     ThreatIntelBusyError,
     ThreatIntelError,
 )
 from app.core.permissions import Role
 from app.core.secret_box import SecretStoreError
-from app.db.locks import VULN_CATALOG_LOCK_KEY, singleton_lock
+from app.db.locks import VULN_CATALOG_LOCK_KEY, VULN_SOURCE_LOCK_KEYS, singleton_lock
 from app.db.session import get_engine, get_sessionmaker
 from app.detection.config import DetectionConfig
 from app.detection.engine import DetectionEngine, EngineRun
@@ -210,6 +212,129 @@ def _vuln_catalog_import(session: Session, file: str, skip_invalid: bool) -> int
         f" {result.updated} updated, {result.unchanged} unchanged, {result.invalid} invalid;"
         f" {result.assets_queued} assets queued for evaluation"
     )
+    return 0
+
+
+def _read_source_file(path: Path, max_bytes: int) -> bytes | None:
+    if not path.is_file():
+        print("file not found", file=sys.stderr)
+        return None
+    with path.open("rb") as handle:
+        data = handle.read(max_bytes + 1)
+    if len(data) > max_bytes:
+        print(f"file exceeds {max_bytes} bytes (VULN_SOURCE_MAX_DOWNLOAD_MB)", file=sys.stderr)
+        return None
+    return data
+
+
+def _vuln_source_import(
+    session: Session, source: str, file: str, skip_invalid: bool, preview: bool
+) -> int:
+    """Fase 6C.4: importa un fichero de NVD (CVE API 2.0 / feeds .json, .json.gz, .zip) u OSV
+    (.json o all.zip). Solo lee el fichero indicado; nunca descarga nada. UNA transacción."""
+    from app.services.vulnerability_source_service import VulnerabilitySourceService
+
+    settings = get_settings()
+    service = VulnerabilitySourceService(session, settings)
+    data = _read_source_file(Path(file), service.max_bytes)
+    if data is None:
+        return 2
+    if preview:
+        try:
+            result = service.preview(source, data)
+        except SentraError as exc:
+            print(f"refused ({exc.code}): {exc.message}", file=sys.stderr)
+            return 2
+        print(json.dumps(result.model_dump(mode="json"), indent=2))
+        return 0
+    with singleton_lock(get_engine, VULN_SOURCE_LOCK_KEYS[source]) as acquired:
+        if not acquired:
+            print("another import or sync of this source is in progress", file=sys.stderr)
+            return 1
+        try:
+            imported = service.import_content(
+                source,
+                data,
+                audit_service.CLI,
+                expected_sha256=None,
+                skip_invalid=skip_invalid,
+                trigger="cli",
+                lock=False,
+            )
+        except SentraError as exc:
+            session.rollback()
+            print(f"refused ({exc.code}): {exc.message}", file=sys.stderr)
+            return 2
+        audit_service.record(
+            session,
+            audit_service.CLI,
+            "vulnerability_source_imported",
+            target_type="vulnerability_source",
+            target_id=source,
+            details={
+                "sha256": imported.sha256,
+                "revision": imported.revision,
+                "new": imported.new,
+                "updated": imported.updated,
+                "unchanged": imported.unchanged,
+                "retired": imported.retired,
+                "invalid": imported.invalid,
+                "skipped": imported.skipped,
+                "assets_queued": imported.assets_queued,
+                "via": "cli",
+            },
+            commit=False,
+        )
+        session.commit()
+    print(
+        f"source {source} revision {imported.revision}: {imported.new} new, {imported.updated}"
+        f" updated, {imported.unchanged} unchanged, {imported.retired} retired,"
+        f" {imported.invalid} invalid, {imported.skipped} skipped;"
+        f" {imported.assets_queued} assets queued for evaluation"
+    )
+    return 0
+
+
+def _vuln_source_sync(session: Session, source: str | None, full: bool) -> int:
+    """Fase 6C.4: sincroniza ya por red (necesita VULN_SOURCE_SYNC_ENABLED=true)."""
+    from app.vulnerabilities.source_sync import VulnerabilitySourceSyncer
+
+    settings = get_settings()
+    if not settings.vuln_source_sync_enabled:
+        print("network sync is disabled (VULN_SOURCE_SYNC_ENABLED=false)", file=sys.stderr)
+        return 2
+    syncer = VulnerabilitySourceSyncer(session, settings, lock_engine=get_engine)
+    keys = [source] if source else ["nvd", "osv"]
+    failed = False
+    for key in keys:
+        try:
+            outcome = syncer.sync(key, "cli", audit_service.CLI, full=full)
+        except SentraError as exc:
+            print(f"{key}: refused ({exc.code}): {exc.message}", file=sys.stderr)
+            failed = True
+            continue
+        counts = ", ".join(f"{k} {v}" for k, v in outcome.counts.items())
+        print(f"{key}: {outcome.status} ({counts})")
+        if outcome.status == "failed":
+            print(f"  error {outcome.error_code}: {outcome.error_message}", file=sys.stderr)
+            failed = True
+    return 1 if failed else 0
+
+
+def _vuln_source_status(session: Session) -> int:
+    from app.services.vulnerability_source_service import VulnerabilitySourceService
+
+    listing = VulnerabilitySourceService(session, get_settings()).list_sources()
+    print(
+        f"network sync: {'enabled' if listing.sync_enabled else 'disabled'};"
+        f" NVD API key: {'configured' if listing.nvd_api_key_configured else 'not configured'}"
+    )
+    for item in listing.items:
+        print(
+            f"{item.source:<16} {item.adapter:<14} {item.status:<10} {item.freshness:<6}"
+            f" records={item.records} last_success={item.last_success_at or '-'}"
+            f" error={item.last_error or '-'}"
+        )
     return 0
 
 
@@ -822,7 +947,7 @@ def main(argv: list[str] | None = None) -> int:
     )
     create.add_argument("--ttl-minutes", type=int, help="lifetime (default from settings, 15)")
     create.add_argument("--max-uses", type=int, default=1, help="agents it may enroll (1)")
-    create.add_argument("--platform", choices=["windows", "linux"], help="only this OS")
+    create.add_argument("--platform", choices=["windows", "linux", "macos"], help="only this OS")
     create.add_argument("--hostname", help="only a host with this hostname")
     create.add_argument("--note", help="free text shown when listing (no secrets)")
     listing = commands.add_parser(
@@ -861,6 +986,29 @@ def main(argv: list[str] | None = None) -> int:
     catalog.add_argument("file", help="local JSON file (never a URL)")
     catalog.add_argument(
         "--skip-invalid", action="store_true", help="import the valid records, skip the rest"
+    )
+    source_import = commands.add_parser(
+        "vuln-source-import",
+        help="import an NVD (CVE API 2.0 / data feed) or OSV file (Fase 6C.4)",
+    )
+    source_import.add_argument("--source", required=True, choices=("nvd", "osv"))
+    source_import.add_argument("file", help="local file (.json, .json.gz, .zip; never a URL)")
+    source_import.add_argument(
+        "--skip-invalid", action="store_true", help="import the valid records, skip the rest"
+    )
+    source_import.add_argument(
+        "--preview", action="store_true", help="validate and count only (nothing is saved)"
+    )
+    source_sync = commands.add_parser(
+        "vuln-source-sync",
+        help="sync NVD/OSV over the network now (needs VULN_SOURCE_SYNC_ENABLED, Fase 6C.4)",
+    )
+    source_sync.add_argument("--source", choices=("nvd", "osv"), help="only this source")
+    source_sync.add_argument(
+        "--full", action="store_true", help="ignore the NVD cursor (VULN_NVD_INITIAL_DAYS back)"
+    )
+    commands.add_parser(
+        "vuln-source-status", help="vulnerability catalog sources and freshness (Fase 6C.4)"
     )
     evaluate = commands.add_parser(
         "vuln-evaluate", help="process the vulnerability evaluation queue now (Fase 5B)"
@@ -972,6 +1120,14 @@ def main(argv: list[str] | None = None) -> int:
             return _vuln_catalog_import(session, args.file, args.skip_invalid)
         if args.command == "vuln-evaluate":
             return _vuln_evaluate(session, args.all)
+        if args.command == "vuln-source-import":
+            return _vuln_source_import(
+                session, args.source, args.file, args.skip_invalid, args.preview
+            )
+        if args.command == "vuln-source-sync":
+            return _vuln_source_sync(session, args.source, args.full)
+        if args.command == "vuln-source-status":
+            return _vuln_source_status(session)
         if args.command == "threat-intel-import":
             return _threat_intel_import(
                 session, args.source, args.file, args.format, args.skip_invalid

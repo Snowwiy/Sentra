@@ -241,6 +241,157 @@ class PvidRecord(RequestModel):
     vlan_id: int = Field(ge=1, le=4094)
 
 
+# --- Fase 6C.3: módulo wlan ----------------------------------------------------------------
+# Lo que informa el sensor tal cual (enteros de la MIB, MAC/IP canónicas, texto saneado). El
+# significado de cada valor lo decide el servidor (app/network/wlan_catalog.py).
+
+
+def _ip(value: str | None) -> str | None:
+    return None if value is None else str(ipaddress.ip_address(value))
+
+
+class WlanSourceRecord(RequestModel):
+    """Un adaptador del sensor encontró su MIB y la leyó completa o parcialmente."""
+
+    kind: Literal["wlan_source"]
+    source: Literal["ieee802dot11", "airespace", "unifi"]
+    status: Literal["complete", "partial"]
+
+
+class WlanDot11RadioRecord(RequestModel):
+    """IEEE802dot11-MIB: una radio (ifIndex) de un AP autónomo."""
+
+    kind: Literal["wlan_dot11_radio"]
+    if_index: int = _INDEX
+    station_id: str | None = Field(default=None, max_length=17)
+    mac_address: str | None = Field(default=None, max_length=17)
+    ssid: str | None = _text(64)
+    bss_type: int | None = Field(default=None, ge=1, le=3)
+    # TruthValue: 1 = true, 2 = false.
+    privacy_invoked: Literal[1, 2] | None = None
+    exclude_unencrypted: Literal[1, 2] | None = None
+    rsna_enabled: Literal[1, 2] | None = None
+    phy_type: int | None = Field(default=None, ge=1, le=255)
+    dsss_channel: int | None = Field(default=None, ge=1, le=14)
+    ofdm_channel: int | None = Field(default=None, ge=1, le=255)
+
+    @field_validator("station_id", "mac_address")
+    @classmethod
+    def _mac(cls, value: str | None) -> str | None:
+        return _lenient_mac(value)
+
+
+class WlanControllerApRecord(RequestModel):
+    """AIRESPACE-WIRELESS-MIB bsnAPEntry: un AP asociado a la controladora."""
+
+    kind: Literal["wlan_controller_ap"]
+    ap_mac: str = Field(max_length=17)
+    name: str | None = _text(255)
+    location: str | None = _text(255)
+    operation_status: int | None = Field(default=None, ge=1, le=255)
+    software_version: str | None = _text(128)
+    model: str | None = _text(128)
+    serial: str | None = _text(128)
+    ip_address: str | None = Field(default=None, max_length=45)
+    ethernet_mac: str | None = Field(default=None, max_length=17)
+
+    @field_validator("ap_mac")
+    @classmethod
+    def _ap_mac(cls, value: str) -> str:
+        return _strict_mac(value) or value
+
+    @field_validator("ethernet_mac")
+    @classmethod
+    def _eth(cls, value: str | None) -> str | None:
+        return _lenient_mac(value)
+
+    @field_validator("ip_address")
+    @classmethod
+    def _addr(cls, value: str | None) -> str | None:
+        return _ip(value)
+
+
+class WlanControllerRadioRecord(RequestModel):
+    """AIRESPACE-WIRELESS-MIB bsnAPIfEntry: una radio (slot) de un AP de la controladora."""
+
+    kind: Literal["wlan_controller_radio"]
+    ap_mac: str = Field(max_length=17)
+    slot: int = Field(ge=0, le=255)
+    radio_type: int | None = Field(default=None, ge=1, le=255)
+    channel: int | None = Field(default=None, ge=1, le=255)
+    oper_status: Literal[1, 2] | None = None
+    clients: int | None = Field(default=None, ge=0, le=100_000)
+
+    @field_validator("ap_mac")
+    @classmethod
+    def _ap_mac(cls, value: str) -> str:
+        return _strict_mac(value) or value
+
+
+class WlanEssRecord(RequestModel):
+    """AIRESPACE-WIRELESS-MIB bsnDot11EssEntry: una WLAN configurada."""
+
+    kind: Literal["wlan_ess"]
+    ess_index: int = _INDEX
+    ssid: str | None = _text(64)
+    clients: int | None = Field(default=None, ge=0, le=1_000_000)
+
+
+class WlanStationRecord(RequestModel):
+    """AIRESPACE-WIRELESS-MIB bsnMobileStationEntry, minimizado (sin usuario ni IP)."""
+
+    kind: Literal["wlan_station"]
+    mac: str = Field(max_length=17)
+    ap_mac: str | None = Field(default=None, max_length=17)
+    slot: int | None = Field(default=None, ge=0, le=255)
+    ess_index: int | None = Field(default=None, ge=1, le=2**31 - 1)
+    ssid: str | None = _text(64)
+    status: int | None = Field(default=None, ge=0, le=255)
+    protocol: int | None = Field(default=None, ge=1, le=255)
+
+    @field_validator("mac")
+    @classmethod
+    def _station(cls, value: str) -> str:
+        return _strict_mac(value) or value
+
+    @field_validator("ap_mac")
+    @classmethod
+    def _ap_mac(cls, value: str | None) -> str | None:
+        return _lenient_mac(value)
+
+
+class WlanUnifiSystemRecord(RequestModel):
+    """UBNT-UniFi-MIB unifiApSystem: identidad del propio AP UniFi."""
+
+    kind: Literal["wlan_unifi_system"]
+    ip_address: str | None = Field(default=None, max_length=45)
+    model: str | None = _text(128)
+    firmware: str | None = _text(128)
+
+    @field_validator("ip_address")
+    @classmethod
+    def _addr(cls, value: str | None) -> str | None:
+        return _ip(value)
+
+
+class WlanVapRecord(RequestModel):
+    """UBNT-UniFi-MIB unifiVapEntry: un VAP (BSS) del AP."""
+
+    kind: Literal["wlan_vap"]
+    vap_index: int = _INDEX
+    bssid: str | None = Field(default=None, max_length=17)
+    ssid: str | None = _text(64)
+    name: str | None = _text(64)
+    channel: int | None = Field(default=None, ge=1, le=255)
+    radio: str | None = Field(default=None, max_length=8, pattern=r"^[A-Za-z0-9]+$")
+    clients: int | None = Field(default=None, ge=0, le=100_000)
+
+    @field_validator("bssid")
+    @classmethod
+    def _bssid(cls, value: str | None) -> str | None:
+        return _lenient_mac(value)
+
+
 SnmpRecord = Annotated[
     SystemRecord
     | EntityRecord
@@ -254,11 +405,21 @@ SnmpRecord = Annotated[
     | BridgePortRecord
     | MacEntryRecord
     | VlanRecord
-    | PvidRecord,
+    | PvidRecord
+    | WlanSourceRecord
+    | WlanDot11RadioRecord
+    | WlanControllerApRecord
+    | WlanControllerRadioRecord
+    | WlanEssRecord
+    | WlanStationRecord
+    | WlanUnifiSystemRecord
+    | WlanVapRecord,
     Field(discriminator="kind"),
 ]
 
-SensorModuleName = Literal["system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan"]
+SensorModuleName = Literal[
+    "system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan", "wlan"
+]
 SensorModuleStatus = Literal["complete", "partial", "unsupported", "failed", "skipped"]
 SensorSnmpError = Literal[
     "timeout",
@@ -277,7 +438,7 @@ SensorSnmpError = Literal[
 class SnmpJobSummary(RequestModel):
     """Resumen SNMP que el sensor añade al cerrar un job snmp_inventory."""
 
-    modules: dict[SensorModuleName, SensorModuleStatus] = Field(max_length=7)
+    modules: dict[SensorModuleName, SensorModuleStatus] = Field(max_length=8)
     error_code: SensorSnmpError | None = None
     requests: int = Field(default=0, ge=0, le=10_000_000)
     varbinds: int = Field(default=0, ge=0, le=100_000_000)

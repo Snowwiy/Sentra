@@ -304,9 +304,9 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
                 label="Estado"
                 value={list.filters.status}
                 options={[
-                  { value: "online", label: "Online" },
-                  { value: "offline", label: "Offline" },
-                  { value: "unknown", label: "Unknown" },
+                  { value: "online", label: "En línea" },
+                  { value: "offline", label: "Sin conexión" },
+                  { value: "unknown", label: "Desconocido" },
                 ]}
                 onChange={(v) => list.setFilter("status", v)}
               />

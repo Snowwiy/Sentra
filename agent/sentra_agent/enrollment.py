@@ -33,6 +33,9 @@ EXIT_ENROLLED = 0
 EXIT_NO_CREDENTIAL = 3
 EXIT_REJECTED = 4
 EXIT_UNREACHABLE = 5
+# Fase 6C.5: el almacén de credenciales (Keychain en macOS) no se puede usar. El agente no
+# enrola: obtendría un token que no podría guardar. Lo leen los instaladores Linux y macOS.
+EXIT_CREDENTIAL_STORE = 6
 
 STATUS_FILE = "enrollment-status.json"
 

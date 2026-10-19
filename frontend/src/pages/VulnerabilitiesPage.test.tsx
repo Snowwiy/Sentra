@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WithRole } from "../test/auth";
 import type {
   CatalogPreview,
+  CatalogStatus,
   FindingDetail,
   FindingSummary,
   Role,
@@ -138,6 +139,19 @@ const OVERVIEW: VulnerabilityOverview = {
   last_evaluated_at: iso(-300_000),
 };
 
+const CATALOG_STATUS: CatalogStatus = {
+  state: "ready",
+  records: 10,
+  cves: 10,
+  sources: 1,
+  by_adapter: { local_catalog: 10 },
+  last_success_at: iso(-86_400_000),
+  stale_sources: [],
+  known_exploited_available: true,
+  epss_available: true,
+  evaluation: { assets_evaluated: 3, assets_covered: 2, assets_pending: 0 },
+};
+
 type Handler = (init: RequestInit, url: URL) => { status?: number; body: unknown };
 
 let routes: Record<string, Handler>;
@@ -173,6 +187,11 @@ beforeEach(() => {
     "GET /ai/status": () => ({ body: { enabled: false, available: false, reason: "IA desactivada.", state: "disabled" } }),
     "GET /ai/insights": () => ({ body: { items: [], total: 0 } }),
     "GET /vulnerabilities/catalog": () => ({ body: { sources: [], items: [], total: 0 } }),
+    "GET /vulnerabilities/catalog/status": () => ({ body: CATALOG_STATUS }),
+    "GET /vulnerabilities/sources": () => ({
+      body: { items: [], sync_enabled: false, nvd_api_key_configured: false, stale_after_hours: 72, attribute_sources: {} },
+    }),
+    "GET /vulnerabilities/catalog/records": () => ({ body: { items: [], total: 0, limit: 50, offset: 0 } }),
   };
   vi.stubGlobal(
     "fetch",
@@ -241,13 +260,17 @@ describe("VulnerabilitiesPage", () => {
     });
   });
 
-  it("solo el admin ve el enlace al catálogo", async () => {
-    renderAt("/vulnerabilities", "analyst");
+  it("cualquier lector ve el enlace al catálogo y la cobertura; sin catálogo avisa", async () => {
+    renderAt("/vulnerabilities", "viewer");
     await screen.findByText("CVE-2099-1001");
-    expect(screen.queryByRole("link", { name: "Catálogo" })).not.toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Catálogo" })).toBeInTheDocument();
+    expect(await screen.findByLabelText("Cobertura del catálogo")).toHaveTextContent("2 cubiertos por el catálogo");
     cleanup();
-    renderAt("/vulnerabilities", "admin");
-    expect(await screen.findByRole("link", { name: "Catálogo" })).toBeInTheDocument();
+    routes["GET /vulnerabilities/catalog/status"] = () => ({
+      body: { ...CATALOG_STATUS, state: "no_catalog", records: 0, cves: 0, sources: 0 },
+    });
+    renderAt("/vulnerabilities", "viewer");
+    expect(await screen.findByText(/No hay catálogo de vulnerabilidades/)).toBeInTheDocument();
   });
 });
 
@@ -362,7 +385,7 @@ describe("VulnerabilityCatalogPage", () => {
         assets_queued: 3,
       },
     });
-    renderAt("/vulnerabilities/catalog");
+    renderAt("/vulnerabilities/catalog?tab=import");
     const content = '{"format":"sentra-vuln-catalog/1"}';
     const file = new File([content], "catalog.json", { type: "application/json" });
     // jsdom no implementa File.text(); los navegadores soportados sí.
@@ -374,7 +397,7 @@ describe("VulnerabilityCatalogPage", () => {
     expect(confirm).toBeDisabled();
     fireEvent.click(screen.getByRole("checkbox"));
     fireEvent.click(confirm);
-    expect(await screen.findByText(/revisión 1/)).toBeInTheDocument();
+    expect(await screen.findByText(/en la revisión 1/)).toBeInTheDocument();
     expect(lastBody("/vulnerabilities/catalog/import")).toEqual({
       content,
       expected_sha256: preview.sha256,

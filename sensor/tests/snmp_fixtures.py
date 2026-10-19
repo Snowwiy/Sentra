@@ -138,6 +138,144 @@ def minimal_mib() -> dict[Oid, Value]:
     }
 
 
+# --- Fase 6C.3: MIBs Wi-Fi sintéticas ------------------------------------------------------
+
+AP1_RADIO = bytes.fromhex("00a0f8000100")
+AP2_RADIO = bytes.fromhex("00a0f8000200")
+AP1_ETH = bytes.fromhex("00a0f80001ff")
+CLIENT_MAC = bytes.fromhex("3c2ef9000001")
+RANDOM_CLIENT_MAC = bytes.fromhex("da1122334455")  # bit localmente administrado (0x02)
+
+
+def dot11_ap_mib() -> dict[Oid, Value]:
+    """AP autónomo con IEEE802dot11-MIB: radio 2,4 GHz WPA2 (ifIndex 2) y radio 5 GHz
+    abierta (ifIndex 3)."""
+    mib: dict[Oid, Value] = {
+        c.SYS_DESCR: b"Autonomous AP 15.3",
+        c.SYS_OBJECT_ID: ObjectId("1.3.6.1.4.1.9.1.2240"),
+        c.SYS_NAME: b"ap-lobby",
+        c.SYS_SERVICES: 2,
+        (*c.IF_COLUMNS["descr"], 1): b"GigabitEthernet0",
+        (*c.IF_COLUMNS["if_type"], 1): 6,
+        (*c.IF_COLUMNS["descr"], 2): b"Dot11Radio0",
+        (*c.IF_COLUMNS["if_type"], 2): 71,
+        (*c.IF_COLUMNS["descr"], 3): b"Dot11Radio1",
+        (*c.IF_COLUMNS["if_type"], 3): 71,
+    }
+    radios = {
+        2: (bytes.fromhex("00cafe000010"), b"corp-wifi", 1, 1, 6, 6, None),
+        3: (bytes.fromhex("00cafe000020"), b"guest", 2, 2, 9, None, 36),
+    }
+    for if_index, (mac, ssid, privacy, rsna, phy, dsss, ofdm) in radios.items():
+        mib[(*c.DOT11_STATION_CONFIG, 1, if_index)] = mac
+        mib[(*c.DOT11_STATION_CONFIG, 9, if_index)] = ssid
+        mib[(*c.DOT11_STATION_CONFIG, 10, if_index)] = 1
+        mib[(*c.DOT11_PRIVACY, 1, if_index)] = privacy
+        mib[(*c.DOT11_PRIVACY, 7, if_index)] = rsna
+        mib[(*c.DOT11_OPERATION, 1, if_index)] = mac
+        mib[(*c.DOT11_PHY_OPERATION, 1, if_index)] = phy
+        if dsss is not None:
+            mib[(*c.DOT11_PHY_DSSS, 1, if_index)] = dsss
+        if ofdm is not None:
+            mib[(*c.DOT11_PHY_OFDM, 1, if_index)] = ofdm
+    # Columna de claves WEP (dot11WEPDefaultKeyValue): existe en el agente pero el catálogo
+    # no la permite; un test comprueba que nunca se pide.
+    mib[(*c.DOT11, 1, 3, 1, 2, 2, 1)] = b"\x00" * 5
+    return mib
+
+
+def airespace_mib() -> dict[Oid, Value]:
+    """Controladora Cisco AireOS con dos APs, sus radios, dos WLANs y tres clientes (uno con
+    MAC aleatoria). Incluye columnas no autorizadas (usuario, IP de cliente)."""
+    mib: dict[Oid, Value] = {
+        c.SYS_DESCR: b"Cisco Controller",
+        c.SYS_OBJECT_ID: ObjectId("1.3.6.1.4.1.9.1.1279"),
+        c.SYS_NAME: b"wlc-01",
+        c.SYS_SERVICES: 6,
+    }
+    aps = {
+        AP1_RADIO: (
+            b"AP-HALL",
+            b"Hall",
+            1,
+            b"8.10.1",
+            b"AIR-AP2802I-E-K9",
+            b"FCW0001",
+            (10, 70, 0, 21),
+            AP1_ETH,
+        ),
+        AP2_RADIO: (
+            b"AP-ROOF",
+            b"",
+            1,
+            b"8.10.1",
+            b"AIR-AP1832I",
+            b"FCW0002",
+            (10, 70, 0, 22),
+            None,
+        ),
+    }
+    for radio, (name, loc, status, sw, model, serial, ip, eth) in aps.items():
+        index = tuple(radio)
+        mib[(*c.BSN_AP, 3, *index)] = name
+        mib[(*c.BSN_AP, 4, *index)] = loc
+        mib[(*c.BSN_AP, 6, *index)] = status
+        mib[(*c.BSN_AP, 8, *index)] = sw
+        mib[(*c.BSN_AP, 16, *index)] = model
+        mib[(*c.BSN_AP, 17, *index)] = serial
+        mib[(*c.BSN_AP, 19, *index)] = bytes(ip)
+        if eth is not None:
+            mib[(*c.BSN_AP, 33, *index)] = eth
+        for slot, (radio_type, channel, clients) in enumerate(((1, 11, 2), (2, 44, 1))):
+            mib[(*c.BSN_AP_IF, 2, *index, slot)] = radio_type
+            mib[(*c.BSN_AP_IF, 4, *index, slot)] = channel
+            mib[(*c.BSN_AP_IF, 12, *index, slot)] = 2
+            mib[(*c.BSN_AP_IF, 15, *index, slot)] = clients
+    for ess, ssid, clients in ((1, b"corp-wifi", 2), (2, b"guest", 1)):
+        mib[(*c.BSN_ESS, 2, ess)] = ssid
+        mib[(*c.BSN_ESS, 38, ess)] = clients
+    stations = (
+        (CLIENT_MAC, AP1_RADIO, 0, 1, b"corp-wifi", 3, 6),
+        (RANDOM_CLIENT_MAC, AP1_RADIO, 1, 2, b"guest", 3, 8),
+        (bytes.fromhex("3c2ef9000002"), AP2_RADIO, 0, 1, b"corp-wifi", 0, 3),
+    )
+    for mac, ap, slot, ess, ssid, status, protocol in stations:
+        index = tuple(mac)
+        mib[(*c.BSN_STATION, 2, *index)] = bytes([10, 70, 0, 99])  # IP: no autorizada
+        mib[(*c.BSN_STATION, 3, *index)] = b"alice@example.test"  # usuario: no autorizada
+        mib[(*c.BSN_STATION, 4, *index)] = ap
+        mib[(*c.BSN_STATION, 5, *index)] = slot
+        mib[(*c.BSN_STATION, 6, *index)] = ess
+        mib[(*c.BSN_STATION, 7, *index)] = ssid
+        mib[(*c.BSN_STATION, 9, *index)] = status
+        mib[(*c.BSN_STATION, 25, *index)] = protocol
+    return mib
+
+
+def unifi_mib() -> dict[Oid, Value]:
+    """AP UniFi con dos VAPs en 2,4 GHz y 5 GHz (BSSID como texto, como en el firmware)."""
+    mib: dict[Oid, Value] = {
+        c.SYS_DESCR: b"UAP-AC-Pro 6.5.62",
+        c.SYS_OBJECT_ID: ObjectId("1.3.6.1.4.1.41112"),
+        c.SYS_NAME: b"uap-office",
+        c.UNIFI_SYSTEM_IP: bytes([10, 70, 0, 31]),
+        c.UNIFI_SYSTEM_MODEL: b"UAP-AC-Pro",
+        c.UNIFI_SYSTEM_VERSION: b"6.5.62.14789",
+    }
+    vaps = (
+        (1, b"78:8a:20:00:00:01", 6, b"office", b"ath0", 4, b"ng"),
+        (2, b"78:8a:20:00:00:02", 100, b"office", b"ath1", 7, b"na"),
+    )
+    for index, bssid, channel, essid, name, clients, radio in vaps:
+        mib[(*c.UNIFI_VAP, 2, index)] = bssid
+        mib[(*c.UNIFI_VAP, 4, index)] = channel
+        mib[(*c.UNIFI_VAP, 6, index)] = essid
+        mib[(*c.UNIFI_VAP, 7, index)] = name
+        mib[(*c.UNIFI_VAP, 8, index)] = clients
+        mib[(*c.UNIFI_VAP, 9, index)] = radio
+    return mib
+
+
 class FakeAgent:
     """Implementa SnmpTransport sobre un diccionario. Cuenta peticiones y puede fallar."""
 

@@ -156,6 +156,10 @@ class VulnerabilityInput:
     known_exploited: bool = False
     epss_score: float | None = None
     intel_stale: bool = False
+    # Fase 6C.4: CVE canónico y componente del finding. Varias fuentes describen el mismo CVE
+    # (NVD, OSV, catálogo local): sobre el mismo componente son un solo hecho.
+    cve: str | None = None
+    component_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -567,6 +571,9 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
             continue
         v = item.vulnerability
         if v is not None:
+            if v.cve and v.component_key:
+                # Mismo CVE y mismo componente desde varias fuentes: cuenta el más fuerte.
+                groups.union(item.key, f"c:{v.cve}|{v.component_key}")
             # Vulnerabilidad de un servicio expuesto + exposición de ese puerto: el mismo
             # hecho; cuenta el más fuerte de los dos.
             for number in v.ports:

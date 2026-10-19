@@ -11,3 +11,13 @@ buffer_size = 120
 log_level = "INFO"
 # state_dir defaults to %LOCALAPPDATA%\Sentra\Agent (Windows) or ~/.local/state/sentra-agent
 # state_dir = "C:/Sentra/agent-state"
+
+# Fase 6C.5 (agente 0.4.0)
+# Dónde guarda el agente su propio token: "auto" (DPAPI en Windows, Keychain del sistema en
+# macOS, fichero 0600 en Linux), "keychain" (solo macOS) o "file" (fichero 0600 en un
+# directorio 0700 del usuario del agente; en macOS solo como elección explícita).
+# credential_store = "auto"
+# Wi-Fi pasivo: solo lee lo que el sistema ya conoce (sin escaneo activo ni contraseñas).
+# wireless_enabled = true
+# 0 = con cada inventario; si no, entre 60 y 86400 segundos.
+# wireless_interval_seconds = 0

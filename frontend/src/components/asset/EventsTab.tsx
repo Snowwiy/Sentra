@@ -22,7 +22,7 @@ const PAGE_SIZE = 50;
 const LEVELS: { value: EventLevel; label: string }[] = [
   { value: "warning", label: "Warning o más" },
   { value: "error", label: "Error o más" },
-  { value: "critical", label: "Critical" },
+  { value: "critical", label: "Crítico" },
 ];
 
 // The channels the agent collects (see agent/sentra_agent/events.py).

@@ -664,12 +664,16 @@ def _concrete(path: str) -> str:
         "execution_id", "playbook_id", "run_id", "request_id", "report_id",
         "site_id", "network_id", "sensor_id", "enrollment_id",
         "profile_id", "device_id", "poll_id",
+        # Fase 6C.3: inventario Wi-Fi.
+        "access_point_id", "bss_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.
     path = path.replace("{source_id}", "999999")
     # Fase 5A: reglas por identificador estable y versión numérica.
     path = path.replace("{rule_id}", "SENTRA-CUSTOM-999999").replace("{version}", "1")
+    # Fase 6C.4: fuentes del catálogo por clave y detalle de un CVE.
+    path = path.replace("{source_key}", "nvd").replace("{cve_id}", "CVE-2099-0001")
     assert "{" not in path, path
     return path
 

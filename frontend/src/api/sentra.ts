@@ -213,6 +213,21 @@ import type {
   SiteNetwork,
   SiteNetworkList,
   SiteUpdate,
+  WlanAccessPointDetail,
+  WlanAccessPointList,
+  WlanAccessPointQuery,
+  WlanAuthorizationUpdate,
+  WlanBssList,
+  WlanBssQuery,
+  WlanBssRead,
+  WlanClientList,
+  WlanClientQuery,
+  WlanLinkRequest,
+  WlanObservationList,
+  WlanOverview,
+  WlanSsidList,
+  WlanSsidQuery,
+  WlanUnlinkRequest,
 } from "./types";
 
 export interface AlertQuery {
@@ -1601,4 +1616,107 @@ export const networkApi = {
     apiPost<NetworkDevice>(`${networkDevicePath(deviceId)}/archive`, { version, ...(reason ? { reason } : {}) }),
   requestPoll: (deviceId: string) => apiPost<NetworkPoll>(`${networkDevicePath(deviceId)}/polls`),
   cancelPoll: (pollId: string) => apiPost<NetworkPoll>(`/network/polls/${encodeURIComponent(pollId)}/cancel`),
+};
+
+// --- Fase 6C.3: inventario Wi-Fi / AP / WLAN ---------------------------------------------------
+
+const wlanApPath = (accessPointId: string) => `/network/wlan/access-points/${encodeURIComponent(accessPointId)}`;
+const wlanBssPath = (bssId: string) => `/network/wlan/bss/${encodeURIComponent(bssId)}`;
+
+/** queryString omite `false`; un filtro booleano de tres estados necesita enviarlo como texto. */
+function triState(value: boolean | undefined): string | undefined {
+  return value === undefined ? undefined : String(value);
+}
+
+/**
+ * Lectura con monitoring:read; autorizar, vincular y desvincular con network:manage. Ninguna
+ * llamada actúa sobre la red: la API solo guarda la clasificación o el vínculo y lo audita.
+ */
+export const wlanApi = {
+  overview: (siteId?: string, signal?: AbortSignal) =>
+    apiGet<WlanOverview>(`/network/wlan/overview${queryString({ site_id: siteId })}`, { signal }),
+  accessPoints: (query: WlanAccessPointQuery = {}, signal?: AbortSignal) =>
+    apiGet<WlanAccessPointList>(
+      `/network/wlan/access-points${queryString({
+        site_id: query.siteId,
+        ssid: query.ssid,
+        band: query.band,
+        status: query.status,
+        authorization: query.authorization,
+        freshness: query.freshness,
+        present: triState(query.present),
+        q: query.q,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  accessPoint: (accessPointId: string, signal?: AbortSignal) =>
+    apiGet<WlanAccessPointDetail>(wlanApPath(accessPointId), { signal }),
+  accessPointObservations: (
+    accessPointId: string,
+    query: { limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    apiGet<WlanObservationList>(`${wlanApPath(accessPointId)}/observations${queryString({ ...query })}`, {
+      signal,
+    }),
+  setAccessPointAuthorization: (accessPointId: string, input: WlanAuthorizationUpdate) =>
+    apiPost<WlanAccessPointDetail>(`${wlanApPath(accessPointId)}/authorization`, input),
+  linkAccessPoint: (accessPointId: string, input: WlanLinkRequest) =>
+    apiPost<WlanAccessPointDetail>(`${wlanApPath(accessPointId)}/link`, input),
+  unlinkAccessPoint: (accessPointId: string, input: WlanUnlinkRequest) =>
+    apiPost<WlanAccessPointDetail>(`${wlanApPath(accessPointId)}/unlink`, input),
+
+  bss: (query: WlanBssQuery = {}, signal?: AbortSignal) =>
+    apiGet<WlanBssList>(
+      `/network/wlan/bss${queryString({
+        site_id: query.siteId,
+        ssid: query.ssid,
+        band: query.band,
+        authorization: query.authorization,
+        source: query.source,
+        confidence: query.confidence,
+        protection: query.protection,
+        access_point_id: query.accessPointId,
+        freshness: query.freshness,
+        insecure: triState(query.insecure),
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  bssDetail: (bssId: string, signal?: AbortSignal) => apiGet<WlanBssRead>(wlanBssPath(bssId), { signal }),
+  bssObservations: (bssId: string, query: { limit?: number; offset?: number } = {}, signal?: AbortSignal) =>
+    apiGet<WlanObservationList>(`${wlanBssPath(bssId)}/observations${queryString({ ...query })}`, { signal }),
+  setBssAuthorization: (bssId: string, input: WlanAuthorizationUpdate) =>
+    apiPost<WlanBssRead>(`${wlanBssPath(bssId)}/authorization`, input),
+
+  ssids: (query: WlanSsidQuery = {}, signal?: AbortSignal) =>
+    apiGet<WlanSsidList>(
+      `/network/wlan/ssids${queryString({
+        site_id: query.siteId,
+        band: query.band,
+        q: query.q,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  clients: (query: WlanClientQuery = {}, signal?: AbortSignal) =>
+    apiGet<WlanClientList>(
+      `/network/wlan/clients${queryString({
+        site_id: query.siteId,
+        ssid: query.ssid,
+        bssid: query.bssid,
+        access_point_id: query.accessPointId,
+        identity: query.identity,
+        state: query.state,
+        present: triState(query.present),
+        freshness: query.freshness,
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
 };
