@@ -120,7 +120,9 @@ describe("menú lateral", () => {
     fireEvent.click(screen.getByRole("button", { name: "Contraer menú" }));
     expect(localStorage.getItem(STORAGE_KEYS.sidebarCompact)).toBe("true");
     // Compacto: solo iconos, con nombre accesible.
-    expect(within(sidebar).getByRole("link", { name: "Alertas" })).not.toHaveTextContent("Alertas");
+    await waitFor(() => {
+      expect(within(sidebar).getByRole("link", { name: "Alertas" })).not.toHaveTextContent("Alertas");
+    });
     fireEvent.click(screen.getByRole("button", { name: "Expandir menú" }));
     expect(localStorage.getItem(STORAGE_KEYS.sidebarCompact)).toBe("false");
   });
