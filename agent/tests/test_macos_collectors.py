@@ -168,7 +168,11 @@ def test_applications_and_receipts(tmp_path: Path) -> None:
     _app(apps, "Broken", None)  # sin Info.plist: no es una aplicación válida
     (apps / "Broken.app" / "Contents" / "Info.plist").write_bytes(b"not a plist")
     _app(apps / "Office" / "Deep", "TooDeep", {"CFBundleName": "TooDeep"})  # 2 niveles: no
-    (apps / "Link.app").symlink_to(apps / "Safari.app")  # enlaces: no se siguen
+    try:
+        (apps / "Link.app").symlink_to(apps / "Safari.app", target_is_directory=True)
+    except OSError as exc:
+        if sys.platform != "win32" or getattr(exc, "winerror", None) != 1314:
+            raise
     huge = _app(apps, "Huge", None)
     (huge / "Contents" / "Info.plist").write_bytes(b"0" * (macos.INFO_PLIST_MAX_BYTES + 1))
     receipts = tmp_path / "receipts"

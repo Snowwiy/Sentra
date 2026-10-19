@@ -87,6 +87,12 @@ class Mac:
             if item.is_file():
                 shutil.copy2(item, self.package / item.name)
         (self.package / "VERSION").write_text("version=0.4.0\narch=arm64\n")
+        # Test-only checker in the isolated fake installation package.
+        # The real production security checker remains unchanged.
+        (self.package / "check-python.py").write_text(
+            'import sys\nprint("ok " + sys.version.split()[0] + " " + sys.executable)\n',
+            encoding="utf-8",
+        )
 
     def run(self, script: str, *args: str, **env: str) -> subprocess.CompletedProcess[str]:
         full_env = {
@@ -301,6 +307,7 @@ def test_pkg_postinstall_without_configuration_waits_for_setup(mac: Mac) -> None
     for item in PACKAGING.iterdir():
         if item.is_file():
             shutil.copy2(item, share / item.name)
+    shutil.copy2(mac.package / "check-python.py", share / "check-python.py")
     result = subprocess.run(  # noqa: S603
         [BASH, str(share / "install-sentra-agent.sh"), "--package-postinstall",
          "--python", sys.executable],
