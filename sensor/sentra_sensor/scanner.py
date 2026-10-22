@@ -1,4 +1,5 @@
-"""Scanner de descubrimiento (TCP connect, ICMP opcional, ARP, DNS inverso y directo opcional).
+"""Scanner de descubrimiento (TCP connect, ICMP opcional, ARP, DNS inverso y directo opcional,
+y desde la Corrección 6C sondas de nombre mDNS/NetBIOS/SSDP-UPnP en discovery_advanced v2).
 
 Diseño de seguridad:
 * Solo sondea direcciones de un target YA validado (jobs.validate_job).
@@ -31,7 +32,9 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
+from sentra_sensor import names
 from sentra_sensor.jobs import DiscoveryParameters
+from sentra_sensor.names import IdentityProber, SsdpResponse
 
 logger = logging.getLogger("sentra_sensor.scanner")
 
@@ -287,6 +290,9 @@ class Observation:
     # None = no se midió (el ping del sistema no se usa: incluye arrancar un proceso).
     rtt_ms: int | None = None
     forward_dns_match: bool | None = None
+    # Corrección 6C: nombres que el host publica de sí mismo (mdns_name, netbios_name,
+    # ssdp_server, upnp). Solo lo observado: el servidor decide el nombre y el tipo.
+    identity: dict[str, Any] = field(default_factory=dict)
 
     def to_json(self) -> dict[str, Any]:
         body: dict[str, Any] = {
@@ -304,6 +310,9 @@ class Observation:
             body["rtt_ms"] = self.rtt_ms
         if self.forward_dns_match is not None:
             body["forward_dns_match"] = self.forward_dns_match
+        # Solo con valor: un job v1 produce exactamente el mismo lote que el sensor 0.4.x.
+        if self.identity:
+            body["identity"] = dict(self.identity)
         return body
 
 
@@ -346,6 +355,7 @@ class Scanner:
         icmp: IcmpProber | None = None,
         neighbors: NeighborReader | None = None,
         resolver: ReverseResolver | None = None,
+        identity: IdentityProber | None = None,
     ) -> None:
         self._params = params
         self._emit = emit
@@ -355,6 +365,11 @@ class Scanner:
         self._icmp = icmp if params.icmp else None
         self._neighbors = neighbors if params.arp else None
         self._resolver = resolver if params.reverse_dns else None
+        self._identity = identity if params.identify else None
+        self._ssdp: dict[str, SsdpResponse] = {}
+        # Presupuesto de sondas de nombre (Corrección 6C); None = sin límite propio.
+        self._names_left = params.max_name_queries
+        self._names_budget_logged = False
         self._errors: list[str] = []
         self._failed: set[str] = set()
         self._probes = 0
@@ -373,6 +388,8 @@ class Scanner:
             self._error("arp requested but not available on this sensor")
         if params.reverse_dns and resolver is None:
             self._error("reverse_dns requested but not available on this sensor")
+        if params.identify and identity is None:
+            self._error("name probes requested but not available on this sensor")
 
     def _error(self, message: str) -> None:
         if len(self._errors) < MAX_ERRORS:
@@ -387,6 +404,17 @@ class Scanner:
                 self._error("dns query budget exhausted: remaining hosts without DNS")
             return False
         self._dns_left -= 1
+        return True
+
+    def _names_allowed(self) -> bool:
+        if self._names_left is None:
+            return True
+        if self._names_left <= 0:
+            if not self._names_budget_logged:
+                self._names_budget_logged = True
+                self._error("name probe budget exhausted: remaining hosts without names")
+            return False
+        self._names_left -= 1
         return True
 
     def request_cancel(self) -> None:
@@ -418,6 +446,7 @@ class Scanner:
         pending: dict[str, Observation] = {}
         try:
             async with asyncio.timeout(self._params.deadline_seconds):
+                await self._ssdp_search(hosts)
                 for start in range(0, len(hosts), HOST_CHUNK):
                     chunk = hosts[start : start + HOST_CHUNK]
                     await asyncio.gather(*(self._probe_host(h, pending) for h in chunk))
@@ -507,6 +536,70 @@ class Scanner:
         if failed:
             self._failed.add(address)
 
+    async def _ssdp_search(self, hosts: list[str]) -> None:
+        """Un único M-SEARCH (TTL 1) por job; solo cuentan respuestas de direcciones del target.
+
+        Se hace al principio porque los dispositivos responden aunque el scan aún no haya
+        llegado a ellos; el resultado se usa al terminar la tanda de cada host vivo.
+        """
+        identity = self._identity
+        if identity is None or not self._names_allowed():
+            return
+        addresses = {h for h in hosts if ipaddress.ip_address(h).version == 4}
+        if not addresses:
+            return
+        try:
+            self._ssdp = await self._limited(
+                lambda: identity.ssdp_search(addresses, names.SSDP_WINDOW)
+            )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # sin multicast (firewall, sin red) el scan sigue igual
+            self._error(f"ssdp search: {exc!r}")
+
+    async def _names(self, observation: Observation) -> None:
+        """Nombres publicados por un host vivo, dentro del presupuesto y del ritmo del job."""
+        identity = self._identity
+        if identity is None:
+            return
+        address = observation.address
+        timeout = self._params.timeout_ms / 1000
+        ssdp = self._ssdp.get(address)
+        found = observation.identity
+
+        async def mdns() -> None:
+            if self._names_allowed():
+                name = await self._limited(lambda: identity.mdns_name(address, timeout))
+                if name:
+                    found["mdns_name"] = name
+
+        async def netbios() -> None:
+            # NetBIOS solo existe sobre IPv4.
+            if ipaddress.ip_address(address).version == 4 and self._names_allowed():
+                name = await self._limited(lambda: identity.netbios_name(address, timeout))
+                if name:
+                    found["netbios_name"] = name
+
+        async def upnp() -> None:
+            if ssdp is None:
+                return
+            if ssdp.server:
+                found["ssdp_server"] = ssdp.server
+            if ssdp.location and self._names_allowed():
+                description = await self._limited(
+                    lambda: identity.upnp_description(ssdp, max(timeout, names.DESCRIPTION_TIMEOUT))
+                )
+                if description is not None:
+                    values = {k: v for k, v in vars(description).items() if v}
+                    if values:
+                        found["upnp"] = values
+
+        await asyncio.gather(
+            _guarded_probe(self, address, "mdns", mdns),
+            _guarded_probe(self, address, "netbios", netbios),
+            _guarded_probe(self, address, "upnp", upnp),
+        )
+
     async def _finish_chunk(self, pending: dict[str, Observation], allow_slow: bool = True) -> None:
         if self._neighbors is not None:
             table = self._neighbors.read()
@@ -536,6 +629,8 @@ class Scanner:
                     # Sin respuesta (None o error) no se concluye nada: queda sin comprobar.
                     if isinstance(addresses, set):
                         observation.forward_dns_match = observation.address in addresses
+        if self._identity is not None and allow_slow and alive:
+            await asyncio.gather(*(self._names(o) for o in alive))
         for observation in alive:
             # Un host que respondió no es "unprobed" aunque alguna sonda suelta fallase.
             self._failed.discard(observation.address)
@@ -543,6 +638,18 @@ class Scanner:
         pending.clear()
         if alive:
             self._emit(alive)
+
+
+async def _guarded_probe(
+    scanner: "Scanner", address: str, label: str, probe: Callable[[], Any]
+) -> None:
+    """Una sonda de nombre que falla no afecta al resto ni al scan (se informa como error)."""
+    try:
+        await probe()
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:
+        scanner._error(f"{address} {label}: {exc!r}")
 
 
 def default_probers(

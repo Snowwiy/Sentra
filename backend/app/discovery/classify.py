@@ -52,12 +52,33 @@ MAC_VENDOR = "mac_vendor"
 MAC_RANDOM = "mac_random"
 PORTS = "ports"
 GATEWAY = "gateway"
+# Corrección 6C: dos pistas que se contradicen (fabricante o tipo). Se guardan como evidencia
+# para que la UI las enseñe; nunca se resuelven eligiendo una al azar.
+CONFLICT = "conflict"
 
-# Prioridad del nombre mostrado. El hostname del agente es lo que el propio equipo dice
-# llamarse; después, lo que la red publica sobre él, de más a menos fiable. No hay fuente
-# "manual" ni "dhcp" todavía: Sentra no permite renombrar activos ni es servidor DHCP
-# (el DNS del router, que suele registrar los nombres DHCP, llega por reverse_dns).
+# Prioridad del nombre automático. El hostname del agente es lo que el propio equipo dice
+# llamarse; después, lo que la red publica sobre él, de más a menos fiable. La etiqueta
+# personalizada (assets.custom_label) NO es una fuente de este motor: la escribe una persona,
+# va en otra columna y ninguna identificación automática la toca.
 NAME_SOURCES = (AGENT_HOSTNAME, REVERSE_DNS, MDNS, NETBIOS, UPNP, "vendor_model")
+
+# Clase de cada nombre observado (Corrección 6C). Sirve para que la UI distinga lo que el
+# equipo dice de sí mismo de lo que dice la infraestructura, y para no presentar como nombre
+# del dispositivo algo que solo es un valor por defecto:
+# - agent: hostname reportado por el agente (autoritativo).
+# - device: publicado por el propio equipo (mDNS, NetBIOS, nombre UPnP, o un nombre .local
+#   que devuelve el resolvedor del sistema).
+# - dhcp: nombre del DNS local del router (sufijo .lan, .home...). Casi siempre es el
+#   hostname que el equipo dio por DHCP, pero eso es una inferencia: el router también puede
+#   publicar una etiqueta puesta por su administrador y desde la red no se distinguen.
+# - dns: nombre de un DNS de dominio (FQDN), gestionado por alguien.
+# - generic: nombre por defecto de un sistema operativo ("linux", "android"): no identifica
+#   al equipo, así que nunca es el nombre mostrado ni vota tipo o SO.
+NAME_KIND_AGENT = "agent"
+NAME_KIND_DEVICE = "device"
+NAME_KIND_DHCP = "dhcp"
+NAME_KIND_DNS = "dns"
+NAME_KIND_GENERIC = "generic"
 
 
 @dataclass(frozen=True)
@@ -81,6 +102,12 @@ class IdentityInput:
     mac_random: bool = False
     open_ports: frozenset[int] = frozenset()
     is_gateway: bool = False
+    # Corrección 6C. Resultado de confirmar el DNS inverso con una consulta directa (FCrDNS):
+    # True confirmado, False el nombre no resuelve a esta IP, None sin comprobar.
+    reverse_dns_confirmed: bool | None = None
+    # Fuentes de nombre cuyo último dato es antiguo (ver identification.NAME_STALE_DAYS): se
+    # conservan como evidencia, pero un nombre reciente de otra fuente pasa por delante.
+    stale_sources: frozenset[str] = frozenset()
 
 
 @dataclass
@@ -97,6 +124,11 @@ class Identification:
     evidence: list[dict[str, str]] = field(default_factory=list)
     # Resumen legible del porqué del tipo (assets.device_type_reason).
     reason: str | None = None
+    # Corrección 6C: todos los nombres observados con su procedencia y clase
+    # ({"source", "value", "kind", "selected", "confirmed", "stale"}), el elegido incluido.
+    # Se guardan en assets.observed_names para que la UI muestre la evidencia original
+    # aunque haya una etiqueta personalizada.
+    names: list[dict[str, Any]] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -200,8 +232,28 @@ _WINDOWS_PORTS = {135: "msrpc", 139: "netbios-ssn", 445: "smb", 3389: "rdp", 598
 # Sufijos de dominio local que el router añade a los nombres DHCP. Se quitan del nombre
 # mostrado ("mna-lx9.lan" → "mna-lx9"); un FQDN corporativo se muestra completo.
 _LOCAL_SUFFIXES = (".lan", ".local", ".home", ".localdomain", ".home.arpa", ".internal")
-# Nombres de relleno que algunos routers devuelven para clientes sin nombre: no identifican.
+# Nombres de relleno que algunos routers devuelven para clientes sin nombre: no identifican
+# y ni siquiera se guardan como evidencia de nombre.
 _GENERIC_NAMES = _rx(r"^(localhost|unknown|\*|dhcp[-_.]?\d.*|host[-_]?\d.*|client[-_]?\d.*)$")
+# Corrección 6C: hostnames por defecto de sistemas operativos y firmwares. Muchos equipos
+# (asistentes de voz, cámaras, TV) usan un Linux embebido que se anuncia como "linux": el
+# nombre es real (se guarda como observado), pero no identifica al equipo ni demuestra que
+# sea un PC con Linux. Por eso no se muestra como nombre ni vota tipo ni SO.
+_DEFAULT_OS_NAMES = _rx(
+    r"^(linux|android|ubuntu|debian|fedora|centos|rhel|raspberrypi|kali|archlinux|alpine|"
+    r"espressif|esp|busybox|openembedded|poky|yocto|buildroot|localdomain|none|null|default|"
+    r"device|my-?device|generic)$"
+)
+# Puertos que solo apoyan un tipo que ya sugiere otra fuente: un puerto suelto no basta para
+# deducir el tipo (RTSP lo abren cámaras, pero también NAS y PCs con software de vídeo).
+_SUPPORT_PORTS: dict[int, tuple[DeviceType, str]] = {
+    554: (T.IOT, "rtsp"),
+    1883: (T.IOT, "mqtt"),
+    8008: (T.SMART_TV, "cast"),
+    8009: (T.SMART_TV, "cast"),
+    5000: (T.NAS, "nas-http"),
+    5001: (T.NAS, "nas-https"),
+}
 
 
 @dataclass
@@ -259,23 +311,26 @@ def identify(data: IdentityInput) -> Identification:
                     f"MAC {adapter_profile.brand}",
                 )
 
+    candidates = _name_candidates(data)
     if data.managed:
         _identify_managed(data, result, evidence, types, adapter_profile)
+        # Los nombres de red de un equipo con agente se conservan como observados (no
+        # elegidos): el nombre lo da el agente.
+        observed = _names_view(candidates, None)
+        result.names = [_agent_name(data.hostname), *observed] if data.hostname else observed
         return result
 
     # --- Nombres publicados en la red ------------------------------------------------------
-    names = [
-        (REVERSE_DNS, _short_name(data.reverse_dns)),
-        (MDNS, _short_name(data.mdns_name)),
-        (NETBIOS, _clean_name(data.netbios_name)),
-        (UPNP, _clean_name(data.upnp_friendly_name)),
-    ]
-    for source, name in names:
-        if not name:
-            continue
+    chosen = _choose_name(candidates)
+    if chosen is not None:
+        result.name, result.name_source = chosen.value, chosen.source
+    result.names = _names_view(candidates, chosen)
+    for candidate in candidates:
+        source, name = candidate.source, candidate.value
         evidence.add(source, name)
-        if result.name is None:
-            result.name, result.name_source = name, source
+        if candidate.kind == NAME_KIND_GENERIC:
+            # Un nombre por defecto ("linux") no dice qué equipo es: ni tipo ni SO.
+            continue
         for hint in _name_hints(name):
             vendor = hint.vendor
             # Honor usa los mismos códigos de modelo que Huawei (ANY-LX1...): si la NIC dice
@@ -295,6 +350,8 @@ def identify(data: IdentityInput) -> Identification:
     if data.netbios_name:
         # NetBIOS lo anuncian Windows y Samba: insinúa Windows, no lo demuestra.
         vote(oses, "Windows", 1, NETBIOS)
+    if data.reverse_dns_confirmed is False and data.reverse_dns:
+        evidence.add(REVERSE_DNS, "no confirmado: el nombre no resuelve a esta IP")
 
     # --- UPnP / SSDP: lo que el dispositivo declara de sí mismo ----------------------------
     upnp_vendor = profile_for(data.upnp_manufacturer)
@@ -322,6 +379,8 @@ def identify(data: IdentityInput) -> Identification:
                 vote_type(hint.type, 1, SSDP, f"SSDP {data.ssdp_server}")
 
     # --- Puertos y posición en la red -----------------------------------------------------
+    # Corrección 6C: un único puerto nunca decide el tipo por sí solo. Con un solo servicio
+    # el puerto solo refuerza un tipo que ya sugiere otra fuente (nombre, fabricante, UPnP).
     ports = data.open_ports
     printer = sorted(f"{p}/{label}" for p, label in _PRINTER_PORTS.items() if p in ports)
     if printer:
@@ -329,13 +388,19 @@ def identify(data: IdentityInput) -> Identification:
         # 631 (IPP) solo también lo abre CUPS en un Linux cualquiera: débil sin 9100/515.
         strong = 9100 in ports or 515 in ports
         reason = "puertos de impresión " + ", ".join(printer)
-        vote_type(T.PRINTER, 2 if strong else 1, PORTS, reason)
+        if len(printer) >= 2 or types[T.PRINTER].total > 0:
+            vote_type(T.PRINTER, 2 if strong else 1, PORTS, reason)
     windows = sorted(f"{p}/{label}" for p, label in _WINDOWS_PORTS.items() if p in ports)
     if windows:
         evidence.add(PORTS, ", ".join(windows))
         vote(oses, "Windows", 2 if len(windows) >= 2 else 1, PORTS)
         # Servicios de Windows: casi siempre un equipo, pero no se sabe si PC o servidor.
-        vote_type(T.PC, 1, PORTS, "servicios Windows " + ", ".join(windows))
+        if len(windows) >= 2 or _has_family_vote(types, T.PC):
+            vote_type(T.PC, 1, PORTS, "servicios Windows " + ", ".join(windows))
+    for port, (support_type, label) in sorted(_SUPPORT_PORTS.items()):
+        if port in ports and _has_family_vote(types, support_type):
+            evidence.add(PORTS, f"{port}/{label}")
+            vote_type(support_type, 1, PORTS, f"servicio {port}/{label}")
     if data.is_gateway:
         evidence.add(GATEWAY, "gateway por defecto del servidor Sentra")
         vote_type(T.ROUTER, AUTHORITATIVE, GATEWAY, "gateway por defecto del servidor Sentra")
@@ -343,9 +408,11 @@ def identify(data: IdentityInput) -> Identification:
     # --- Conclusiones ---------------------------------------------------------------------
     _corroborate(types, vendors)
     result.device_vendor = _pick(vendors)
+    _vendor_conflicts(vendors, evidence)
     winner, confidence, score = _pick_type(types)
     result.device_type = winner
     result.confidence = confidence
+    _type_conflicts(types, winner, evidence)
     if score is not None:
         result.reason = _clip("; ".join(dict.fromkeys(score.reasons)), 255)
     # El modelo solo se afirma si lo declara el dispositivo (UPnP) o si un código de modelo
@@ -408,6 +475,140 @@ def _identify_managed(
     if adapter_profile is not None and adapter_profile.kind == VendorKind.DEVICE:
         result.device_vendor = adapter_profile.brand
     result.evidence = evidence.items
+
+
+@dataclass(frozen=True)
+class _Name:
+    source: str
+    value: str
+    kind: str
+    stale: bool = False
+    confirmed: bool | None = None
+
+
+def is_default_name(value: str | None) -> bool:
+    """¿Es un hostname por defecto de un SO o firmware ("linux", "android")?"""
+    return bool(value) and _DEFAULT_OS_NAMES.match((value or "").strip()) is not None
+
+
+def _name_kind(source: str, raw: str, value: str) -> str:
+    if _DEFAULT_OS_NAMES.match(value):
+        return NAME_KIND_GENERIC
+    if source != REVERSE_DNS:
+        return NAME_KIND_DEVICE
+    lowered = raw.strip().rstrip(".").lower()
+    # El resolvedor del sistema (Windows, systemd-resolved) contesta con mDNS/LLMNR cuando el
+    # DNS no conoce la IP: un nombre .local lo publica el propio equipo.
+    if lowered.endswith(".local"):
+        return NAME_KIND_DEVICE
+    if "." not in lowered or any(lowered.endswith(suffix) for suffix in _LOCAL_SUFFIXES):
+        return NAME_KIND_DHCP
+    return NAME_KIND_DNS
+
+
+def _name_candidates(data: IdentityInput) -> list[_Name]:
+    raw_names = (
+        (REVERSE_DNS, data.reverse_dns, _short_name(data.reverse_dns)),
+        (MDNS, data.mdns_name, _short_name(data.mdns_name)),
+        (NETBIOS, data.netbios_name, _clean_name(data.netbios_name)),
+        (UPNP, data.upnp_friendly_name, _clean_name(data.upnp_friendly_name)),
+    )
+    found: list[_Name] = []
+    for source, raw, name in raw_names:
+        if not raw or not name:
+            continue
+        found.append(
+            _Name(
+                source=source,
+                value=name,
+                kind=_name_kind(source, raw, name),
+                stale=source in data.stale_sources,
+                confirmed=data.reverse_dns_confirmed if source == REVERSE_DNS else None,
+            )
+        )
+    return found
+
+
+def _choose_name(candidates: list[_Name]) -> _Name | None:
+    """Nombre automático: el mejor por procedencia, confirmación y vigencia.
+
+    Orden: primero los nombres recientes, después los no desmentidos (un DNS inverso que no
+    resuelve a esta IP pasa al final) y, a igualdad, el orden de NAME_SOURCES. Un nombre
+    genérico nunca se elige: es preferible "IoT probable" a mostrar "linux" como si fuera el
+    nombre del equipo.
+    """
+    usable = [c for c in candidates if c.kind != NAME_KIND_GENERIC]
+    if not usable:
+        return None
+    return min(
+        usable,
+        key=lambda c: (c.stale, c.confirmed is False, NAME_SOURCES.index(c.source)),
+    )
+
+
+def _names_view(candidates: list[_Name], chosen: _Name | None) -> list[dict[str, Any]]:
+    return [
+        {
+            "source": c.source,
+            "value": c.value,
+            "kind": c.kind,
+            "selected": c is chosen,
+            "confirmed": c.confirmed,
+            "stale": c.stale,
+        }
+        for c in candidates
+    ]
+
+
+def _agent_name(hostname: str) -> dict[str, Any]:
+    return {
+        "source": AGENT_HOSTNAME,
+        "value": _clip(hostname, 255),
+        "kind": NAME_KIND_AGENT,
+        "selected": True,
+        "confirmed": None,
+        "stale": False,
+    }
+
+
+def _has_family_vote(types: dict[DeviceType, _Score], device_type: DeviceType) -> bool:
+    """¿Alguna fuente que no sean los puertos sugiere ya este tipo (o uno compatible)?"""
+    return any(
+        score.total > 0 and score.sources - {PORTS} and compatible(t, device_type)
+        for t, score in types.items()
+    )
+
+
+def _vendor_conflicts(vendors: dict[str, _Score], evidence: _Evidence) -> None:
+    """Deja constancia de fabricantes distintos que declaran fuentes independientes.
+
+    Ejemplo: OUI Amazon y fabricante UPnP Sonos. El que gana (o ninguno, si empatan) sale
+    de _pick; aquí solo se conserva la contradicción para que nadie la tome por certeza.
+    """
+    declared = [
+        (brand, score) for brand, score in vendors.items() if score.sources & {MAC_VENDOR, UPNP}
+    ]
+    if len(declared) < 2:
+        return
+    parts = sorted(f"{brand} ({', '.join(sorted(s.sources))})" for brand, s in declared)
+    evidence.add(CONFLICT, "fabricantes distintos: " + " / ".join(parts))
+
+
+def _type_conflicts(
+    types: dict[DeviceType, _Score], winner: DeviceType | None, evidence: _Evidence
+) -> None:
+    contenders = sorted(
+        (
+            t
+            for t, s in types.items()
+            if s.total > 0 and (winner is None or not compatible(t, winner))
+        ),
+        key=lambda t: t.value,
+    )
+    if winner is not None and contenders:
+        evidence.add(CONFLICT, "también apunta a: " + ", ".join(t.value for t in contenders))
+    elif winner is None and len(contenders) >= 2:
+        evidence.add(CONFLICT, "pistas incompatibles: " + ", ".join(t.value for t in contenders))
 
 
 def _corroborate(types: dict[DeviceType, _Score], vendors: dict[str, _Score]) -> None:

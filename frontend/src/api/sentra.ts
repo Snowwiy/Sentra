@@ -17,6 +17,14 @@ import type {
   NetworkPollList,
   NetworkVlanList,
   OperStatus,
+  TopologyBuild,
+  TopologyGraph,
+  TopologyGraphQuery,
+  TopologyLinkDetail,
+  TopologyLinkList,
+  TopologyNodeDetail,
+  TopologyReviewRequest,
+  TopologyStatus,
   PortKind,
   SnmpProfile,
   SnmpProfileCreate,
@@ -394,6 +402,10 @@ export const sentraApi = {
     ),
   getAsset: (assetId: string, signal?: AbortSignal) =>
     apiGet<Asset>(`/assets/${encodeURIComponent(assetId)}`, { signal }),
+  /** Corrección 6C: etiqueta personalizada (assets:manage). `label: null` la quita; `version`
+   * es custom_label_version tal y como se leyó (409 asset_label_conflict si cambió). */
+  setAssetLabel: (assetId: string, label: string | null, version: number) =>
+    apiPatch<Asset>(`/assets/${encodeURIComponent(assetId)}/label`, { label, version }),
   getTelemetry: (assetId: string, limit: number, signal?: AbortSignal) =>
     apiGet<TelemetryHistory>(
       `/assets/${encodeURIComponent(assetId)}/telemetry${queryString({ limit })}`,
@@ -1615,6 +1627,12 @@ export const networkApi = {
   archiveDevice: (deviceId: string, version: number, reason?: string) =>
     apiPost<NetworkDevice>(`${networkDevicePath(deviceId)}/archive`, { version, ...(reason ? { reason } : {}) }),
   requestPoll: (deviceId: string) => apiPost<NetworkPoll>(`${networkDevicePath(deviceId)}/polls`),
+  /** Fase 6D.4: consulta solo el módulo system para verificar SNMP con el perfil (network:poll). */
+  compatibilityCheck: (deviceId: string) =>
+    apiPost<NetworkPoll>(`${networkDevicePath(deviceId)}/compatibility-check`),
+  /** Fase 6D.4: reanuda las consultas periódicas pausadas tras fallos (network:manage). */
+  resumeMonitoring: (deviceId: string, version: number) =>
+    apiPost<NetworkDeviceDetail>(`${networkDevicePath(deviceId)}/monitoring/resume`, { version }),
   cancelPoll: (pollId: string) => apiPost<NetworkPoll>(`/network/polls/${encodeURIComponent(pollId)}/cancel`),
 };
 
@@ -1719,4 +1737,53 @@ export const wlanApi = {
       })}`,
       { signal },
     ),
+};
+
+// --- Fase 6D: topología de red -----------------------------------------------------------------
+
+const topologyLinkPath = (linkId: string) => `/topology/links/${encodeURIComponent(linkId)}`;
+
+/**
+ * Lectura con monitoring:read; reconstruir y revisar enlaces con topology:manage (solo admin).
+ * Ninguna llamada actúa sobre la red: el motor solo deriva enlaces de evidencia ya recogida.
+ */
+export const topologyApi = {
+  graph: (query: TopologyGraphQuery = {}, signal?: AbortSignal) =>
+    apiGet<TopologyGraph>(
+      `/topology/graph${queryString({
+        site_id: query.siteId,
+        kinds: query.kinds?.length ? query.kinds.join(",") : undefined,
+        include_absent: query.includeAbsent || undefined,
+        include_rejected: query.includeRejected || undefined,
+        device_type: query.deviceType,
+        q: query.q?.trim().slice(0, 100),
+      })}`,
+      { signal },
+    ),
+  status: (siteId?: string, signal?: AbortSignal) =>
+    apiGet<TopologyStatus>(`/topology/status${queryString({ site_id: siteId })}`, { signal }),
+  links: (
+    query: { siteId?: string; node?: string; present?: boolean; limit?: number; offset?: number } = {},
+    signal?: AbortSignal,
+  ) =>
+    apiGet<TopologyLinkList>(
+      `/topology/links${queryString({
+        site_id: query.siteId,
+        node: query.node,
+        present: query.present === undefined ? undefined : String(query.present),
+        limit: query.limit,
+        offset: query.offset,
+      })}`,
+      { signal },
+    ),
+  link: (linkId: string, signal?: AbortSignal) => apiGet<TopologyLinkDetail>(topologyLinkPath(linkId), { signal }),
+  // El nodo se resuelve dentro de un site: sin site_id el servidor usa el site por defecto.
+  node: (nodeId: string, siteId?: string, signal?: AbortSignal) =>
+    apiGet<TopologyNodeDetail>(
+      `/topology/nodes/${encodeURIComponent(nodeId)}${queryString({ site_id: siteId })}`,
+      { signal },
+    ),
+  rebuild: (siteId?: string) => apiPost<TopologyBuild>("/topology/rebuild", { site_id: siteId ?? null }),
+  review: (linkId: string, input: TopologyReviewRequest) =>
+    apiPatch<TopologyLinkDetail>(`${topologyLinkPath(linkId)}/review`, input),
 };

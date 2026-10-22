@@ -65,6 +65,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "network:poll",
     "network:manage",
     "snmp_credentials:manage",
+    "topology:manage",
   ],
 };
 

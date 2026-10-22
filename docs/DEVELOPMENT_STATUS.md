@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-18 (Fase 6C).
+Last updated: 2026-10-21 (Fase 6D: topología, informes v2, diagnóstico SNMP y API 0.2.0).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0036 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0038 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -36,6 +36,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Wi-Fi, AP y WLAN (Fase 6C.3) | Inventario de solo lectura: módulo SNMP `wlan` dentro de `snmp_inventory` (IEEE802dot11-MIB, AIRESPACE, UniFi; sensor 0.4.0 con capacidad `snmp.wlan`) y campo opcional `wireless` del agente (observación pasiva del SO). AP, BSS, SSID, clientes e historial con procedencia; MAC aleatoria nunca como identidad; ausencias solo tras consulta completa; autorización manual (`unknown`/`authorized`/`external`, sin «rogue»); vínculo AP ↔ activo con evidencia del mismo site. Configuraciones inseguras visibles pero sin efecto en el riesgo. 13 endpoints `/network/wlan`, UI «Wi-Fi» en Infraestructura. Migración 0035. [wlan-discovery.md](wlan-discovery.md) |
 | Catálogos reales de vulnerabilidades (Fase 6C.4) | Fuentes NVD (API 2.0 y ficheros) y OSV (Debian, Ubuntu, AlmaLinux, Rocky, Red Hat) con procedencia por atributo; KEV/EPSS leídos de Threat Intelligence. Importación de fichero con previsualización, SHA-256 esperado, staging y aplicación transaccional por lotes; sincronización por red desactivada por defecto (`VULN_SOURCE_SYNC_ENABLED=false`), incremental, con límites, backoff, ETag/Last-Modified y la API key de NVD solo en servidor. Coincidencias `confirmed`/`probable`/`potential`/`unknown`/`not_affected` con razonamiento, CPE solo declarado, sin doble conteo (riesgo FORMULA_VERSION 5). Dashboard distingue «sin vulnerabilidades» de «catálogo insuficiente». Migración 0036. [vulnerability-sources.md](vulnerability-sources.md) |
 | Agente macOS (Fase 6C.5) | Agente 0.4.0 para Apple Silicon e Intel: inventario (launchd, apps, recibos, cuentas, red), Unified Logging limitado, token en el keychain del sistema (Security.framework), LaunchDaemon, instalador/actualizador/desinstalador y `.pkg` sin firmar. Backend admite la plataforma `macos`. Validado solo con dobles en Linux; CI con runners macOS. [agent-macos-installation.md](agent-macos-installation.md) |
+| Identidad, etiquetas y servicios (Corrección 6C) | Nombres observados con procedencia (`agent`/`device`/`dhcp`/`dns`/`generic`), confirmación del DNS inverso y vigencia; los nombres genéricos de SO (`linux.local`) nunca se eligen ni votan; un solo puerto o un fabricante ambiguo no deciden el tipo; contradicciones como evidencia `conflict`; una evidencia débil no pisa a una fuerte. Sensor 0.5.0 con sondas mDNS/NetBIOS/SSDP/UPnP (`discovery_advanced` v2, capacidad `network.discovery.names`). Etiqueta personalizada (`PATCH /assets/{id}/label`, admin, auditada, 409 por versión) que nada automático sobrescribe y gana en `display_name`. Puertos con «Abrir servicio» para HTTP/HTTPS y copia de destino para el resto. Migración 0037. [asset-identity-labels.md](asset-identity-labels.md) |
 | Producción y servidor central | Fase 4M: despliegue nativo (Linux/systemd de referencia, Windows Server con WinSW) detrás de Caddy (TLS, frontend estático, CSP, HSTS solo con certificado válido); `ENVIRONMENT=production` valida y se niega a arrancar inseguro (`core/production.py`, sin secretos en los mensajes) y exige HTTPS; `TRUSTED_PROXIES` con X-Forwarded-For/Proto solo desde proxies de confianza (`core/proxy.py`); redacción central de logs (`core/redaction.py`), logs JSON con `request_id` y rotación propia en Windows; `/health` (liveness) y `/health/ready` (base, migraciones, apagado; la IA no cuenta); `/metrics` Prometheus protegido; rate limiting compartido en PostgreSQL (`rate_limit_hits`, migración 0024) para login, registro, IA, mutaciones y búsquedas por usuario; jobs singleton con advisory locks y benchmark único entre workers; pool y `statement_timeout` configurables; `GET /dashboard/summary` y `/assets` paginado en SQL (estado efectivo, subred, orden por IP/puertos...); CLI `production-check`, `migration-status`, `generate-secret`, `backup`, `verify-backup`, `restore`, `integrity-check`. Plantillas en `deploy/`. [production-deployment.md](production-deployment.md), [network-security.md](network-security.md), [backup-restore.md](backup-restore.md), [observability.md](observability.md) |
 | Agent distribution (Linux) | Done: reproducible tarball + `.deb` (`agent/packaging/linux/build.sh`), one-command installer with one-time token, systemd service as unprivileged `sentra-agent` with hardening, upgrade keeping identity, uninstall / purge. Pending: validation under a real systemd at boot |
 | Agent distribution (Windows) | Fase 4F: zip reproducible con Python embebido oficial (`agent/packaging/windows/build.py`, firma PSF verificada), instalador PowerShell con token de un solo uso (aviso oculto o `-TokenFile`), servicio Windows estándar `SentraAgent` (inicio automático retrasado, recuperación ante fallos) con cuenta virtual `NT SERVICE\SentraAgent` + Event Log Readers (Security sin administrador), enrolamiento hecho por el propio servicio (DPAPI de su cuenta), upgrade sin re-enrolar, `-Reenroll`, desinstalación / `-Purge`; `installation_method` en el dashboard (migración 0016, tras la 0015 de la Fase 4E). Pendiente: validación en Windows físico (checklist en docs/agent-windows-installation.md) |
@@ -159,6 +160,11 @@ credential/rotate); `site_id` opcional en las listas (docs/sites.md, docs/distri
 Advanced discovery (Fase 6A): `GET /discovery/profiles`, `GET /discovery/observations`;
 `POST /console/discovery/jobs` acepta `profile`, `ports` y `limits` (docs/advanced-network-discovery.md).
 Infraestructura (Fase 6B): `/network/snmp-profiles` (CRUD, `rotate`, `revoke`), `/network/devices` (CRUD, `archive`, `interfaces`, `neighbors`, `vlans`, `mac-entries`, `polls`), `/network/candidates`, `/network/polls/{id}/cancel`, `/network/mac-locations?mac=` (docs/snmp-network-intelligence.md).
+Topología (Fase 6D): `GET /topology/graph`, `/topology/status`, `/topology/links`,
+`/topology/links/{id}`, `/topology/nodes/{node_id}` (monitoring:read); `PATCH
+/topology/links/{id}/review` y `POST /topology/rebuild` (topology:manage, solo admin). SNMP:
+`POST /network/devices/{id}/compatibility-check`, `POST /network/devices/{id}/monitoring/resume`
+(docs/topology-engine.md, docs/snmp-network-intelligence.md, docs/compatibility-matrix.md).
 Details: `docs/agent-protocol.md`.
 
 ## Run
@@ -182,6 +188,15 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 ```
 
 ## Known issues and limitations
+
+- Fase 6D (detalle en docs/fase-6d-known-issues.md): topología sin historial temporal (6E) ni
+  retención de `topology_builds` ni purga de enlaces ausentes; reconstrucción manual sin
+  enfriamiento (solo admin, serializada por site); informes v2 dibujan como máximo 3 sites y
+  la topología del informe ignora `include_archived`; sin validar con hardware real (Archer
+  GX90 con un sensor 0.5.1, switches LLDP reales, informe v2 en el visor PDF de Windows).
+- SNMP (Fase 6D): un sensor 0.5.0 sigue enviando «snmp error: KeyError» ante un fallo interno
+  del colector; el servidor lo muestra como error interno del colector (`collector_error`),
+  nunca como diagnóstico del equipo. Actualizar a 0.5.1.
 
 - Fase 6C: sin hardware real. WLAN con MIBs sintéticas (columnas AIRESPACE/UniFi por validar;
   Catalyst 9800 sin cubrir; VLAN de BSS siempre null). Catálogo sin descargas reales de NVD/OSV;
@@ -411,6 +426,21 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   the dashboard shows its metrics as "—". On-demand: `python -m app.cli purge-old-data`.
 
 ## Recommended next phase
+
+Fase 6D implementada (servidor y frontend 0.2.0, sensor 0.5.1, agente sin cambios): aplicar la
+migración 0038; abrir Topología y pulsar «Reconstruir» en cada site; revisar enlaces y nodos;
+actualizar el sensor del site del Archer GX90 a 0.5.1 y lanzar «Verificar compatibilidad»
+(el diagnóstico debe ser `no_response`, `auth_failed` o `compatible`, nunca KeyError);
+generar informes v2 (PDF y HTML) y comprobar gráficas, acentos y topología; revisar el riesgo
+de ravenslg con la nueva trazabilidad (pasos en docs/fase-6d-architecture.md). Siguiente: 6E
+historial temporal de topología.
+
+Corrección 6C (identidad, etiquetas y servicios) implementada: aplicar la migración 0037,
+lanzar un discovery y comprobar el caso de 192.168.50.78 (IoT probable, sin nombre inventado),
+ponerle la etiqueta «Alexa Sala» como admin y revisar tabla, detalle, búsqueda e informe;
+actualizar un sensor a 0.5.0 y comprobar `network.discovery.names`; abrir un servicio web
+desde Red y copiar un destino SSH (pasos en docs/asset-identity-labels.md). Siguiente: 6D
+Topología.
 
 Fase 6C implementada: aplicar las migraciones 0035 y 0036, revisar la consola en los tres
 estilos de navegación, probar un sensor 0.4.0 contra una controladora o AP real con

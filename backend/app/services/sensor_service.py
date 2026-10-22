@@ -57,6 +57,7 @@ from app.core.security import (
     generate_sensor_enrollment_token,
     hash_token,
 )
+from app.discovery.names import SsdpResponse, UpnpDescription
 from app.discovery.ports import parse_ports
 from app.discovery.probes import PortState
 from app.discovery.profiles import (
@@ -108,6 +109,7 @@ from app.schemas.site import (
     SensorEnrollResponse,
     SensorHeartbeatRequest,
     SensorHeartbeatResponse,
+    SensorIdentityIn,
     SensorJobComplete,
     SensorJobCompleted,
     SensorJobList,
@@ -129,6 +131,7 @@ from app.sensors.catalog import (
     DISCOVERY_ADVANCED,
     DISCOVERY_BASIC,
     JOB_TYPES,
+    NAMES_CAPABILITY,
     REQUIRED_CAPABILITY,
     filter_capabilities,
     version_status,
@@ -202,7 +205,12 @@ def _required_capabilities(job: SensorJob) -> set[str]:
 
     if network_jobs.is_snmp_job(job):
         return network_jobs.required_capabilities(job)
-    return {REQUIRED_CAPABILITY[job.job_type]}
+    required = {REQUIRED_CAPABILITY[job.job_type]}
+    # Corrección 6C: un job v2 solo lo recibe un sensor que sigue declarando las sondas de
+    # nombre (uno que volvió a una versión anterior lo rechazaría por esquema).
+    if job.job_type == DISCOVERY_ADVANCED and (job.parameters or {}).get("identify") is True:
+        required.add(NAMES_CAPABILITY)
+    return required
 
 
 def _finish_job(session: Session, job: SensorJob, now: datetime) -> None:
@@ -871,7 +879,11 @@ class SensorService:
                 check_scope(profile, hosts_total)
             except ProfileError as exc:
                 raise DiscoveryOptionsError(exc.code, str(exc), exc.details) from exc
-            parameters = profile.parameters(str(network), for_sensor=True)
+            parameters = profile.parameters(
+                str(network),
+                for_sensor=True,
+                sensor_names=NAMES_CAPABILITY in (sensor.capabilities or []),
+            )
         else:
             parameters = _job_parameters(settings, network)
         now = datetime.now(UTC)
@@ -954,7 +966,7 @@ def _payload_sha256(observations: list[ObservationIn]) -> str:
         # Fase 6A: los campos nuevos solo entran en la huella si vienen con valor. Así un
         # lote de un sensor 0.1.x reenviado tras actualizar el servidor conserva su huella y
         # sigue contando como duplicado inocuo, no como conflicto 409.
-        for key in ("rtt_ms", "forward_dns_match"):
+        for key in ("rtt_ms", "forward_dns_match", "identity"):
             if item.get(key) is None:
                 item.pop(key, None)
         data.append(item)
@@ -1426,6 +1438,7 @@ class SensorProtocol:
                         sources=sorted(set(obs.sources)),
                         rtt_ms=obs.rtt_ms,
                         forward_dns_match=obs.forward_dns_match,
+                        identity=_identity_json(obs.identity),
                         observed_at=obs.observed_at,
                         received_at=now,
                     )
@@ -1439,6 +1452,8 @@ class SensorProtocol:
                 row.rtt_ms = _min_rtt(row.rtt_ms, obs.rtt_ms)
                 if obs.forward_dns_match is not None:
                     row.forward_dns_match = obs.forward_dns_match
+                if obs.identity is not None:
+                    row.identity = _merge_identity(row.identity, _identity_json(obs.identity))
                 row.observed_at = max(row.observed_at, obs.observed_at)
                 row.received_at = now
         session.add(
@@ -1680,6 +1695,7 @@ class SensorProtocol:
                     ports={int(port): PortState(state) for port, state in row.ports.items()},
                     rtt_ms=row.rtt_ms,
                     forward_dns_match=row.forward_dns_match,
+                    **_identity_fields(row.address, row.identity),
                 )
             )
         incomplete = missing_batches > 0 and body.outcome == "completed"
@@ -1737,6 +1753,47 @@ def _records_sha256(records: Sequence[SnmpRecord]) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _identity_json(identity: SensorIdentityIn | None) -> dict[str, Any] | None:
+    if identity is None:
+        return None
+    data = identity.model_dump(mode="json", exclude_none=True)
+    if isinstance(data.get("upnp"), dict) and not data["upnp"]:
+        data.pop("upnp")
+    return data or None
+
+
+def _merge_identity(
+    current: dict[str, Any] | None, new: dict[str, Any] | None
+) -> dict[str, Any] | None:
+    """Lo nuevo con valor gana; lo ausente no borra lo visto en otro lote del mismo job."""
+    if not new:
+        return current
+    merged = dict(current or {})
+    merged.update(new)
+    return merged
+
+
+def _identity_fields(address: str, raw: dict[str, Any] | None) -> dict[str, Any]:
+    """sensor_observations.identity -> campos de HostObservation (mismo formato que las
+    sondas locales). Se vuelve a validar con el esquema: un JSONB alterado a mano en la base
+    de datos no entra en la identificación."""
+    if not raw:
+        return {}
+    try:
+        identity = SensorIdentityIn.model_validate(raw)
+    except ValueError:
+        return {}
+    upnp = identity.upnp
+    return {
+        "mdns_name": identity.mdns_name,
+        "netbios_name": identity.netbios_name,
+        "ssdp": SsdpResponse(address=address, server=identity.ssdp_server)
+        if identity.ssdp_server
+        else None,
+        "upnp": UpnpDescription(**upnp.model_dump()) if upnp is not None else None,
+    }
+
+
 def _merge_ports(current: dict[str, str], new: dict[str, str]) -> dict[str, str]:
     merged = dict(current)
     for port, state in new.items():
@@ -1769,6 +1826,7 @@ def _merge_in(first: ObservationIn, second: ObservationIn) -> ObservationIn:
             "forward_dns_match": second.forward_dns_match
             if second.forward_dns_match is not None
             else first.forward_dns_match,
+            "identity": second.identity if second.identity is not None else first.identity,
             "observed_at": max(first.observed_at, second.observed_at),
         }
     )

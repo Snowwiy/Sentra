@@ -116,6 +116,20 @@ describe("frontend security", () => {
     }
   });
 
+  // Fase 6D.2: la topología muestra nombres, etiquetas y datos LLDP/CDP que informan equipos de
+  // terceros: nunca se interpretan como HTML, nada se persiste ni se registra, y la exportación
+  // SVG no lleva scripts ni manejadores (lo comprueba también lib/topology.test.ts).
+  it("topology code renders text only and never persists or logs", () => {
+    const files = sources(SRC).filter((f) => /components[\\/]topology|TopologyPage|lib[\\/]topology/.test(f));
+    expect(files.length).toBeGreaterThanOrEqual(5);
+    for (const file of files) {
+      const text = readFileSync(file, "utf8");
+      expect(text, relative(FRONTEND, file)).not.toMatch(
+        /dangerouslySetInnerHTML|innerHTML|outerHTML|insertAdjacentHTML|localStorage|sessionStorage|indexedDB|console\.(log|info|debug|warn|error)|eval\(|new Function/,
+      );
+    }
+  });
+
   it("no longer uses the temporary local console marker", () => {
     for (const file of sources(SRC)) {
       const text = readFileSync(file, "utf8");

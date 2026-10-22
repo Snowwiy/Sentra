@@ -88,7 +88,8 @@ def rejected(job: dict[str, Any], config: ServerConfig = CONFIG) -> str:
 def test_capability_and_version_declared() -> None:
     assert "network.discovery.advanced" in CAPABILITIES
     assert "network.discovery.basic" in CAPABILITIES  # compatibilidad con 5F
-    assert __version__ == "0.4.0"
+    assert __version__ == "0.5.1"
+    assert "network.discovery.names" in CAPABILITIES  # Corrección 6C
     # Nada que el sensor no implemente: las snmp.* solo con el extra snmp instalado (6B).
     assert not any(c.startswith(("network.snmp", "network.lldp")) for c in CAPABILITIES)
     assert set(c for c in CAPABILITIES if c.startswith("snmp.")) == set(snmp.capabilities())
@@ -105,7 +106,9 @@ def test_valid_advanced_job() -> None:
 @pytest.mark.parametrize(
     ("overrides", "code"),
     [
-        ({"schema_version": 2}, "schema_unsupported"),
+        # Corrección 6C: v2 existe, pero exige sus claves; v3 no existe.
+        ({"schema_version": 2}, "invalid_schema"),
+        ({"schema_version": 3}, "schema_unsupported"),
         ({"schema_version": True}, "schema_unsupported"),
         ({"profile": "pentest"}, "invalid_schema"),
         ({"timeout_ms": 6000}, "invalid_schema"),

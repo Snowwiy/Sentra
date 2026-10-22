@@ -606,6 +606,7 @@ def test_basic_batch_digest_is_unchanged() -> None:
     legacy = item.model_dump(mode="json")
     legacy.pop("rtt_ms")
     legacy.pop("forward_dns_match")
+    legacy.pop("identity")  # Corrección 6C: campo opcional, fuera del digest si falta
     raw = json.dumps([legacy], sort_keys=True, separators=(",", ":")).encode()
     assert _payload_sha256([item]) == hashlib.sha256(raw).hexdigest()
 

@@ -327,6 +327,21 @@ def run_network_maintenance() -> None:
         maintain(session, get_settings())
 
 
+def run_topology_builder() -> None:
+    """Fase 6D: reconstruye la topología de los sites activos cuya última reconstrucción es
+    más antigua que TOPOLOGY_REBUILD_INTERVAL_MINUTES (0 = desactivado, sin job).
+
+    Solo relee evidencia ya guardada (no consulta la red). Cada site toma además su propio
+    lock de transacción: una reconstrucción manual en curso hace que el job salte ese site.
+    """
+    from app.topology.service import run_scheduled_rebuilds
+
+    with get_sessionmaker()() as session:
+        rebuilt = run_scheduled_rebuilds(session, get_settings())
+    if rebuilt:
+        logger.info("topology rebuilt", extra={"sites": rebuilt})
+
+
 def run_report_worker() -> None:
     """Fase 5E: genera los informes pendientes (acotado por vuelta) y aplica la retención.
 

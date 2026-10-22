@@ -72,7 +72,7 @@ from app.services.asset_lifecycle_policy import (
 )
 from app.services.asset_service import effective_status
 from app.services.audit_service import Actor
-from app.services.reconciliation import interface_identity
+from app.services.reconciliation import adopt_label, interface_identity
 from app.vulnerabilities.queue import mark_dirty
 
 logger = logging.getLogger(__name__)
@@ -1155,6 +1155,9 @@ class AssetLifecycleService:
             target.archived_at = None
             target.archived_by = None
             target.archive_reason = None
+        # Corrección 6C: la etiqueta del activo histórico se conserva; si no tenía, hereda la
+        # del activo del agente nuevo (el source queda archivado con la suya).
+        adopt_label(source=source, target=target)
         target.lifecycle_version += 1
         self._session.flush()
 

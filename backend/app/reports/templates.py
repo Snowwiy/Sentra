@@ -12,6 +12,7 @@ from collections.abc import Callable
 from typing import Any
 
 from app.reports.document import (
+    AnyDocument,
     Block,
     Bullets,
     Document,
@@ -620,6 +621,13 @@ def _asset(snapshot: dict[str, Any]) -> list[Section]:
                 _kv(
                     [
                         ("Nombre", ident["name"]),
+                        # Corrección 6C: solo en plantillas v2. La v1 publicada no tenía
+                        # esta fila y un snapshot v1 debe volver a dar los mismos bytes.
+                        *(
+                            [("Etiqueta personalizada", ident.get("custom_label"))]
+                            if int(snapshot["meta"].get("template_version") or 1) >= 2
+                            else []
+                        ),
                         ("ID", ident["id"]),
                         ("Hostname", ident["hostname"]),
                         ("Nombre de dispositivo", ident["device_name"]),
@@ -974,8 +982,15 @@ TEMPLATES: dict[str, Callable[[dict[str, Any]], list[Section]]] = {
 }
 
 
-def render_document(snapshot: dict[str, Any]) -> Document:
+def render_document(snapshot: dict[str, Any]) -> AnyDocument:
     meta = snapshot["meta"]
+    # Fase 6D.5: la plantilla se elige por la versión guardada EN EL SNAPSHOT, no por la del
+    # catálogo: un informe v1 ya generado se vuelve a renderizar con v1 (mismos bytes) aunque
+    # los informes nuevos usen v2. Importación diferida: templates_v2 reutiliza este módulo.
+    if int(meta.get("template_version") or 1) >= 2:
+        from app.reports.templates_v2 import render_document_v2
+
+        return render_document_v2(snapshot)
     sections = TEMPLATES[meta["report_type"]](snapshot)
     return Document(
         title=meta["title"],

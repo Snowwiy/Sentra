@@ -82,7 +82,7 @@ export function HostnameCell({ observation }: { observation: Observation }) {
 export function PortsCell({ observation }: { observation: Observation }) {
   return (
     <div>
-      <PortList ports={observation.open_ports} />
+      <PortList ports={observation.open_ports} address={observation.address} />
       {observation.port_hints.length > 0 && (
         <div className="small muted observation-hints">
           {observation.port_hints.map((hint) => (

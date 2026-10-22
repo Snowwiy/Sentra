@@ -35,6 +35,7 @@ from app.services.background import (
     run_risk_engine,
     run_sensor_maintenance,
     run_threat_intel,
+    run_topology_builder,
     run_vulnerability_engine,
     run_vulnerability_sources,
     sweep_offline_assets,
@@ -49,6 +50,9 @@ DISCOVERY_FIRST_RUN_SECONDS = 60
 # Fase 6B: cada cuánto se buscan equipos con la consulta periódica vencida. El intervalo real
 # de cada equipo es SNMP_POLL_INTERVAL_MINUTES; esto solo fija la granularidad.
 NETWORK_MAINTENANCE_SECONDS = 60
+# Fase 6D: granularidad del job de topología; el intervalo real por site es
+# TOPOLOGY_REBUILD_INTERVAL_MINUTES.
+TOPOLOGY_BUILDER_SECONDS = 60
 
 
 def _log_schema_state() -> None:
@@ -152,6 +156,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 PeriodicJob(
                     "network-maintenance", NETWORK_MAINTENANCE_SECONDS, run_network_maintenance
                 )
+            )
+        # Fase 6D: reconstrucción periódica de la topología (0 minutos = desactivada). El job
+        # despierta cada minuto y solo reconstruye los sites vencidos.
+        if settings.topology_rebuild_interval_minutes:
+            jobs.append(
+                PeriodicJob("topology-builder", TOPOLOGY_BUILDER_SECONDS, run_topology_builder)
             )
         # Only when a retention period is configured: by default nothing is ever deleted.
         if RetentionPolicy.from_settings(settings).enabled:

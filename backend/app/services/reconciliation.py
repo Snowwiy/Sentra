@@ -185,6 +185,7 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     # historial de riesgo sigue al activo superviviente.
     if target.criticality == AssetCriticality.MEDIUM:
         target.criticality = source.criticality
+    adopt_label(source=source, target=target)
     session.execute(
         update(RiskSnapshot).where(RiskSnapshot.asset_id == source.id).values(asset_id=target.id)
     )
@@ -200,6 +201,22 @@ def merge_into(session: Session, *, source: Asset, target: Asset) -> None:
     )
     session.delete(source)
     session.flush()
+
+
+def adopt_label(*, source: Asset, target: Asset) -> bool:
+    """Corrección 6C: la etiqueta personalizada sigue al activo que sobrevive.
+
+    Solo si el superviviente no tiene una propia: nunca se sustituye una etiqueta que alguien
+    puso en el otro activo (eso lo decide una persona con PATCH /assets/{id}/label). Cambia la
+    versión de la etiqueta para que una edición abierta sobre la versión anterior reciba 409.
+    """
+    if target.custom_label is not None or not source.custom_label:
+        return False
+    target.custom_label = source.custom_label
+    target.custom_label_version = (target.custom_label_version or 0) + 1
+    target.custom_label_updated_at = source.custom_label_updated_at
+    target.custom_label_updated_by = source.custom_label_updated_by
+    return True
 
 
 def _merge_ports(session: Session, source_id: int, target_id: int) -> None:

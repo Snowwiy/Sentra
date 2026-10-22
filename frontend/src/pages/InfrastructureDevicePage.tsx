@@ -26,6 +26,8 @@ import {
   pollBlockersFromError,
   SNMP_VERSION_LABELS,
   snmpErrorText,
+  snmpStatusText,
+  snmpStatusTone,
   VENDOR_SOURCE_LABELS,
 } from "../lib/network";
 import { usePolling } from "../lib/usePolling";
@@ -81,6 +83,11 @@ function Summary({ device }: { device: NetworkDeviceDetail }) {
           <div className="muted small">
             {device.monitoring_enabled ? "consulta periódica activada" : "consulta periódica desactivada"}
           </div>
+        </Field>
+        <Field label="Compatibilidad SNMP">
+          <span className={`badge badge--${snmpStatusTone(device.snmp_status)}`} data-testid="snmp-status">
+            {snmpStatusText(device.snmp_status)}
+          </span>
         </Field>
         <Field label="Evidencia">
           <FreshnessBadge freshness={device.freshness} />
@@ -225,6 +232,41 @@ export function InfrastructureDevicePage() {
     }
   };
 
+  // Fase 6D.4: verificación de compatibilidad (solo el módulo system con el perfil asignado).
+  // Mismos bloqueos y errores 409 que una consulta normal.
+  const compatibilityCheck = async () => {
+    setBusy(true);
+    setActionError(undefined);
+    setBlockers([]);
+    try {
+      await networkApi.compatibilityCheck(d.device_id);
+      setTab("polls");
+      setPollPage(1);
+    } catch (err) {
+      setActionError(errorMessage(asError(err)));
+      setBlockers(pollBlockersFromError(err));
+    } finally {
+      setBusy(false);
+      refreshAll();
+    }
+  };
+
+  // Reanudar envía la versión leída: un 409 (otro admin cambió el equipo) se explica y se
+  // recarga, nunca se reintenta en silencio.
+  const resumeMonitoring = async () => {
+    setBusy(true);
+    setActionError(undefined);
+    setBlockers([]);
+    try {
+      await networkApi.resumeMonitoring(d.device_id, d.version);
+    } catch (err) {
+      setActionError(errorMessage(asError(err)));
+    } finally {
+      setBusy(false);
+      refreshAll();
+    }
+  };
+
   const cancelPoll = async (poll: NetworkPoll) => {
     setBusy(true);
     setActionError(undefined);
@@ -274,6 +316,16 @@ export function InfrastructureDevicePage() {
               {busy ? "Procesando…" : "Consultar ahora"}
             </button>
           )}
+          {canPoll && !archived && (
+            <button
+              type="button"
+              className="button nowrap"
+              disabled={busy || !d.can_poll || Boolean(openPoll)}
+              onClick={() => void compatibilityCheck()}
+            >
+              Verificar compatibilidad SNMP
+            </button>
+          )}
           {canPoll && openPoll && (
             <button type="button" className="button nowrap" disabled={busy} onClick={() => void cancelPoll(openPoll)}>
               Cancelar consulta
@@ -292,6 +344,20 @@ export function InfrastructureDevicePage() {
         </div>
       </div>
 
+      {d.monitoring_paused_at && !archived && (
+        <div className="banner banner--warn" role="status" aria-label="Consultas periódicas en pausa">
+          <span className="strong">Consultas periódicas en pausa</span> desde {formatRelative(d.monitoring_paused_at)}
+          {d.monitoring_pause_reason && <>. Motivo: {snmpStatusText(d.monitoring_pause_reason)}</>}. Sentra no vuelve a
+          consultar el equipo automáticamente hasta que se reanuden; la consulta manual sigue disponible.
+          {canManage && (
+            <div>
+              <button type="button" className="button button--small" disabled={busy} onClick={() => void resumeMonitoring()}>
+                Reanudar
+              </button>
+            </div>
+          )}
+        </div>
+      )}
       {d.freshness === "historical" && (
         <div className="banner banner--warn" role="note">
           Evidencia histórica: {FRESHNESS_HELP.historical}

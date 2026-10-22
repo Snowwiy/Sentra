@@ -58,7 +58,7 @@ from app.models.report import (
 from app.models.response import Playbook, ResponseExecution
 from app.models.site import Site
 from app.models.user import User
-from app.reports import builders
+from app.reports import builders, builders_v2
 from app.reports.builders import BuildContext, BuildError, iso
 from app.reports.catalog import (
     CLASSIFICATIONS,
@@ -1168,6 +1168,12 @@ class ReportWorker:
             cutoff = cutoff.astimezone(UTC)
             ctx = build_context(self._settings, normalized, cutoff, snap, permissions, checkpoint)
             result = builders.BUILDERS[definition.id](ctx)
+            extended = None
+            if definition.template_version >= 2:
+                # Fase 6D.5: datos de las gráficas v2, leídos en la MISMA transacción y con la
+                # misma hora de corte que el resto del snapshot.
+                ctx.checkpoint()
+                extended = builders_v2.build_extended(ctx, result)
             snap.rollback()
         generated = _now()
         meta = {
@@ -1194,6 +1200,8 @@ class ReportWorker:
             "data": result["data"],
             "tables": result.get("tables", {}),
         }
+        if extended is not None:
+            snapshot["extended"] = extended
         return snapshot, list(result["summary"]), cutoff
 
     def _render(self, report: Report, snapshot: dict[str, Any]) -> tuple[bytes, str, int]:

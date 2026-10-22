@@ -13,11 +13,20 @@ lo que el scan ya guardó en identity_observations.
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 from app.core.config import get_settings
 from app.discovery import oui
-from app.discovery.classify import IdentityInput, identify
+from app.discovery.classify import (
+    MDNS,
+    NETBIOS,
+    REVERSE_DNS,
+    UPNP,
+    IdentityInput,
+    identify,
+    is_default_name,
+)
 from app.discovery.device_types import ClassificationConfidence
 from app.discovery.scanner import HostObservation
 from app.discovery.vendors import display_vendor
@@ -41,6 +50,20 @@ class IdentityChange:
         return self.previous_confidence is not None and self.previous_type != self.device_type
 
 
+# Corrección 6C: un nombre que ninguna fuente repite en este plazo se considera antiguo. Se
+# conserva como evidencia, pero no gana a un nombre reciente de otra fuente ni impide que un
+# dato nuevo (aunque sea más débil) lo sustituya: un equipo renombrado o una IP reasignada
+# dejan de anunciar el nombre viejo.
+NAME_STALE_DAYS = 30
+# Clave de identity_observations -> fuente de nombre de classify (para la vigencia).
+_SEEN_KEYS = {
+    "reverse_dns": REVERSE_DNS,
+    "mdns_name": MDNS,
+    "netbios_name": NETBIOS,
+    "upnp": UPNP,
+}
+
+
 def oui_database() -> oui.OuiDatabase:
     return oui.load_database(oui.parse_paths(get_settings().discovery_oui_file))
 
@@ -50,15 +73,45 @@ def network_adapter_vendor(asset: Asset) -> str | None:
     return display_vendor(asset.vendor)
 
 
-def record_observation(asset: Asset, obs: HostObservation, is_gateway: bool | None) -> None:
+def _parse_time(value: Any) -> datetime | None:
+    if not isinstance(value, str):
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+
+
+def _is_stale(seen: dict[str, Any], key: str, now: datetime) -> bool:
+    # Sin fecha (datos anteriores a la Corrección 6C) no se sabe su edad: no se tratan como
+    # antiguos, para no degradar de golpe todos los nombres al actualizar.
+    when = _parse_time(seen.get(key))
+    return when is not None and now - when > timedelta(days=NAME_STALE_DAYS)
+
+
+def _weaker_name(new: str, old: Any) -> bool:
+    """¿El nombre nuevo es un valor por defecto que vendría a tapar uno que sí identifica?"""
+    return isinstance(old, str) and bool(old) and is_default_name(new) and not is_default_name(old)
+
+
+def record_observation(
+    asset: Asset, obs: HostObservation, is_gateway: bool | None, now: datetime | None = None
+) -> None:
     """Guarda lo que el scan vio de la identidad del host, sin perder lo visto antes.
 
     Un dispositivo no responde a mDNS/NetBIOS/SSDP en todos los scans (Wi-Fi dormido,
     pérdida de un paquete UDP): un valor ausente no borra el anterior; uno nuevo lo
     sustituye. `is_gateway` es None cuando no se pudo leer la tabla de rutas del servidor:
     en ese caso tampoco se cambia lo que se sabía.
+
+    Corrección 6C: cada dato lleva la hora en que se vio (`seen_at`) y un nombre genérico
+    ("linux") no sustituye a uno que identifica al equipo mientras este siga vigente: una
+    respuesta más pobre de la misma fuente no borra una identificación mejor.
     """
+    now = now or datetime.now(UTC)
     current: dict[str, Any] = dict(asset.identity_observations or {})
+    seen: dict[str, Any] = dict(current.get("seen_at") or {})
     updates: dict[str, Any] = {
         "mdns_name": obs.mdns_name,
         "netbios_name": obs.netbios_name,
@@ -67,17 +120,67 @@ def record_observation(asset: Asset, obs: HostObservation, is_gateway: bool | No
     if obs.upnp is not None:
         updates["upnp"] = {k: v for k, v in vars(obs.upnp).items() if v}
     for key, value in updates.items():
-        if value:
-            current[key] = value
+        if not value:
+            continue
+        old = current.get(key)
+        if isinstance(value, str) and _weaker_name(value, old) and not _is_stale(seen, key, now):
+            continue
+        current[key] = value
+        if key in _SEEN_KEYS:
+            seen[key] = now.isoformat()
+    if seen:
+        current["seen_at"] = seen
     if is_gateway is not None:
         current["gateway"] = is_gateway
     # Asignar un dict nuevo (no mutar el existente) para que SQLAlchemy detecte el cambio.
     asset.identity_observations = current or None
 
 
-def identity_input(asset: Asset, open_ports: Iterable[int]) -> IdentityInput:
+def record_reverse_dns(
+    asset: Asset, name: str | None, confirmed: bool | None, now: datetime | None = None
+) -> None:
+    """Actualiza el DNS inverso sin que una respuesta más débil tape una más fiable.
+
+    `confirmed` es el resultado de la confirmación directa (FCrDNS) del nombre NUEVO: True
+    si resuelve a esta IP, False si resuelve a otra, None si no se comprobó. Se conserva el
+    nombre anterior cuando, estando vigente, el nuevo es un valor por defecto ("linux") y el
+    anterior no, o cuando el anterior estaba confirmado y el nuevo queda desmentido.
+    """
+    if not name:
+        return
+    now = now or datetime.now(UTC)
+    current: dict[str, Any] = dict(asset.identity_observations or {})
+    seen: dict[str, Any] = dict(current.get("seen_at") or {})
+    old = asset.reverse_dns
+    if old and old != name and not _is_stale(seen, "reverse_dns", now):
+        old_confirmed = current.get("reverse_dns_confirmed")
+        if _weaker_name(_bare(name), _bare(old)) or (old_confirmed is True and confirmed is False):
+            return
+    if old != name:
+        # Otro nombre: la confirmación anterior era del nombre viejo.
+        current.pop("reverse_dns_confirmed", None)
+    asset.reverse_dns = name
+    if confirmed is not None:
+        current["reverse_dns_confirmed"] = confirmed
+    seen["reverse_dns"] = now.isoformat()
+    current["seen_at"] = seen
+    asset.identity_observations = current
+
+
+def _bare(name: str | None) -> str:
+    """Primera etiqueta del nombre, para comparar "linux.local" con "linux"."""
+    return (name or "").strip().rstrip(".").split(".", 1)[0]
+
+
+def identity_input(
+    asset: Asset, open_ports: Iterable[int], now: datetime | None = None
+) -> IdentityInput:
     seen: dict[str, Any] = asset.identity_observations or {}
     upnp: dict[str, Any] = seen.get("upnp") or {}
+    seen_at = seen.get("seen_at")
+    seen_at = seen_at if isinstance(seen_at, dict) else {}
+    now = now or datetime.now(UTC)
+    confirmed = seen.get("reverse_dns_confirmed")
     return IdentityInput(
         managed=asset.is_managed,
         hostname=asset.hostname,
@@ -97,6 +200,10 @@ def identity_input(asset: Asset, open_ports: Iterable[int]) -> IdentityInput:
         mac_random=oui.is_locally_administered(asset.mac_address),
         open_ports=frozenset(open_ports),
         is_gateway=seen.get("gateway") is True,
+        reverse_dns_confirmed=confirmed if isinstance(confirmed, bool) else None,
+        stale_sources=frozenset(
+            source for key, source in _SEEN_KEYS.items() if _is_stale(seen_at, key, now)
+        ),
     )
 
 
@@ -135,6 +242,7 @@ def refresh_identity(
     asset.probable_os = None if asset.is_managed else result.probable_os
     asset.classification_confidence = result.confidence
     asset.classification_evidence = result.evidence or None
+    asset.observed_names = result.names or None
     return IdentityChange(change.previous_type, change.previous_confidence, asset.device_type)
 
 

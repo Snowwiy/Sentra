@@ -48,6 +48,20 @@ DEVICE_STATUSES = ("active", "archived")
 POLL_STATUSES = ("queued", "running", "succeeded", "partial", "failed", "cancelled", "expired")
 OPEN_POLL_STATUSES = ("queued", "running")
 OPEN_POLL_PREDICATE = "status IN ('queued', 'running')"
+# Fase 6D: diagnóstico SNMP del equipo. "no_response" = ninguna respuesta SNMP sin haber
+# tenido nunca éxito (SNMP no disponible o compatibilidad sin confirmar); "collector_error" =
+# fallo interno del sensor, que no dice nada del equipo.
+SNMP_STATUSES = (
+    "unverified",
+    "compatible",
+    "no_response",
+    "timeout",
+    "unreachable",
+    "auth_failed",
+    "unsupported_version",
+    "malformed_response",
+    "collector_error",
+)
 
 
 class SnmpCredentialProfile(Base):
@@ -164,6 +178,16 @@ class NetworkDevice(Base):
     last_error_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_modules: Mapped[dict[str, str] | None] = mapped_column(JSONB)
+    # Fase 6D: diagnóstico SNMP en la taxonomía de Sentra (SNMP_STATUSES), nunca el nombre de
+    # una excepción del colector. Lo fija cada cierre de consulta.
+    snmp_status: Mapped[str] = mapped_column(
+        String(24), default="unverified", server_default="unverified"
+    )
+    # Pausa automática de las consultas periódicas: tras fallos repetidos que indican que no
+    # hay SNMP utilizable, el programador deja de reintentar. La consulta manual sigue
+    # disponible y un éxito (o reactivar la monitorización) la levanta.
+    monitoring_paused_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    monitoring_pause_reason: Mapped[str | None] = mapped_column(String(32))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_by: Mapped[str | None] = mapped_column(String(64))
     archive_reason: Mapped[str | None] = mapped_column(String(500))

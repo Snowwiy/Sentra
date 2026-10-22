@@ -174,7 +174,10 @@ def test_classification_is_conservative() -> None:
         "Windows",
         "low",
     )
-    assert kind(open_ports=frozenset({80, 443, 9100})) == "printer"
+    # Corrección 6C: un solo puerto de impresión (con la web de administración) no decide el
+    # tipo; dos servicios de impresión sí.
+    assert kind(open_ports=frozenset({80, 443, 9100})) is None
+    assert kind(open_ports=frozenset({515, 9100})) == "printer"
     assert kind(open_ports=frozenset({80, 443}), is_gateway=True) == "router"
     assert kind(open_ports=frozenset({22})) is None  # SSH alone proves nothing
     assert kind(open_ports=frozenset({80, 443})) is None

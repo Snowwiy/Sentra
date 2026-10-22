@@ -38,7 +38,7 @@ from app.models.risk import (
     RiskSnapshot,
 )
 from app.repositories.alert_repository import escape_like
-from app.repositories.asset_repository import effective_status_expr
+from app.repositories.asset_repository import display_name_expr, effective_status_expr
 from app.risk.config import RiskConfig
 from app.risk.explain import explain
 from app.schemas.risk import (
@@ -121,6 +121,7 @@ class RiskService:
     def _summary_select(self, now: datetime) -> Any:
         return select(
             Asset.public_id,
+            Asset.custom_label,
             Asset.device_name,
             Asset.hostname,
             Asset.reverse_dns,
@@ -181,6 +182,7 @@ class RiskService:
             pattern = f"%{escape_like(f.search)}%"
             stmt = stmt.where(
                 or_(
+                    Asset.custom_label.ilike(pattern, escape="\\"),
                     Asset.device_name.ilike(pattern, escape="\\"),
                     Asset.hostname.ilike(pattern, escape="\\"),
                     Asset.reverse_dns.ilike(pattern, escape="\\"),
@@ -200,11 +202,7 @@ class RiskService:
         elif sort == "last_seen":
             column = self._last_seen_expr()
         elif sort == "name":
-            column = func.lower(
-                func.coalesce(
-                    Asset.device_name, Asset.hostname, Asset.reverse_dns, Asset.primary_ip
-                )
-            )
+            column = func.lower(display_name_expr())
         elif sort == "criticality":
             column = Asset.criticality
         else:
@@ -527,8 +525,10 @@ class RiskService:
 
 
 def _display_name(row: Any) -> str:
-    # Misma prioridad que Asset.display_name.
-    return str(row.device_name or row.hostname or row.reverse_dns or row.primary_ip)
+    # Misma prioridad que Asset.display_name (etiqueta personalizada primero, Corrección 6C).
+    return str(
+        row.custom_label or row.device_name or row.hostname or row.reverse_dns or row.primary_ip
+    )
 
 
 def _summary(row: Any) -> RiskAssetSummary:

@@ -61,11 +61,12 @@ def test_assets_list_mixes_managed_and_discovered(client: TestClient, engine: En
     assert printer["monitoring_method"] == "discovered"
     assert printer["hostname"] is None and printer["display_name"] == "10.20.0.7"
     assert printer["status"] == "online" and printer["agent_status"] is None
-    assert printer["device_type"] == "printer" and printer["open_ports"] == [80, 443, 9100]
+    # Corrección 6C: 9100 es el único puerto de impresión; queda como evidencia, no como tipo.
+    assert printer["device_type"] is None and printer["open_ports"] == [80, 443, 9100]
     assert printer["os_name"] is None and printer["latest_telemetry"] is None
     assert by_ip["10.20.0.1"]["device_type"] == "router"
     # Sin nombre: display_name sigue siendo la IP (alertas/CLI); la UI usa device_name.
-    assert printer["device_name"] is None and printer["classification_confidence"] == "medium"
+    assert printer["device_name"] is None and printer["classification_confidence"] is None
     assert {"source": "ports", "value": "9100/jetdirect"} in printer["classification_evidence"]
 
 
@@ -80,8 +81,8 @@ def test_asset_filters(client: TestClient, engine: Engine) -> None:
 
     assert ips("method=agent") == ["10.20.0.5"]
     assert len(ips("method=discovered")) == 4
-    assert ips("device_type=printer") == ["10.20.0.7"]
-    assert ips("device_type=unknown") == ["10.20.0.1", "10.20.0.12", "10.20.0.9"]
+    assert ips("device_type=printer") == []  # Corrección 6C: 9100 solo no decide el tipo
+    assert ips("device_type=unknown") == ["10.20.0.1", "10.20.0.12", "10.20.0.7", "10.20.0.9"]
     assert ips("subnet=10.20.0.4/30") == ["10.20.0.5", "10.20.0.7"]
     assert ips("q=NAS") == ["10.20.0.12"]
     assert ips("q=02:00:00:00:00:09") == ["10.20.0.9"]

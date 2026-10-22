@@ -125,6 +125,10 @@ class Permission(enum.StrEnum):
     # Perfiles de credenciales SNMP (crear, rotar, revocar). Solo admin: dan acceso de
     # lectura a la configuración de los equipos de red de un site.
     SNMP_CREDENTIALS_MANAGE = "snmp_credentials:manage"
+    # Fase 6D. Leer el grafo de topología es monitoring:read. Reconstruirlo a demanda y
+    # revisar enlaces (aceptar/rechazar): solo admin, porque la revisión cambia lo que ven
+    # todos los usuarios y los informes, y una reconstrucción carga la base de datos.
+    TOPOLOGY_MANAGE = "topology:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {

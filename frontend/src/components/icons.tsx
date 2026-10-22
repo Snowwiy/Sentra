@@ -20,6 +20,7 @@ export type IconName =
   | "network"
   | "infrastructure"
   | "wifi"
+  | "topology"
   | "agent"
   | "sensor"
   | "site"
@@ -54,6 +55,7 @@ const PATHS: Record<IconName, string> = {
   risk: "M4 20V10M10 20V4M16 20v-7M22 20H2",
   network: "M12 4v5M5 15v-3h14v3M5 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM19 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM12 15a2 2 0 1 0 0 4 2 2 0 0 0 0-4zM12 12v3M10 2h4v2h-4z",
   infrastructure: "M4 5h16v5H4zM4 14h16v5H4zM7 7.5h.01M7 16.5h.01M11 7.5h6M11 16.5h6",
+  topology: "M12 3m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M5 19m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M19 19m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M11 5l-5 12M13 5l5 12M7 19h10",
   wifi: "M2 9a15 15 0 0 1 20 0M5 12.5a10 10 0 0 1 14 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01",
   agent: "M4 5h16v11H4zM8 20h8M12 16v4",
   sensor: "M12 12m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M7.8 7.8a6 6 0 0 0 0 8.4M16.2 16.2a6 6 0 0 0 0-8.4M5 5a10 10 0 0 0 0 14M19 19a10 10 0 0 0 0-14",

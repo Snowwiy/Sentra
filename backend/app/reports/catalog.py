@@ -79,6 +79,13 @@ class ReportDefinition:
     evidence_tables: tuple[str, ...] = field(default_factory=tuple)
 
 
+# Versión de plantilla de los informes NUEVOS (Fase 6D.5: v2 con portada, gráficas
+# extendidas y PDF con transliteración). La versión se guarda en `reports.template_version` y
+# en `snapshot.meta.template_version`; el render elige la plantilla por la del snapshot, así un
+# informe v1 ya generado se vuelve a renderizar con v1 y conserva sus bytes.
+TEMPLATE_VERSION = 2
+SUPPORTED_TEMPLATE_VERSIONS: tuple[int, ...] = (1, 2)
+
 _MONITORING = Permission.MONITORING_READ
 _ALL_DOMAINS = frozenset(
     {
@@ -103,7 +110,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         domain_permissions=_ALL_DOMAINS,
         supported_formats=("html", "pdf"),
         filters=("include_archived",),
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Estado general",
             "Activos monitorizados",
@@ -136,7 +143,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
             "include_archived",
         ),
         severity_values=DETECTION_SEVERITIES,
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Resumen",
             "Inventario de activos",
@@ -168,7 +175,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         filters=("incident_ids",),
         required_filters=("incident_ids",),
         uses_range=False,
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Incidente",
             "Activos",
@@ -196,7 +203,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         supported_formats=("html", "pdf", "evidence"),
         filters=("asset_ids", "include_archived"),
         required_filters=("asset_ids",),
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Identidad",
             "Ciclo de vida y agente",
@@ -226,7 +233,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         filters=("asset_ids", "severities", "statuses", "platforms", "include_archived"),
         severity_values=VULN_SEVERITIES,
         status_values=VULN_STATUSES,
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Resumen",
             "Confirmados",
@@ -248,7 +255,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         domain_permissions=frozenset({Permission.MONITORING_READ}),
         supported_formats=("html", "pdf"),
         filters=("asset_ids", "risk_levels", "platforms", "include_archived"),
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Distribución actual",
             "Activos más riesgosos",
@@ -278,7 +285,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         ),
         severity_values=DETECTION_SEVERITIES,
         status_values=DETECTION_STATUSES,
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=("Resumen", "Detecciones", "Evidencia", "Incidentes asociados"),
         csv_table="detections",
         evidence_tables=("detections", "evidence"),
@@ -296,7 +303,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         supported_formats=("html", "pdf", "csv", "evidence"),
         filters=("asset_ids", "execution_ids", "playbook_ids", "statuses", "include_archived"),
         status_values=EXECUTION_STATUSES,
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=("Resumen", "Ejecuciones", "Playbooks"),
         csv_table="executions",
         evidence_tables=("executions", "playbook_runs"),
@@ -314,7 +321,7 @@ DEFINITIONS: tuple[ReportDefinition, ...] = (
         domain_permissions=frozenset({_MONITORING, Permission.ASSET_DUPLICATES_READ}),
         supported_formats=("html", "pdf", "csv"),
         filters=("asset_ids", "platforms", "include_archived"),
-        template_version=1,
+        template_version=TEMPLATE_VERSION,
         sections=(
             "Resumen",
             "Activos nuevos",

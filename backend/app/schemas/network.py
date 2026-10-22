@@ -48,14 +48,30 @@ MonitoringStatus = Literal[
     "ok",
     "partial",
     "failing",
+    # Fase 6D: consultas periódicas pausadas tras fallos repetidos sin SNMP utilizable.
+    "paused",
 ]
 # "recent" = la última consulta correcta es reciente; "historical" = solo hay evidencia
 # antigua (la UI no debe presentar el equipo como disponible); "none" = nunca se consultó.
 EvidenceFreshness = Literal["recent", "historical", "none"]
 PollStatus = Literal["queued", "running", "succeeded", "partial", "failed", "cancelled", "expired"]
-PollTrigger = Literal["manual", "scheduled"]
+# "check" (Fase 6D): verificación de compatibilidad, solo el módulo system.
+PollTrigger = Literal["manual", "scheduled", "check"]
 ModuleName = Literal["system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan", "wlan"]
 ModuleStatus = Literal["complete", "partial", "unsupported", "failed", "skipped"]
+# Fase 6D: diagnóstico SNMP del equipo (app.models.network.SNMP_STATUSES). Taxonomía propia:
+# nunca el nombre de una excepción del colector.
+SnmpDeviceStatus = Literal[
+    "unverified",
+    "compatible",
+    "no_response",
+    "timeout",
+    "unreachable",
+    "auth_failed",
+    "unsupported_version",
+    "malformed_response",
+    "collector_error",
+]
 # Taxonomía de errores que la UI muestra diferenciados (docs, sección Troubleshooting).
 SnmpErrorCode = Literal[
     "timeout",
@@ -300,6 +316,10 @@ class NetworkDeviceRead(ResponseModel):
     last_error_code: SnmpErrorCode | None
     last_error_at: datetime | None
     consecutive_failures: int
+    snmp_status: SnmpDeviceStatus
+    # Pausa automática de las consultas periódicas (motivo = snmp_status que la provocó).
+    monitoring_paused_at: datetime | None
+    monitoring_pause_reason: SnmpDeviceStatus | None
     interfaces_total: int
     interfaces_up: int
     neighbors_total: int
@@ -388,6 +408,10 @@ class NetworkDeviceUpdate(RequestModel):
     clear_profile: bool = False
     clear_sensor: bool = False
     monitoring_enabled: bool | None = None
+
+
+class NetworkDeviceResume(RequestModel):
+    version: int = Field(ge=1)
 
 
 class NetworkDeviceArchive(RequestModel):

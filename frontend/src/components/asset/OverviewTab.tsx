@@ -11,6 +11,7 @@ import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import { StatusBadge } from "../StatusBadge";
 import { IdentificationPanel } from "../DeviceIdentity";
 import { PortList } from "../NetworkBadges";
+import { confirmedHostname } from "../../lib/services";
 import { ChangesList } from "./ChangesList";
 
 // At the agent's default 30 s interval this covers the last hour.
@@ -48,7 +49,13 @@ function NetworkPanel({ asset }: { asset: Asset }) {
             {dash(asset.discovery_network)}
           </Field>
           <Field label="Puertos abiertos">
-            <PortList ports={asset.open_ports} limit={20} />
+            <PortList
+              ports={asset.open_ports}
+              limit={20}
+              address={asset.primary_ip}
+              hostname={confirmedHostname(asset)}
+              detailed
+            />
           </Field>
           <Field label="Descubierto">{formatDateTime(asset.discovered_at)}</Field>
           <Field label="Visto en red">

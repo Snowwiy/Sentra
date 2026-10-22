@@ -20,6 +20,7 @@ import { AIAnalyzePanel } from "../ai/AIAnalyzePanel";
 import { ErrorState, LoadingState } from "../StateViews";
 import { CriticalityBadge, RiskBadge, RiskConfidenceBadge } from "./RiskBadges";
 import { RiskTrend } from "./RiskTrend";
+import { RiskTraceSection } from "./RiskTrace";
 
 /** Enlace de una contribución a su origen: detección, finding, coincidencia de inteligencia,
  * exposición del activo o nada. */
@@ -227,6 +228,8 @@ export function RiskPanel({ assetId }: { assetId: string }) {
           </div>
         </div>
       </section>
+
+      <RiskTraceSection risk={risk} />
 
       <section className="panel">
         <RiskTrend assetId={assetId} thresholds={risk.thresholds} />

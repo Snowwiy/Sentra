@@ -1,4 +1,4 @@
-import { lazy, Suspense, useCallback } from "react";
+import { lazy, Suspense, useCallback, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { aiApi, sentraApi, vulnerabilitiesApi } from "../api/sentra";
@@ -6,6 +6,7 @@ import { useAuth } from "../auth/AuthContext";
 import { AlertsView } from "../components/AlertsView";
 import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { AgentPanel } from "../components/asset/AgentPanel";
+import { AssetLabelDialog } from "../components/asset/AssetLabelDialog";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
 import { ChangesList } from "../components/asset/ChangesList";
 import { ContextTab } from "../components/asset/ContextTab";
@@ -26,7 +27,7 @@ import { MethodBadge } from "../components/NetworkBadges";
 import { AssetStateBadge } from "../components/StatusBadge";
 import { config } from "../config";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
-import { assetTitle, typeWithConfidence } from "../lib/identity";
+import { assetTitle, automaticTitle, typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 
 // Fase 5D: la sección Response va en su propio chunk (no pesa en el bundle principal).
@@ -79,6 +80,8 @@ export function AssetDetailPage() {
   const { assetId = "" } = useParams();
   const auth = useAuth();
   const canVulns = auth.can("vulnerabilities:read");
+  const canLabel = auth.can("assets:manage");
+  const [editingLabel, setEditingLabel] = useState(false);
   const [params, setParams] = useSearchParams();
   const raw = params.get("tab");
   const requested: Tab = isTab(raw) ? raw : "overview";
@@ -232,12 +235,26 @@ export function AssetDetailPage() {
               </>
             )}
           </p>
+          {asset.custom_label && (
+            <p className="muted small">
+              Etiqueta personalizada · nombre automático: {automaticTitle(asset)}
+            </p>
+          )}
           <p className="muted small mono">{asset.asset_id}</p>
         </div>
         <div className="actions">
+          {canLabel && (
+            <button type="button" className="button" onClick={() => setEditingLabel(true)}>
+              {asset.custom_label ? "Editar etiqueta" : "Poner etiqueta"}
+            </button>
+          )}
           <GenerateReportLink type="asset" ids={{ asset_id: asset.asset_id }} />
         </div>
       </div>
+
+      {editingLabel && (
+        <AssetLabelDialog asset={asset} onClose={() => setEditingLabel(false)} onSaved={() => refresh()} />
+      )}
 
       {error && (
         <div className="banner banner--warn" role="alert">

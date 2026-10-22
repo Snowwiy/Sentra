@@ -10,9 +10,20 @@ from sqlalchemy.orm import Session
 from app.models.asset import Asset, AssetCriticality
 from app.models.exposure import AssetPort, PortStateValue
 
-# Los activos sin nombre resuelto se ordenan por dirección detrás de los nombrados.
+
+def display_name_expr() -> ColumnElement[str]:
+    """Asset.display_name en SQL (Corrección 6C): etiqueta personalizada y luego el nombre
+    automático. Lo usan las búsquedas y listados que no cargan el objeto Asset; si cambia el
+    orden de la propiedad, cambia aquí también."""
+    return func.coalesce(
+        Asset.custom_label, Asset.device_name, Asset.hostname, Asset.reverse_dns, Asset.primary_ip
+    )
+
+
+# Los activos sin nombre resuelto se ordenan por dirección detrás de los nombrados. La
+# etiqueta personalizada manda sobre el nombre automático (Corrección 6C), como en la UI.
 _NAME_ORDER = (
-    Asset.device_name.asc().nulls_last(),
+    func.coalesce(Asset.custom_label, Asset.device_name).asc().nulls_last(),
     Asset.hostname.asc().nulls_last(),
     Asset.reverse_dns.asc().nulls_last(),
     Asset.primary_ip,
@@ -94,7 +105,7 @@ def sort_columns(sort: str, descending: bool, status: ColumnElement[Any]) -> lis
         case _:
             if descending:
                 return [
-                    Asset.device_name.desc().nulls_last(),
+                    func.coalesce(Asset.custom_label, Asset.device_name).desc().nulls_last(),
                     Asset.hostname.desc().nulls_last(),
                     Asset.reverse_dns.desc().nulls_last(),
                     Asset.primary_ip.desc(),

@@ -18,7 +18,9 @@ descubre otros equipos de la red del site. Son paquetes independientes y no comp
   en la configuración del servidor; no se configuran localmente. Aun así, el sensor vuelve a
   validar cada job (defensa en profundidad).
 - **Catálogo cerrado de jobs**: `discovery_basic`, `discovery_advanced` (Fase 6A) y
-  `snmp_inventory` (Fase 6B, ver más abajo); `discovery_basic` con esquema exacto (sin claves extra),
+  `snmp_inventory` (Fase 6B, ver más abajo); desde 0.5.0 `discovery_advanced` admite
+  `schema_version: 2` con sondas de nombre mDNS/NetBIOS/SSDP/UPnP (capacidad
+  `network.discovery.names`, sin sockets en escucha); `discovery_basic` con esquema exacto (sin claves extra),
   `sensor_id`/`site_id` propios, sin caducar, target dentro de `allowed_networks`, nunca `/0`,
   número de hosts ≤ `max_hosts_per_job`, puertos 1..65535 sin duplicados. Un job rechazado no se
   ejecuta y se informa como `failed` con un error corto (`job_rejected:<motivo>`).

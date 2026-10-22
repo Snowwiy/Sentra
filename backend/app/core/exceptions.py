@@ -140,6 +140,12 @@ class AssetContextConflictError(ConflictError):
     code = "asset_context_conflict"
 
 
+class AssetLabelConflictError(ConflictError):
+    # Corrección 6C: la etiqueta personalizada cambió desde que el cliente la leyó (versión
+    # obsoleta). Dos personas renombrando a la vez nunca se pisan en silencio.
+    code = "asset_label_conflict"
+
+
 class AssetTagLimitError(SentraError):
     # Se superaría el número máximo de etiquetas distintas de la plataforma (anti tag flood).
     status_code = status.HTTP_422_UNPROCESSABLE_CONTENT

@@ -33,6 +33,7 @@ from sentra_sensor.jobs import (
     validate_job,
 )
 from sentra_sensor.logs import register_secret
+from sentra_sensor.names import IdentityProber
 from sentra_sensor.protocol import ProtocolError, ServerConfig
 from sentra_sensor.scanner import (
     IcmpProber,
@@ -79,6 +80,8 @@ class ProberSet:
     icmp: IcmpProber | None = None
     neighbors: NeighborReader | None = None
     resolver: ReverseResolver | None = None
+    # Corrección 6C: sondas de nombre (mDNS, NetBIOS, SSDP/UPnP); None = no se hacen.
+    identity: IdentityProber | None = None
 
 
 SnmpTransportFactory = Callable[[SnmpParameters, SnmpCredentials], SnmpTransport]
@@ -692,6 +695,7 @@ class SensorRunner:
             icmp=probers.icmp,
             neighbors=probers.neighbors,
             resolver=probers.resolver,
+            identity=probers.identity,
         )
         active = ActiveJob(job=job, scanner=scanner, builder=builder)
         self.active = active

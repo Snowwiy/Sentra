@@ -6,7 +6,8 @@ locales, y añaden binarios nativos frágiles en Windows. Aquí el PDF se escrib
 desde el documento neutro (app/reports/document.py):
 
 - solo las 2 fuentes estándar Helvetica/Helvetica-Bold (no se incrusta ni se carga ninguna
-  fuente) con WinAnsiEncoding: cubre español; lo que no entra en cp1252 se sustituye por "?";
+  fuente) con WinAnsiEncoding: cubre español; lo que no entra en cp1252 se sustituye por "?"
+  (solo v1: la plantilla v2 translitera y marca "[U+XXXX]", ver render_pdf_v2.py);
 - sin anotaciones, enlaces (/URI), acciones (/Launch, /JavaScript), formularios ni imágenes:
   el fichero no puede abrir nada al visualizarse;
 - todo texto va como cadena hexadecimal: ningún carácter del dato puede cerrar la cadena
@@ -20,10 +21,12 @@ import zlib
 from dataclasses import dataclass, field
 
 from app.reports.document import (
+    AnyDocument,
     BarChart,
     Block,
     Bullets,
     Document,
+    DocumentV2,
     KeyValues,
     Notice,
     Paragraph,
@@ -341,7 +344,13 @@ def _pdf_date(iso_text: str) -> str:
     return f"D:{digits}Z"
 
 
-def render_pdf(document: Document, generated_iso: str) -> bytes:
+def render_pdf(document: AnyDocument, generated_iso: str) -> bytes:
+    # Fase 6D.5: la plantilla v2 tiene su propio renderer (importación diferida: el módulo
+    # v2 reutiliza las tablas de anchos de este). El camino v1 no cambia.
+    if isinstance(document, DocumentV2):
+        from app.reports.render_pdf_v2 import render_pdf_v2
+
+        return render_pdf_v2(document, generated_iso)
     writer = _Writer()
     writer.paragraph(document.title, size=16, bold=True, color=_BLUE)
     writer.paragraph(document.report_name, size=10, color=_GREY)

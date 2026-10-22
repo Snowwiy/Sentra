@@ -28,6 +28,10 @@ from app.discovery.scanner import ScanConfig
 # Versión del esquema de parámetros de discovery_advanced. El sensor rechaza otra versión:
 # un cambio de significado de un campo nunca se interpreta en silencio con el esquema viejo.
 ADVANCED_SCHEMA_VERSION = 1
+# Corrección 6C: v2 = v1 + `identify` (sondas de nombre mDNS/NetBIOS/SSDP-UPnP) y
+# `max_name_queries` (presupuesto de esas sondas). Solo se envía a sensores que declaran
+# network.discovery.names; los demás siguen recibiendo exactamente v1.
+NAMES_SCHEMA_VERSION = 2
 
 # Topes fijos (sin variable de entorno): por encima de esto un TCP connect o una consulta DNS
 # ya no aportan evidencia útil en una red interna y solo alargan el scan.
@@ -126,8 +130,8 @@ class ScanProfile:
     arp: bool
     reverse_dns: bool
     forward_dns: bool
-    # Sondas de nombre de la Fase 4E (mDNS/NetBIOS/UPnP): solo en el discovery local; el
-    # sensor no las implementa y nunca las anuncia.
+    # Sondas de nombre de la Fase 4E (mDNS/NetBIOS/UPnP). Desde la Corrección 6C también en
+    # sensores >= 0.5.0 (network.discovery.names), con el presupuesto max_name_queries.
     identify: bool
     limits: Limits
 
@@ -225,10 +229,15 @@ class ResolvedProfile:
     def name(self) -> str:
         return self.profile.name
 
-    def parameters(self, target: str, *, for_sensor: bool = False) -> dict[str, Any]:
-        """Parámetros fijos del job (esquema versionado discovery_advanced v1).
+    def parameters(
+        self, target: str, *, for_sensor: bool = False, sensor_names: bool = False
+    ) -> dict[str, Any]:
+        """Parámetros fijos del job (esquema versionado discovery_advanced v1 o v2).
 
         Los genera el servidor; el sensor los valida con un esquema exacto (sin claves extra).
+        `sensor_names`: el sensor declara network.discovery.names y el perfil identifica, así
+        que recibe v2 con las sondas de nombre y su presupuesto (el de consultas DNS del
+        perfil: misma carga de red, mismo tope que ya aceptan los sensores).
         """
         limits = self.limits
         params: dict[str, Any] = {
@@ -251,6 +260,10 @@ class ResolvedProfile:
         }
         if not for_sensor:
             params["identify"] = self.profile.identify
+        elif sensor_names and self.profile.identify:
+            params["schema_version"] = NAMES_SCHEMA_VERSION
+            params["identify"] = True
+            params["max_name_queries"] = limits.max_dns_queries
         return params
 
 

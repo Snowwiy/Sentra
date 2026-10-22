@@ -115,6 +115,13 @@ Todas por activo (nunca se mezclan activos) y dentro de ventanas configurables. 
 - **Cooldown**: dentro del cooldown de la regla, una coincidencia nueva añade evidencia y
   actualiza `last_seen_at` sin sumar `occurrence_count` (es la misma oleada). Fuera del
   cooldown suma una ocurrencia. La severidad y la confianza solo suben.
+- **Correlaciones (Fase 6D.8, versión 2 de CORR-001/002/003/004 y LIN-AUTH-002)**: su
+  cooldown es la ventana de la propia correlación (`DETECTION_CORRELATION_WINDOW_MINUTES`;
+  CORR-003 usa `DETECTION_CHANGE_WINDOW_MINUTES`). Antes tenían cooldown 0 y cada evaluación
+  que añadía evidencia contaba como otra ocurrencia: un PowerShell y un servicio seguidos de
+  cuatro procesos nuevos daban `occurrence_count = 5` para una sola secuencia, y el factor de
+  ocurrencias del riesgo subía como si el patrón se hubiera repetido (caso ravenslg). Las
+  detecciones ya abiertas conservan su contador; solo dejan de inflarse.
 - La evidencia es idempotente por señal y se limita a 100 filas por detección (se conservan
   las más recientes si no cabe todo).
 - Resolver cierra la detección; una coincidencia posterior abre una detección nueva.

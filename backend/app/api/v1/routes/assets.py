@@ -32,7 +32,7 @@ from app.risk.config import RiskConfig
 from app.risk.engine import RiskEngine
 from app.risk.queue import request_recalculation
 from app.schemas.agent_management import AgentRead
-from app.schemas.asset import AssetList, AssetRead
+from app.schemas.asset import AssetLabelUpdate, AssetList, AssetRead
 from app.schemas.asset_context import (
     DEPARTMENT_MAX,
     TAG_MAX,
@@ -335,6 +335,56 @@ def update_asset_context(
         )
         session.commit()
     return service.get(asset_id)
+
+
+@router.patch(
+    "/{asset_id}/label",
+    response_model=AssetRead,
+    responses=error_responses(401, 403, 404, 409),
+)
+def set_asset_label(
+    asset_id: UUID,
+    body: AssetLabelUpdate,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Service,
+) -> AssetRead:
+    """Guarda, cambia o elimina (`label: null`) la etiqueta personalizada del activo.
+
+    Corrección 6C. Solo assets:manage (admin): el nombre visible aparece en alertas,
+    incidentes e informes de todos. Es solo presentación: no cambia la identificación
+    automática (device_name, evidencias), ni el riesgo, ni cómo el discovery empareja el
+    activo; el discovery y los heartbeats nunca la escriben. Versión obsoleta: 409
+    asset_label_conflict. Auditado como asset_label_changed con el valor anterior y el nuevo,
+    también los intentos fallidos.
+    """
+    action = "asset_label_changed"
+    try:
+        asset, previous = service.set_label(asset_id, body.label, body.version, actor(ctx).name)
+    except SentraError as exc:
+        session.rollback()
+        audit_service.record(
+            session,
+            actor(ctx),
+            action,
+            audit_service.FAILURE,
+            "asset",
+            asset_id,
+            details={"error": exc.code},
+        )
+        raise
+    if previous != body.label:
+        audit_service.record(
+            session,
+            actor(ctx),
+            action,
+            target_type="asset",
+            target_id=asset_id,
+            details={"from": previous, "to": body.label, "version": asset.custom_label_version},
+            commit=False,
+        )
+    session.commit()
+    return service.get_asset(asset_id)
 
 
 @router.get(

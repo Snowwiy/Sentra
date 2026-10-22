@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { WithRole } from "../test/auth";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Asset } from "../api/types";
 import { AssetName, DeviceTypeCell, IdentificationPanel } from "./DeviceIdentity";
 
@@ -54,6 +54,11 @@ function asset(overrides: Partial<Asset> = {}): Asset {
     archived_by: null,
     archive_reason: null,
     lifecycle_version: 0,
+    custom_label: null,
+    custom_label_version: 0,
+    custom_label_updated_at: null,
+    custom_label_updated_by: null,
+    observed_names: [],
     managed_history: false,
     event_coverage: null,
     event_coverage_at: null,
@@ -164,5 +169,114 @@ describe("sección Identificación", () => {
     expect(within(panel).queryByText("Modelo")).not.toBeInTheDocument();
     expect(within(panel).queryByText("Fabricante NIC")).not.toBeInTheDocument();
     expect(within(panel).queryByText("Evidencias")).not.toBeInTheDocument();
+  });
+});
+
+// Corrección 6C: el caso real de 192.168.50.78 (DNS inverso linux.local, NIC Amazon).
+describe("etiqueta personalizada y nombres observados", () => {
+  const echo = (overrides: Partial<Asset> = {}) =>
+    asset({
+      primary_ip: "192.168.50.78",
+      reverse_dns: "linux.local",
+      vendor: "Amazon Technologies Inc.",
+      network_adapter_vendor: "Amazon",
+      device_vendor: "Amazon",
+      device_type: "iot",
+      classification_confidence: "low",
+      classification_evidence: [
+        { source: "mac_vendor", value: "Amazon" },
+        { source: "reverse_dns", value: "linux" },
+      ],
+      observed_names: [
+        { source: "reverse_dns", value: "linux", kind: "generic", selected: false, confirmed: null, stale: false },
+      ],
+      ...overrides,
+    });
+
+  it("sin etiqueta no inventa nombre ni afirma que sea un PC con Linux", () => {
+    renderIn(<IdentificationPanel asset={echo()} />);
+    const panel = screen.getByRole("region", { name: "Identificación" });
+    expect(within(panel).getByText("Nombre").nextElementSibling).toHaveTextContent("IoT probable");
+    expect(within(panel).queryByText(/Alexa/)).not.toBeInTheDocument();
+    expect(within(panel).queryByText("SO probable")).not.toBeInTheDocument();
+    expect(within(panel).getByText("Tipo").nextElementSibling).not.toHaveTextContent("PC");
+    const names = within(panel).getByRole("list", { name: "Nombres observados" });
+    expect(names).toHaveTextContent("linux");
+    expect(names).toHaveTextContent("Nombre genérico del sistema (no identifica al equipo)");
+  });
+
+  it("con etiqueta «Alexa Sala» se muestra sin perder la evidencia original", () => {
+    const labelled = echo({
+      custom_label: "Alexa Sala",
+      custom_label_version: 1,
+      custom_label_updated_by: "admin",
+      display_name: "Alexa Sala",
+    });
+    renderIn(<AssetName asset={labelled} />);
+    expect(screen.getByRole("link", { name: "Alexa Sala" })).toBeInTheDocument();
+    expect(screen.getByText("auto: IoT probable")).toBeInTheDocument();
+    cleanup();
+    renderIn(<IdentificationPanel asset={labelled} />);
+    const panel = screen.getByRole("region", { name: "Identificación" });
+    expect(within(panel).getByText("Etiqueta").nextElementSibling).toHaveTextContent("Alexa Sala");
+    expect(within(panel).getByText("Nombre automático").nextElementSibling).toHaveTextContent("IoT probable");
+    expect(within(panel).getByRole("list", { name: "Evidencias" })).toHaveTextContent("DNS inverso: linux");
+    expect(within(panel).getByRole("list", { name: "Nombres observados" })).toHaveTextContent("linux");
+  });
+
+  it("el acceso rápido a la etiqueta no navega a la fila", () => {
+    const onEdit = vi.fn();
+    renderIn(<AssetName asset={echo()} onEditLabel={onEdit} />);
+    fireEvent.click(screen.getByRole("button", { name: "Editar etiqueta de IoT probable" }));
+    expect(onEdit).toHaveBeenCalledTimes(1);
+    cleanup();
+    renderIn(<AssetName asset={echo()} />);
+    expect(screen.queryByRole("button")).not.toBeInTheDocument();
+  });
+
+  it("marca los nombres no confirmados y el elegido", () => {
+    renderIn(
+      <IdentificationPanel
+        asset={echo({
+          device_name: "Echo-Salon",
+          name_source: "mdns",
+          observed_names: [
+            { source: "mdns", value: "Echo-Salon", kind: "device", selected: true, confirmed: null, stale: false },
+            { source: "reverse_dns", value: "pc-viejo", kind: "dhcp", selected: false, confirmed: false, stale: true },
+          ],
+        })}
+      />,
+    );
+    const names = screen.getByRole("list", { name: "Nombres observados" });
+    const [chosen, other] = within(names).getAllByRole("listitem");
+    expect(chosen).toHaveTextContent("Echo-Salon elegido mDNS · Nombre publicado por el dispositivo");
+    expect(other).toHaveTextContent("no confirmado: no resuelve a esta IP");
+    expect(other).toHaveTextContent("sin observaciones recientes");
+  });
+});
+
+// Fase 6D.3: el motivo de que un activo no tenga nombre se explica; con nombre o etiqueta no.
+describe("estado del nombre (name_status)", () => {
+  it("explica generic_only y unnamed en la identificación y en el tooltip", () => {
+    renderIn(<IdentificationPanel asset={asset({ name_status: "generic_only" })} />);
+    expect(screen.getByTestId("name-status-help")).toHaveTextContent("Solo anuncia un nombre genérico del sistema");
+    cleanup();
+    renderIn(<IdentificationPanel asset={asset({ name_status: "unnamed" })} />);
+    expect(screen.getByTestId("name-status-help")).toHaveTextContent("Ninguna fuente lo ha nombrado");
+    expect(screen.getByTestId("name-status-help")).toHaveTextContent("etiqueta manual");
+    cleanup();
+    renderIn(<AssetName asset={asset({ name_status: "unnamed" })} />);
+    expect(screen.getByRole("link").getAttribute("title")).toMatch(/Ninguna fuente lo ha nombrado/);
+  });
+
+  it("no muestra explicación con nombre, con etiqueta ni sin el campo (backend anterior)", () => {
+    renderIn(<IdentificationPanel asset={asset({ name_status: "named", device_name: "nas" })} />);
+    expect(screen.queryByTestId("name-status-help")).not.toBeInTheDocument();
+    cleanup();
+    renderIn(<IdentificationPanel asset={asset({ name_status: "unnamed", custom_label: "Impresora" })} />);
+    expect(screen.queryByTestId("name-status-help")).not.toBeInTheDocument();
+    cleanup();
+    renderIn(<IdentificationPanel asset={asset()} />);
+    expect(screen.queryByTestId("name-status-help")).not.toBeInTheDocument();
   });
 });

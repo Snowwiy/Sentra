@@ -1,4 +1,13 @@
-import type { AssetCriticality, RiskConfidence, RiskLevel, RiskLevelRange, RiskSnapshot } from "../api/types";
+import type {
+  AssetCriticality,
+  RiskConfidence,
+  RiskContribution,
+  RiskLevel,
+  RiskLevelRange,
+  RiskNominalBreakdown,
+  RiskSnapshot,
+  RiskTrace,
+} from "../api/types";
 
 export const RISK_LEVEL_LABELS: Record<RiskLevel, string> = {
   critical: "Crítico",
@@ -121,4 +130,79 @@ export function levelBands(thresholds: RiskLevelRange[], height: number) {
     y: height - ((band.max + (band.level === "critical" ? 0 : 1)) / 100) * height,
     h: ((band.max - band.min + (band.level === "critical" ? 0 : 1)) / 100) * height,
   }));
+}
+
+// --- Fase 6D.8: traza del cálculo ----------------------------------------------------------
+
+const TRACE_KEYS: (keyof RiskTrace)[] = [
+  "base_points",
+  "criticality_factor",
+  "type_factor",
+  "context_factor",
+  "raw_points",
+  "saturation_knee",
+  "saturated_points",
+  "score",
+  "formula_version",
+];
+
+const NOMINAL_KEYS: (keyof RiskNominalBreakdown)[] = [
+  "severity_points",
+  "confidence_factor",
+  "occurrence_factor",
+  "correlation_factor",
+];
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+/** `breakdown.trace` si existe y está completa; los cálculos anteriores a 6D no la tienen. */
+export function riskTrace(breakdown: Record<string, unknown> | null | undefined): RiskTrace | null {
+  const raw = breakdown?.["trace"];
+  if (!raw || typeof raw !== "object") return null;
+  const trace = raw as Record<string, unknown>;
+  return TRACE_KEYS.every((key) => isFiniteNumber(trace[key])) ? (trace as unknown as RiskTrace) : null;
+}
+
+export interface NominalChain {
+  severity: number;
+  confidence: number;
+  occurrences: number;
+  correlation: number;
+  recency: number | null;
+  status: number | null;
+  position: number | null;
+  occurrenceCount: number | null;
+  points: number;
+}
+
+/** Cadena de factores de una contribución de detección, o null si falta `nominal_breakdown`. */
+export function nominalChain(item: RiskContribution): NominalChain | null {
+  const raw = item.details["nominal_breakdown"];
+  if (!raw || typeof raw !== "object") return null;
+  const nominal = raw as Record<string, unknown>;
+  if (!NOMINAL_KEYS.every((key) => isFiniteNumber(nominal[key]))) return null;
+  const optional = (key: string): number | null => (isFiniteNumber(item.details[key]) ? (item.details[key] as number) : null);
+  return {
+    severity: nominal["severity_points"] as number,
+    confidence: nominal["confidence_factor"] as number,
+    occurrences: nominal["occurrence_factor"] as number,
+    correlation: nominal["correlation_factor"] as number,
+    recency: optional("recency_factor"),
+    status: optional("status_factor"),
+    position: optional("position_factor"),
+    occurrenceCount: optional("occurrence_count"),
+    points: item.points,
+  };
+}
+
+/** Factor multiplicativo legible: "×1,5". */
+export function formatFactor(value: number): string {
+  return `×${value.toLocaleString("es-ES", { maximumFractionDigits: 3 })}`;
+}
+
+/** Puntos sin signo, con un decimal como máximo: "92,4". */
+export function formatAmount(value: number): string {
+  return value.toLocaleString("es-ES", { maximumFractionDigits: 1 });
 }

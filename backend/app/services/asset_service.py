@@ -8,7 +8,7 @@ from sqlalchemy import ColumnElement, Select, cast, func, or_, select
 from sqlalchemy.dialects.postgresql import INET
 from sqlalchemy.orm import Session
 
-from app.core.exceptions import NotFoundError
+from app.core.exceptions import AssetLabelConflictError, NotFoundError
 from app.discovery.targets import IPNetwork
 from app.models.asset import Asset, AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.asset_context import (
@@ -29,7 +29,7 @@ from app.repositories.asset_repository import (
     sort_columns,
 )
 from app.repositories.telemetry_repository import TelemetryRepository
-from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence
+from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence, ObservedName
 from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
 from app.services.asset_lifecycle_policy import LifecyclePolicy, evaluate, stale_condition
@@ -78,7 +78,7 @@ class AssetFilter:
     status: AssetStatus | None = None
     device_type: str | None = None
     subnet: IPNetwork | None = None
-    # Case-insensitive text in the name, reverse DNS, address or MAC.
+    # Case-insensitive text in the custom label, name, reverse DNS, address or MAC.
     search: str | None = None
     # Fase 4L: filtros de contexto. Se aplican en SQL (filter_statement); "unknown" incluye
     # a los activos sin contexto guardado.
@@ -129,6 +129,7 @@ class AssetFilter:
                     *(
                         func.lower(column).like(pattern, escape="\\")
                         for column in (
+                            Asset.custom_label,
                             Asset.device_name,
                             Asset.hostname,
                             Asset.reverse_dns,
@@ -228,6 +229,50 @@ def evidence_items(raw: Any) -> list[ClassificationEvidence]:
     return items
 
 
+_NAME_KINDS = frozenset({"agent", "device", "dhcp", "dns", "generic"})
+
+
+def name_status(asset: Asset, names: list[ObservedName]) -> str:
+    """Estado del nombre de un activo (Fase 6D.3). Solo lee lo ya guardado: no resuelve nada.
+
+    "generic_only" distingue el caso de un altavoz que solo anuncia "linux.local" (evidencia
+    real, pero que no identifica al equipo) de uno que no respondió a ninguna sonda.
+    """
+    if asset.custom_label:
+        return "labelled"
+    if asset.device_name or asset.hostname:
+        return "named"
+    if names and all(n.kind == "generic" for n in names):
+        return "generic_only"
+    return "unnamed"
+
+
+def observed_name_items(raw: Any) -> list[ObservedName]:
+    """Nombres observados guardados → API, descartando entradas mal formadas (como
+    evidence_items: un JSONB corrupto no debe tirar el listado de activos)."""
+    items: list[ObservedName] = []
+    for entry in raw if isinstance(raw, list) else ():
+        if not isinstance(entry, dict):
+            continue
+        source, value, kind = entry.get("source"), entry.get("value"), entry.get("kind")
+        if not (isinstance(source, str) and isinstance(value, str) and source and value):
+            continue
+        if kind not in _NAME_KINDS:
+            continue
+        confirmed = entry.get("confirmed")
+        items.append(
+            ObservedName(
+                source=source[:32],
+                value=value[:255],
+                kind=kind,
+                selected=entry.get("selected") is True,
+                confirmed=confirmed if isinstance(confirmed, bool) else None,
+                stale=entry.get("stale") is True,
+            )
+        )
+    return items[:16]
+
+
 class AssetService:
     def __init__(
         self,
@@ -309,6 +354,39 @@ class AssetService:
         role = context_roles(self._session, [asset.id]).get(asset.id, AssetRole.UNKNOWN)
         return self._to_read(asset, latest, datetime.now(UTC), ports, risk, role)
 
+    def set_label(
+        self, public_id: UUID, label: str | None, version: int, actor_name: str
+    ) -> tuple[Asset, str | None]:
+        """Guarda (o elimina, con None) la etiqueta personalizada. No hace commit.
+
+        La fila se bloquea (FOR UPDATE) y se compara la versión que leyó el cliente: de dos
+        ediciones simultáneas, la segunda espera a la primera y recibe 409 en vez de pisarla.
+        Devuelve el activo y la etiqueta anterior (para la auditoría). Guardar el mismo valor
+        no cambia la versión ni la fecha: no es una modificación.
+        """
+        asset = self._session.scalar(
+            select(Asset).where(Asset.public_id == public_id).with_for_update()
+        )
+        if asset is None:
+            raise NotFoundError("Asset not found")
+        if asset.custom_label_version != version:
+            raise AssetLabelConflictError(
+                "The asset label changed since it was read",
+                details=[
+                    {
+                        "current_version": asset.custom_label_version,
+                        "custom_label": asset.custom_label,
+                    }
+                ],
+            )
+        previous = asset.custom_label
+        if previous != label:
+            asset.custom_label = label
+            asset.custom_label_version = version + 1
+            asset.custom_label_updated_at = datetime.now(UTC)
+            asset.custom_label_updated_by = actor_name[:64]
+        return asset, previous
+
     def _to_read(
         self,
         asset: Asset,
@@ -320,10 +398,15 @@ class AssetService:
     ) -> AssetRead:
         agent_status = effective_status(asset, now, self._timeout) if asset.is_managed else None
         current = effective_status(asset, now, self._timeout)
+        names = observed_name_items(asset.observed_names)
         lifecycle = evaluate(asset, now, self._lifecycle, online=current == AssetStatus.ONLINE)
         return AssetRead(
             asset_id=asset.public_id,
             display_name=asset.display_name,
+            custom_label=asset.custom_label,
+            custom_label_version=asset.custom_label_version or 0,
+            custom_label_updated_at=asset.custom_label_updated_at,
+            custom_label_updated_by=asset.custom_label_updated_by,
             monitoring_method=asset.monitoring_method,
             hostname=asset.hostname,
             os_name=asset.os_name,
@@ -352,6 +435,8 @@ class AssetService:
             probable_os=asset.probable_os,
             classification_confidence=asset.classification_confidence,
             classification_evidence=evidence_items(asset.classification_evidence),
+            observed_names=names,
+            name_status=name_status(asset, names),
             discovery_sources=asset.discovery_sources or [],
             discovery_network=asset.discovery_network,
             discovered_at=asset.discovered_at,

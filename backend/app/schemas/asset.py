@@ -1,12 +1,15 @@
+import unicodedata
 from datetime import datetime
 from typing import Literal
 from uuid import UUID
+
+from pydantic import Field, field_validator
 
 from app.discovery.device_types import ClassificationConfidence
 from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.asset_context import AssetRole
 from app.models.risk import RiskConfidence, RiskLevel
-from app.schemas.common import ResponseModel
+from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.telemetry import TelemetrySnapshot
 
 
@@ -19,11 +22,79 @@ class ClassificationEvidence(ResponseModel):
     value: str
 
 
+class ObservedName(ResponseModel):
+    """Corrección 6C: un nombre observado con su procedencia (source) y su clase (kind).
+
+    kind: agent (hostname del agente), device (publicado por el propio equipo), dhcp (DNS
+    local del router; inferido), dns (DNS de dominio) o generic (valor por defecto de un SO,
+    nunca se usa como nombre). `selected` marca el nombre automático elegido; `confirmed` es
+    la confirmación directa del DNS inverso (null si no se comprobó o no aplica) y `stale`
+    indica que ninguna fuente lo ha repetido en los últimos NAME_STALE_DAYS días.
+    """
+
+    source: str
+    value: str
+    kind: Literal["agent", "device", "dhcp", "dns", "generic"]
+    selected: bool
+    confirmed: bool | None = None
+    stale: bool = False
+
+
+# Corrección 6C: límites de la etiqueta personalizada. 64 caracteres caben en una celda de
+# tabla y en el título de un informe; el límite de bytes de la columna es el mismo.
+LABEL_MAX = 64
+# Categorías Unicode prohibidas: controles (Cc), formato (Cf: incluye los caracteres
+# invisibles de ancho cero y los de cambio de dirección que permiten disfrazar un nombre,
+# p. ej. "Alexa\u202eala S"), uso privado, sustitutos y separadores de línea/párrafo.
+_LABEL_FORBIDDEN = {"Cc", "Cf", "Co", "Cs", "Zl", "Zp"}
+
+
+def normalize_label(value: str) -> str:
+    """Forma canónica de una etiqueta: NFC, sin espacios repetidos ni en los extremos.
+
+    Lanza ValueError si queda vacía, supera LABEL_MAX o contiene caracteres de control,
+    invisibles o de cambio de dirección.
+    """
+    text = unicodedata.normalize("NFC", value)
+    if any(unicodedata.category(ch) in _LABEL_FORBIDDEN for ch in text):
+        raise ValueError("label contains control, invisible or bidirectional characters")
+    text = " ".join(text.split())
+    if not text:
+        raise ValueError("label must not be blank; send null to remove it")
+    if len(text) > LABEL_MAX:
+        raise ValueError(f"label must be at most {LABEL_MAX} characters")
+    return text
+
+
+class AssetLabelUpdate(RequestModel):
+    """PATCH /assets/{id}/label. `label: null` elimina la etiqueta (vuelve el nombre automático).
+
+    `version` es custom_label_version tal y como la leyó el cliente: si cambió entretanto,
+    409 asset_label_conflict y no se guarda nada.
+    """
+
+    # Margen sobre LABEL_MAX antes de normalizar (espacios repetidos que se compactan).
+    label: str | None = Field(max_length=LABEL_MAX * 4)
+    version: int = Field(ge=0, le=2**31 - 1)
+
+    @field_validator("label")
+    @classmethod
+    def _label(cls, value: str | None) -> str | None:
+        return None if value is None else normalize_label(value)
+
+
 class AssetRead(ResponseModel):
     asset_id: UUID
-    # Nombre resuelto, hostname, DNS inverso o la IP: siempre presente. La UI prefiere
-    # device_name y usa un texto de reserva ("Dispositivo desconocido") en vez de la IP.
+    # Etiqueta personalizada, nombre resuelto, hostname, DNS inverso o la IP: siempre
+    # presente. La UI prefiere custom_label y device_name y usa un texto de reserva
+    # ("Dispositivo desconocido") en vez de la IP.
     display_name: str
+    # Corrección 6C: nombre visible puesto por una persona (null = nombre automático) y su
+    # versión para la concurrencia optimista de PATCH /assets/{id}/label.
+    custom_label: str | None = None
+    custom_label_version: int = 0
+    custom_label_updated_at: datetime | None = None
+    custom_label_updated_by: str | None = None
     monitoring_method: MonitoringMethod
     # Reported by the agent; null for assets only seen on the network.
     hostname: str | None
@@ -65,6 +136,14 @@ class AssetRead(ResponseModel):
     probable_os: str | None
     classification_confidence: ClassificationConfidence | None
     classification_evidence: list[ClassificationEvidence]
+    # Corrección 6C: nombres observados con procedencia (vacío hasta la siguiente
+    # identificación de los activos anteriores a la migración 0037).
+    observed_names: list[ObservedName] = Field(default_factory=list)
+    # Fase 6D.3: por qué el activo tiene (o no) nombre, para que la UI explique un
+    # "Dispositivo desconocido" en vez de dejarlo en blanco: labelled (etiqueta manual), named
+    # (nombre automático con evidencia), generic_only (solo nombres genéricos de SO como
+    # "linux.local", que nunca se eligen) o unnamed (ninguna fuente lo nombró).
+    name_status: Literal["labelled", "named", "generic_only", "unnamed"] = "unnamed"
     discovery_sources: list[str]
     discovery_network: str | None
     discovered_at: datetime | None

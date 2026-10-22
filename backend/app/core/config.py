@@ -694,10 +694,23 @@ class Settings(BaseSettings):
     # Días que se conserva el historial de consultas y lo marcado como ausente. Vacío = sin
     # purga (opt-in como el resto de retenciones).
     snmp_history_retention_days: int | None = Field(default=None, ge=1, le=36_500)
+    # Fase 6D: tras este número de fallos seguidos que indican que no hay SNMP utilizable
+    # (sin respuesta, inaccesible, autenticación o versión), el programador pausa las
+    # consultas periódicas del equipo en lugar de reintentar para siempre. 0 = nunca pausar.
+    snmp_auto_pause_failures: int = Field(default=3, ge=0, le=100)
     # Fase 6C.3 (docs/wlan-discovery.md): días que se conserva el historial Wi-Fi, los
     # clientes no vistos y los BSS solo observados. Vacío = sin purga (opt-in). Los APs y lo
     # que un operador marcó como autorizado o externo nunca se purgan.
     wlan_history_retention_days: int | None = Field(default=None, ge=1, le=36_500)
+    # Fase 6D (docs/topology-engine.md): cada cuántos minutos se reconstruye la topología de
+    # cada site activo a partir de la evidencia ya guardada (no consulta la red). 0 desactiva
+    # la reconstrucción periódica; la manual (topology:manage) sigue disponible.
+    topology_rebuild_interval_minutes: int = Field(default=15, ge=0, le=10_080)
+    # Topes del grafo: nodos y enlaces por respuesta y enlaces derivados por reconstrucción.
+    # Acotan memoria y tamaño de la respuesta en sites grandes; al superarlos se marca
+    # truncated en vez de fallar.
+    topology_max_nodes: int = Field(default=1500, ge=10, le=50_000)
+    topology_max_links: int = Field(default=5000, ge=10, le=200_000)
 
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"

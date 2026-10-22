@@ -52,6 +52,7 @@ from app.models.incident import (
 from app.models.risk import AssetRisk, RiskSnapshot
 from app.models.user import User
 from app.repositories.alert_repository import escape_like
+from app.repositories.asset_repository import display_name_expr
 from app.schemas.incident import (
     AssignableUser,
     AssignableUserList,
@@ -159,6 +160,7 @@ class IncidentQueries:
             conditions.append(Incident.number == int(number.group(1)))
         matching_assets = select(Asset.id).where(
             or_(
+                Asset.custom_label.ilike(pattern, escape="\\"),
                 Asset.hostname.ilike(pattern, escape="\\"),
                 Asset.device_name.ilike(pattern, escape="\\"),
                 Asset.primary_ip.ilike(pattern, escape="\\"),
@@ -458,7 +460,7 @@ class IncidentQueries:
         # Solo transiciones de nivel (no cada snapshot) en la ventana de investigación.
         window_start = (incident.first_seen_at or incident.created_at) - RELATED_WINDOW
         window_end = incident.closed_at or datetime.now(UTC)
-        name = func.coalesce(Asset.device_name, Asset.hostname, Asset.reverse_dns, Asset.primary_ip)
+        name = display_name_expr()
         risk = (
             select(
                 RiskSnapshot.calculated_at,
