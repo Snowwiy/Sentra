@@ -154,7 +154,7 @@ def test_first_run_is_a_quiet_baseline(engine: Engine, db: Session) -> None:
     assert router.device_type == "router" and router.classification_confidence == "high"
     assert pc.device_type == "pc" and pc.probable_os == "Windows"
     assert pc.reverse_dns == "pc-admin-02.corp" and pc.device_name == "pc-admin-02.corp"
-    assert printer.device_type == "printer"
+    assert printer.device_type is None  # Corrección 6C: un solo puerto de impresión no basta
     assert quiet.device_type is None and quiet.device_type_reason is None  # not guessed
     assert quiet.discovery_sources == ["arp"] and quiet.mac_address == "02:00:00:00:00:09"
     assert _ports(db, pc) == {135: "open", 445: "open", 3389: "open"}

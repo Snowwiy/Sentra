@@ -307,6 +307,9 @@ class SensorObservation(Base):
     # inverso se confirmó con una consulta directa. Null en jobs básicos o sin medida.
     rtt_ms: Mapped[int | None] = mapped_column(Integer)
     forward_dns_match: Mapped[bool | None] = mapped_column(Boolean)
+    # Corrección 6C (discovery_advanced v2, sensor >= 0.5.0): nombres que publica el propio
+    # host (mDNS, NetBIOS, SSDP/UPnP), ya validados por el esquema. Null sin sondas de nombre.
+    identity: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
     # Hora del sensor (validada contra el desfase permitido) y hora del servidor al recibir:
     # la del servidor es la autoridad; la del sensor se conserva como evidencia (6D/6E).
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

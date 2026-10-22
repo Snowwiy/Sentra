@@ -142,13 +142,16 @@ def test_reverse_dns_names_are_cleaned() -> None:
 @pytest.mark.parametrize(
     ("kwargs", "expected"),
     [
-        ({"open_ports": frozenset({3389})}, "low"),  # una pista débil
+        # Corrección 6C: un puerto suelto no basta para deducir un tipo; dos servicios de
+        # Windows son una pista débil.
+        ({"open_ports": frozenset({3389})}, None),
+        ({"open_ports": frozenset({135, 3389})}, "low"),
         ({"reverse_dns": "iphone-de-ana"}, "medium"),  # una pista clara
         ({"is_gateway": True}, "high"),  # fuente autoritativa
         ({"open_ports": frozenset({9100}), "mac_vendor": "Brother Industries, LTD."}, "high"),
     ],
 )
-def test_confidence_levels(kwargs: dict[str, Any], expected: str) -> None:
+def test_confidence_levels(kwargs: dict[str, Any], expected: str | None) -> None:
     assert ident(**kwargs).confidence == expected
 
 

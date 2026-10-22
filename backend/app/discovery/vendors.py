@@ -149,6 +149,18 @@ _PROFILES: tuple[tuple[re.Pattern[str], VendorProfile], ...] = (
     _p(r"\bshelly\b|\ballterco\b", "Shelly", D, T.IOT, 2),
     _p(r"\bhikvision\b", "Hikvision", D, T.IOT, 2),
     _p(r"\bdahua\b", "Dahua", D, T.IOT, 2),
+    # Corrección 6C: fabricantes que solo hacen dispositivos IoT (cámaras, robots, termostatos,
+    # altavoces). Pista media: el tipo es casi seguro, pero nunca el modelo ni el nombre.
+    _p(r"\bring llc\b", "Ring", D, T.IOT, 2),
+    _p(r"\barlo technologies\b", "Arlo", D, T.IOT, 2),
+    _p(r"\bwyze labs\b", "Wyze", D, T.IOT, 2),
+    _p(r"\breolink\b", "Reolink", D, T.IOT, 2),
+    _p(r"\bezviz\b", "EZVIZ", D, T.IOT, 2),
+    _p(r"\birobot\b", "iRobot", D, T.IOT, 2),
+    _p(r"\becovacs\b", "Ecovacs", D, T.IOT, 2),
+    _p(r"\bnetatmo\b", "Netatmo", D, T.IOT, 2),
+    _p(r"\btado\b", "tado", D, T.IOT, 2),
+    _p(r"\bbose\b", "Bose", D, T.IOT, 1),
 )
 
 # Sufijos societarios que no aportan nada a la marca mostrada.

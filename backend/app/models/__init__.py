@@ -101,6 +101,7 @@ from app.models.threat_intel import (
     ThreatIntelSync,
     VulnerabilityIntel,
 )
+from app.models.topology import TopologyBuild, TopologyLink
 from app.models.user import User, UserSession
 from app.models.vulnerability import (
     AssetVulnerabilityState,
@@ -220,6 +221,8 @@ __all__ = [
     "ThreatIntelMatch",
     "ThreatIntelSource",
     "ThreatIntelSync",
+    "TopologyBuild",
+    "TopologyLink",
     "User",
     "UserSession",
     "Vulnerability",

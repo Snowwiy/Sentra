@@ -55,7 +55,7 @@ from app.reports import summary as phrases
 from app.reports.catalog import ReportDefinition
 from app.reports.redaction import redact, redact_text
 from app.reports.scope import DataScope
-from app.repositories.asset_repository import effective_status_expr
+from app.repositories.asset_repository import display_name_expr, effective_status_expr
 from app.services.asset_lifecycle_policy import (
     LifecyclePolicy,
     evaluate,
@@ -225,16 +225,10 @@ def _names(session: Session, asset_ids: Iterable[int | None]) -> dict[int, tuple
         select(
             Asset.id,
             Asset.public_id,
-            Asset.device_name,
-            Asset.hostname,
-            Asset.reverse_dns,
-            Asset.primary_ip,
+            display_name_expr().label("name"),
         ).where(Asset.id.in_(ids))
     ).all()
-    return {
-        r.id: (str(r.public_id), r.device_name or r.hostname or r.reverse_dns or r.primary_ip)
-        for r in rows
-    }
+    return {r.id: (str(r.public_id), r.name) for r in rows}
 
 
 def _usernames(session: Session, user_ids: Iterable[int | None]) -> dict[int, str]:
@@ -798,7 +792,7 @@ def risk_section(ctx: BuildContext, top: int = TOP_RISK_ASSETS) -> dict[str, Any
         ("up", "down"),
     )
     changes = session.execute(
-        select(RiskSnapshot, Asset.public_id, Asset.device_name, Asset.hostname, Asset.primary_ip)
+        select(RiskSnapshot, Asset.public_id, display_name_expr())
         .join(Asset, Asset.id == RiskSnapshot.asset_id)
         .where(*snapshot_scope, RiskSnapshot.transition.is_not(None))
         .order_by(RiskSnapshot.calculated_at.desc(), RiskSnapshot.id)
@@ -808,7 +802,7 @@ def risk_section(ctx: BuildContext, top: int = TOP_RISK_ASSETS) -> dict[str, Any
     change_rows = [
         {
             "asset_id": str(public_id),
-            "asset": _text(device or host or ip, 255),
+            "asset": _text(name, 255),
             "at": iso(snap.calculated_at),
             "previous_level": _enum(snap.previous_level),
             "level": _enum(snap.level),
@@ -818,7 +812,7 @@ def risk_section(ctx: BuildContext, top: int = TOP_RISK_ASSETS) -> dict[str, Any
             "reason": snap.reason,
             "top_factor": _text(snap.top_factor, 255),
         }
-        for snap, public_id, device, host, ip in changes
+        for snap, public_id, name in changes
     ]
     unit = _trend_unit(ctx)
     bucket = func.date_trunc(unit, RiskSnapshot.calculated_at)
@@ -1270,6 +1264,9 @@ def asset_identity(ctx: BuildContext, asset: Asset) -> dict[str, Any]:
     return {
         "id": str(asset.public_id),
         "name": _text(asset.display_name, 255),
+        # Corrección 6C: la etiqueta personalizada va aparte del nombre automático, para que el
+        # informe conserve la evidencia original además del nombre visible.
+        "custom_label": _text(asset.custom_label, 64),
         "hostname": _text(asset.hostname, 255),
         "device_name": _text(asset.device_name, 255),
         "reverse_dns": _text(asset.reverse_dns, 255),

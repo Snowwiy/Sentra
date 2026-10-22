@@ -20,6 +20,7 @@ import {
   OPER_STATUS_LABELS,
   OPER_STATUSES,
   POLL_STATUS_LABELS,
+  POLL_TRIGGER_LABELS,
   PORT_KIND_LABELS,
   PORT_KINDS,
   snmpErrorText,
@@ -629,7 +630,7 @@ export function PollsTab({
                   {POLL_STATUS_LABELS[p.status] ?? p.status}
                   {p.finished_at && <div className="muted">terminada {formatRelative(p.finished_at)}</div>}
                 </td>
-                <td className="small">{p.trigger === "manual" ? "manual" : "programada"}</td>
+                <td className="small">{POLL_TRIGGER_LABELS[p.trigger] ?? p.trigger}</td>
                 <td className="small">{p.sensor_name ?? <span className="muted">—</span>}</td>
                 <td className="small">
                   {Object.keys(p.modules).length > 0 ? describeModules(p.modules) : <span className="muted">—</span>}
@@ -643,7 +644,9 @@ export function PollsTab({
                   {p.error_code ? (
                     <>
                       <span>{snmpErrorText(p.error_code)}</span>
-                      {p.error_message && <div className="muted">{p.error_message}</div>}
+                      {/* Con "internal" el detalle podría ser el nombre de una excepción del
+                          colector: aunque el backend ya lo sanea, aquí tampoco se muestra. */}
+                      {p.error_message && p.error_code !== "internal" && <div className="muted">{p.error_message}</div>}
                     </>
                   ) : (
                     <span className="muted">—</span>

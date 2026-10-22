@@ -678,3 +678,251 @@ pre {
 .stat--warn {
   border-left-color: var(--warn);
 }
+
+/* Corrección 6C: puertos abiertos con su servicio. En tabla, una línea compacta que puede
+   partirse; en el detalle, una fila por puerto. */
+.port-services__list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-1) var(--space-3);
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.port-services--detailed .port-services__list {
+  flex-direction: column;
+  gap: var(--space-1);
+}
+
+.port-services__item {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1) var(--space-2);
+  min-width: 0;
+}
+
+.port-services__open {
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.label-editor__hint {
+  margin: var(--space-1) 0 0;
+}
+
+.asset-name__edit {
+  margin-left: var(--space-2);
+}
+
+/* Topología de red (Fase 6D.2). El lienzo ocupa el ancho disponible y tiene altura propia; en
+   móvil el panel lateral pasa debajo. Los colores de nodos y enlaces se fijan en el SVG
+   (lib/topology.ts) porque la exportación debe ser autónoma; aquí solo cajas, selección y foco. */
+
+.topo-filters {
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-3);
+  padding: 0;
+  min-height: 0;
+}
+
+.topo-kinds {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-4);
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.topo-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1199px) {
+  .topo-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.topo-main,
+.topo-side {
+  min-width: 0;
+}
+
+.topo-canvas-wrap {
+  position: relative;
+  overflow: hidden;
+}
+
+.topo-zoom {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.topo-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(360px, 68vh, 900px);
+  background: var(--bg);
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.topo-canvas:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.topo--dragging {
+  cursor: grabbing;
+}
+
+.topo-box {
+  fill: var(--surface);
+  stroke: var(--border-strong);
+}
+
+.topo-box__label {
+  fill: var(--text-muted);
+  font-size: 12px;
+}
+
+/* Zona de clic invisible: no se pinta (visibility) pero recibe el puntero (pointer-events:
+   stroke ignora la visibilidad). Pintar 5000 trazos transparentes ralentizaba el arrastre. */
+.topo-link__hit {
+  stroke: #000;
+  stroke-width: 12;
+  visibility: hidden;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+/* Durante el arrastre se repinta todo en cada frame. Medido con 1500 nodos y 5000 enlaces en
+   Chromium sin GPU: el trazo discontinuo multiplica por ~7 el coste (5,1 s frente a 0,7 s en 30
+   movimientos), así que mientras se arrastra los enlaces se pintan continuos y sin etiquetas.
+   Al soltar vuelven el patrón (que identifica la clase) y los textos. */
+.topo--dragging .topo-links line {
+  stroke-dasharray: none;
+}
+
+.topo--dragging .topo-label,
+.topo--dragging .topo-box__label {
+  display: none;
+}
+
+.topo-node {
+  cursor: pointer;
+}
+
+.topo-node__shape {
+  stroke: var(--text);
+  stroke-width: 1.5;
+}
+
+.topo-node:focus {
+  outline: none;
+}
+
+.topo-node:focus-visible .topo-node__shape {
+  stroke: var(--accent);
+  stroke-width: 4;
+}
+
+.topo-node__match {
+  fill: none;
+  stroke: var(--warn);
+  stroke-width: 3;
+  stroke-dasharray: 4 3;
+}
+
+.topo-label {
+  fill: var(--text);
+  font-size: 11px;
+  pointer-events: none;
+}
+
+/* Con zoom bajo las etiquetas sobran (y cuestan): se ocultan sin re-renderizar. */
+.topo--far .topo-label,
+.topo--far .topo-box__label {
+  display: none;
+}
+
+.topo-selection__node {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+
+.topo-selection__link {
+  stroke: var(--accent);
+  stroke-width: 6;
+  stroke-opacity: 0.45;
+}
+
+.topo-selection {
+  pointer-events: none;
+}
+
+.topo-empty,
+.topo-hint {
+  padding: var(--space-4);
+}
+
+.topo-details__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--space-2);
+}
+
+.topo-details__head h2 {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.topo-details__links li {
+  padding: var(--space-1) 0;
+}
+
+.topo-legend__list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: var(--space-2);
+}
+
+.topo-legend__list li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.topo-legend__list svg {
+  flex: none;
+}
+
+.topo-row--match td {
+  background: var(--warn-soft);
+}
+
+/* Traza del cálculo del riesgo (Fase 6D.8). */
+.risk-trace {
+  display: grid;
+  gap: var(--space-2);
+}
+
+.risk-trace__chain {
+  overflow-wrap: anywhere;
+}

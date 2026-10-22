@@ -24,8 +24,10 @@ import type {
   PortKind,
   RemoteMatchBasis,
   SnmpAuthProtocol,
+  PollTrigger,
   SnmpErrorCode,
   SnmpPrivProtocol,
+  SnmpStatus,
   SnmpProfileCreate,
   SnmpProfileRotate,
   SnmpVersion,
@@ -59,6 +61,7 @@ export const MONITORING_STATUSES: MonitoringStatus[] = [
   "ok",
   "partial",
   "failing",
+  "paused",
   "polling",
   "never_polled",
   "credentials_pending",
@@ -71,6 +74,7 @@ export const MONITORING_STATUS_LABELS: Record<MonitoringStatus, string> = {
   ok: "Consulta correcta",
   partial: "Consulta parcial",
   failing: "Consultas fallidas",
+  paused: "En pausa",
   polling: "Consultando",
   never_polled: "Nunca consultado",
   credentials_pending: "Falta perfil SNMP",
@@ -84,6 +88,7 @@ export const MONITORING_STATUS_HELP: Record<MonitoringStatus, string> = {
   ok: "La última consulta SNMP terminó correctamente. No garantiza que el equipo siga respondiendo ahora.",
   partial: "La última consulta solo obtuvo parte de los módulos (MIB no soportadas o errores parciales).",
   failing: "Las últimas consultas han fallado. Revisa el último error.",
+  paused: "Las consultas periódicas se pausaron tras fallos repetidos para no insistir contra el equipo. Revisa el motivo y reanúdalas.",
   polling: "Hay una consulta en cola o en curso.",
   never_polled: "Todavía no se ha consultado este equipo.",
   credentials_pending: "Asigna un perfil SNMP activo para poder consultarlo.",
@@ -96,6 +101,7 @@ const MONITORING_STATUS_CLASS: Record<MonitoringStatus, string> = {
   ok: "status--online",
   partial: "status--stale",
   failing: "status--offline",
+  paused: "status--stale",
   polling: "status--pending",
   never_polled: "status--unknown",
   credentials_pending: "status--pending",
@@ -185,7 +191,53 @@ export const SNMP_ERROR_LABELS: Record<SnmpErrorCode, string> = {
   cancelled: "La consulta se canceló.",
   limit_exceeded: "La respuesta superó los límites de tamaño o tiempo configurados.",
   malformed_response: "El equipo devolvió una respuesta SNMP mal formada.",
-  internal: "Error interno al procesar la consulta.",
+  // Fase 6D.4: nunca se muestra el nombre de una excepción; solo este texto.
+  internal: "Error interno del colector",
+};
+
+/** Fase 6D.4: textos del contrato para el estado de compatibilidad SNMP de un equipo. */
+export const SNMP_STATUS_LABELS: Record<SnmpStatus, string> = {
+  unverified: "Sin verificar",
+  compatible: "SNMP operativo",
+  no_response: "Sin respuesta SNMP: servicio no disponible o compatibilidad sin confirmar",
+  timeout: "Tiempo de espera agotado (respondía antes)",
+  unreachable: "Equipo inaccesible desde el sensor",
+  auth_failed: "Autenticación SNMP rechazada (usuario, claves o protocolos del perfil)",
+  unsupported_version: "Versión o nivel de seguridad SNMP no compatible",
+  malformed_response: "Respuesta SNMP mal formada",
+  collector_error: "Error interno del colector del sensor (no es un diagnóstico del equipo)",
+};
+
+const SNMP_STATUS_TONES: Record<SnmpStatus, "ok" | "warn" | "crit" | "muted"> = {
+  unverified: "muted",
+  compatible: "ok",
+  no_response: "warn",
+  timeout: "warn",
+  unreachable: "crit",
+  auth_failed: "crit",
+  unsupported_version: "crit",
+  malformed_response: "warn",
+  collector_error: "muted",
+};
+
+/**
+ * Texto de un estado SNMP. Un valor desconocido (backend más nuevo) se muestra con un texto
+ * genérico y su código, nunca con un nombre de excepción ni un mensaje del colector.
+ */
+export function snmpStatusText(status: string | null | undefined): string {
+  if (!status) return SNMP_STATUS_LABELS.unverified;
+  return SNMP_STATUS_LABELS[status as SnmpStatus] ?? `Estado SNMP desconocido (${status})`;
+}
+
+export function snmpStatusTone(status: string | null | undefined): "ok" | "warn" | "crit" | "muted" {
+  return SNMP_STATUS_TONES[status as SnmpStatus] ?? "muted";
+}
+
+/** Fase 6D.4: origen de una consulta (manual, programada o verificación de compatibilidad). */
+export const POLL_TRIGGER_LABELS: Record<PollTrigger, string> = {
+  manual: "manual",
+  scheduled: "programada",
+  check: "verificación",
 };
 
 export function snmpErrorText(code: string | null | undefined): string {

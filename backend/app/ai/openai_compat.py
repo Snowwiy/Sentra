@@ -102,6 +102,8 @@ class OpenAICompatibleProvider:
         }
         if self._json_mode:
             body["response_format"] = {"type": "json_object"}
+        if self._host == "api.deepseek.com" and self.model == "deepseek-flash":
+            body["thinking"] = {"type": "disabled"}
         return json.dumps(body, ensure_ascii=False).encode("utf-8")
 
     def _connection(self) -> http.client.HTTPConnection:

@@ -6,6 +6,7 @@ from typing import Any
 from sqlalchemy import (
     BigInteger,
     Boolean,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -81,6 +82,12 @@ class Asset(Base):
         # activos). Discovery y la reconciliación buscan por (site, IP); sirve también de
         # índice de la clave foránea.
         Index("ix_assets_site_ip", "site_id", "primary_ip"),
+        # Corrección 6C: una etiqueta vacía no es una etiqueta (sin ella se usa el nombre
+        # automático); el servicio ya la normaliza, esto es defensa en profundidad.
+        CheckConstraint(
+            "custom_label IS NULL OR length(btrim(custom_label)) > 0",
+            name="ck_assets_custom_label_not_blank",
+        ),
     )
 
     # Internal surrogate key; never exposed through the API.
@@ -154,7 +161,22 @@ class Asset(Base):
     classification_evidence: Mapped[list[dict[str, str]] | None] = mapped_column(JSONB)
     # Últimos datos de identidad observados en la red (mDNS, NetBIOS, SSDP/UPnP, gateway),
     # guardados en bruto para poder recalcular la identificación sin volver a escanear.
+    # Corrección 6C: también la hora de cada dato (`seen_at`) y la confirmación directa del
+    # DNS inverso (`reverse_dns_confirmed`).
     identity_observations: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    # Corrección 6C: todos los nombres observados con procedencia y clase (agent, device,
+    # dhcp, dns, generic), el elegido incluido. Lo escribe solo el motor de identificación.
+    observed_names: Mapped[list[dict[str, Any]] | None] = mapped_column(JSONB)
+    # --- Etiqueta personalizada (Corrección 6C) -------------------------------------------
+    # Nombre visible que pone una persona ("Alexa Sala"). Independiente de device_name,
+    # hostname y reverse_dns: ni el discovery, ni el agente, ni el motor de identificación la
+    # escriben nunca; solo PATCH /assets/{id}/label (assets:manage, auditado).
+    custom_label: Mapped[str | None] = mapped_column(String(64))
+    # Concurrencia optimista de la etiqueta. Contador propio: lifecycle_version y la versión
+    # del contexto cambian por otros motivos y darían 409 a una edición que no choca con nada.
+    custom_label_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    custom_label_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    custom_label_updated_by: Mapped[str | None] = mapped_column(String(64))
     # How discovery saw it: any of "icmp", "tcp", "arp".
     discovery_sources: Mapped[list[str] | None] = mapped_column(JSONB)
     # Allowed network (CIDR) of the run that last saw it.
@@ -231,13 +253,19 @@ class Asset(Base):
         return self.archived_at is not None
 
     @property
-    def display_name(self) -> str:
-        """Nombre resuelto, hostname del agente, DNS inverso o, en último caso, la IP.
-
-        Se usa en alertas, eventos y CLI, donde un identificador concreto es más útil que
-        "Dispositivo desconocido"; ese texto de reserva solo lo pone la UI.
-        """
+    def automatic_name(self) -> str:
+        """Nombre sin la etiqueta personalizada: resuelto, hostname, DNS inverso o la IP."""
         return self.device_name or self.hostname or self.reverse_dns or self.primary_ip
+
+    @property
+    def display_name(self) -> str:
+        """Etiqueta personalizada y, sin ella, el nombre automático (automatic_name).
+
+        Se usa en alertas, eventos, informes y CLI, donde un identificador concreto es más
+        útil que "Dispositivo desconocido"; ese texto de reserva solo lo pone la UI. Las
+        consultas SQL que necesitan el mismo nombre usan display_name_expr (mismo orden).
+        """
+        return self.custom_label or self.automatic_name
 
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(

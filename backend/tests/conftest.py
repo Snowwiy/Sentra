@@ -4,6 +4,7 @@ import tempfile
 # Must run before the app (and its cached settings) is imported: tests drive background jobs
 # explicitly, and a live sweeper thread would race with assertions.
 os.environ["BACKGROUND_JOBS_ENABLED"] = "false"
+os.environ["METRICS_ENABLED"] = "false"
 # Fixed test-only key so tests never depend on (or reveal) the developer's real .env value.
 TEST_ENROLLMENT_KEY = "test-enrollment-key-0123456789abcdef"
 os.environ["AGENT_ENROLLMENT_KEY"] = TEST_ENROLLMENT_KEY
@@ -96,6 +97,8 @@ os.environ["SNMP_MAX_ROWS_PER_TABLE"] = "10000"
 os.environ["SNMP_JOB_DEADLINE_SECONDS"] = "300"
 os.environ["SNMP_EDGE_PORT_MAX_MACS"] = "3"
 os.environ["SNMP_HISTORY_RETENTION_DAYS"] = ""
+# Fase 6D: pausa automática de consultas periódicas tras fallos repetidos (valor por defecto).
+os.environ["SNMP_AUTO_PAUSE_FAILURES"] = "3"
 # Fase 6C.3: retención del inventario Wi-Fi con su valor por defecto (sin purga).
 os.environ["WLAN_HISTORY_RETENTION_DAYS"] = ""
 # Fase 6C.4: fuentes oficiales del catálogo. Un .env con descargas activadas o una API key de
@@ -115,9 +118,27 @@ os.environ["VULN_NVD_INITIAL_DAYS"] = "120"
 os.environ["NVD_API_KEY"] = ""
 os.environ["NVD_API_KEY_FILE"] = ""
 os.environ["VULN_BUILTIN_PRODUCT_MAP"] = "true"
+# Fase 6D: motor de topología con sus valores por defecto, por la misma razón (un .env de
+# desarrollo con otros topes cambiaría lo que es truncated). Los tests de límites construyen
+# sus propios ajustes. El intervalo no arranca nada: BACKGROUND_JOBS_ENABLED=false.
+os.environ["TOPOLOGY_REBUILD_INTERVAL_MINUTES"] = "15"
+os.environ["TOPOLOGY_MAX_NODES"] = "1500"
+os.environ["TOPOLOGY_MAX_LINKS"] = "5000"
 # test_viewer_cannot_mutate_anything recorre todas las rutas mutables con un mismo usuario y
 # desde 6B son más de 120 (el límite por defecto por minuto): sin esto respondería 429.
 os.environ["API_MUTATIONS_PER_USER_PER_MINUTE"] = "1000"
+
+# SENTRA QA: AI settings isolated from development environment
+os.environ["AI_ENABLED"] = "false"
+os.environ["AI_API_KEY"] = ""
+os.environ["AI_ALLOW_EXTERNAL"] = "false"
+os.environ["AI_REDACT"] = ""
+os.environ["AI_MAX_RETRIES"] = "1"
+os.environ["AI_RATE_LIMIT_PER_USER_PER_MINUTE"] = "6"
+os.environ["AI_RATE_LIMIT_GLOBAL_PER_MINUTE"] = "30"
+os.environ["AI_MAX_CONCURRENT"] = "2"
+os.environ["AI_MAX_CONTEXT_ITEMS"] = "40"
+os.environ["AI_MAX_OUTPUT_TOKENS"] = "1200"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -263,7 +284,8 @@ def client(engine: Engine) -> Iterator[TestClient]:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE system_events, asset_inventories, alerts, telemetry_samples, assets,"
+                "TRUNCATE topology_links, topology_builds, system_events, asset_inventories,"
+                " alerts, telemetry_samples, assets,"
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
                 " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"

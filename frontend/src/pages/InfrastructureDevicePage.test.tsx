@@ -325,4 +325,82 @@ describe("InfrastructureDevicePage", () => {
     expect(screen.getByText("Cargando equipo…")).toBeInTheDocument();
     expect(await screen.findByText("Sin interfaces informadas")).toBeInTheDocument();
   });
+
+  // Fase 6D.4: estado SNMP, pausa automática y verificación de compatibilidad.
+  it("muestra el estado SNMP con el texto del contrato (nunca nombres de excepción)", async () => {
+    detail = networkDetail({ snmp_status: "auth_failed" });
+    renderPage("viewer");
+    expect(await screen.findByTestId("snmp-status")).toHaveTextContent(
+      "Autenticación SNMP rechazada (usuario, claves o protocolos del perfil)",
+    );
+    cleanup();
+    detail = networkDetail({ snmp_status: "collector_error" });
+    renderPage("viewer");
+    expect(await screen.findByTestId("snmp-status")).toHaveTextContent(
+      "Error interno del colector del sensor (no es un diagnóstico del equipo)",
+    );
+  });
+
+  it("un error de consulta internal se muestra como «Error interno del colector» sin el detalle", async () => {
+    routes[`GET ${BASE}/polls`] = () => ({
+      body: {
+        items: [poll({ status: "failed", error_code: "internal", error_message: "KeyError: 'sysName'" })],
+        total: 1,
+        limit: 20,
+        offset: 0,
+      },
+    });
+    renderPage("viewer");
+    fireEvent.click(await screen.findByRole("tab", { name: "Historial de consultas" }));
+    expect(await screen.findByText("Error interno del colector")).toBeInTheDocument();
+    expect(screen.queryByText(/KeyError/)).not.toBeInTheDocument();
+  });
+
+  it("consultas en pausa: motivo para todos y Reanudar solo para admin", async () => {
+    detail = networkDetail({
+      monitoring_status: "paused",
+      monitoring_paused_at: "2026-10-20T10:00:00Z",
+      monitoring_pause_reason: "timeout",
+    });
+    renderPage("analyst");
+    const banner = await screen.findByRole("status", { name: "Consultas periódicas en pausa" });
+    expect(banner).toHaveTextContent("Consultas periódicas en pausa");
+    expect(banner).toHaveTextContent("Motivo: Tiempo de espera agotado (respondía antes)");
+    expect(within(banner).queryByRole("button", { name: "Reanudar" })).not.toBeInTheDocument();
+    expect(screen.getByText("En pausa")).toBeInTheDocument();
+  });
+
+  it("admin reanuda con la versión; un 409 avisa y recarga", async () => {
+    detail = networkDetail({ monitoring_paused_at: "2026-10-20T10:00:00Z", monitoring_pause_reason: "unreachable" });
+    const bodies: unknown[] = [];
+    routes[`POST ${BASE}/monitoring/resume`] = (init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return { status: 409, body: { error: { code: "network_device_conflict", message: "x" } } };
+    };
+    renderPage("admin");
+    const banner = await screen.findByRole("status", { name: "Consultas periódicas en pausa" });
+    expect(banner).toHaveTextContent("Equipo inaccesible desde el sensor");
+    const gets = calls.filter((c) => c.method === "GET" && c.path === BASE).length;
+    fireEvent.click(within(banner).getByRole("button", { name: "Reanudar" }));
+    expect(await screen.findByText(/Otro administrador ha modificado este equipo/)).toBeInTheDocument();
+    expect(bodies).toEqual([{ version: 3 }]);
+    await waitFor(() => expect(calls.filter((c) => c.method === "GET" && c.path === BASE).length).toBeGreaterThan(gets));
+  });
+
+  it("verificar compatibilidad SNMP (network:poll) y su 409", async () => {
+    routes[`POST ${BASE}/compatibility-check`] = () => ({
+      status: 409,
+      body: { error: { code: "network_poll_open", message: "x" } },
+    });
+    renderPage("viewer");
+    await screen.findByTestId("snmp-status");
+    expect(screen.queryByRole("button", { name: "Verificar compatibilidad SNMP" })).not.toBeInTheDocument();
+    cleanup();
+    renderPage("analyst");
+    fireEvent.click(await screen.findByRole("button", { name: "Verificar compatibilidad SNMP" }));
+    await waitFor(() =>
+      expect(calls.some((c) => c.method === "POST" && c.path === `${BASE}/compatibility-check`)).toBe(true),
+    );
+    expect(await screen.findByRole("alert")).toHaveTextContent("Ya hay una consulta abierta para este equipo.");
+  });
 });

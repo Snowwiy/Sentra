@@ -29,6 +29,7 @@ from app.schemas.network import (
     NetworkDeviceCreate,
     NetworkDeviceDetail,
     NetworkDeviceList,
+    NetworkDeviceResume,
     NetworkDeviceUpdate,
     NetworkInterfaceList,
     NetworkMacEntryList,
@@ -348,6 +349,30 @@ def request_poll(device_id: UUID, service: Devices, ctx: Poller) -> NetworkPollR
     network_poll_busy indica que ya hay una consulta en cola o en curso.
     """
     return service.request_poll(device_id, actor(ctx))
+
+
+@router.post(
+    "/devices/{device_id}/compatibility-check",
+    response_model=NetworkPollRead,
+    status_code=status.HTTP_202_ACCEPTED,
+    responses=error_responses(404, 409),
+)
+def compatibility_check(device_id: UUID, service: Devices, ctx: Poller) -> NetworkPollRead:
+    """Fase 6D: verifica si el equipo tiene SNMP utilizable con su perfil (solo el grupo
+    system). El resultado fija `snmp_status`; mismos errores 409 que una consulta."""
+    return service.compatibility_check(device_id, actor(ctx))
+
+
+@router.post(
+    "/devices/{device_id}/monitoring/resume",
+    response_model=NetworkDeviceDetail,
+    responses=error_responses(404, 409),
+)
+def resume_monitoring(
+    device_id: UUID, body: NetworkDeviceResume, service: Devices, ctx: Manager
+) -> NetworkDeviceDetail:
+    """Fase 6D: levanta la pausa automática de las consultas periódicas (auditado)."""
+    return service.resume_monitoring(device_id, body, actor(ctx))
 
 
 @router.post(

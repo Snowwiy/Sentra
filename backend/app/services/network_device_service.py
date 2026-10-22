@@ -63,6 +63,7 @@ from app.schemas.network import (
     NetworkDeviceDetail,
     NetworkDeviceList,
     NetworkDeviceRead,
+    NetworkDeviceResume,
     NetworkDeviceUpdate,
     NetworkInterfaceList,
     NetworkInterfaceRead,
@@ -135,6 +136,8 @@ def monitoring_status(
         return "sensor_pending"
     if polling:
         return "polling"
+    if device.monitoring_paused_at is not None:
+        return "paused"
     failing = device.consecutive_failures > 0 and (
         device.last_success_at is None
         or (device.last_error_at is not None and device.last_error_at > device.last_success_at)
@@ -296,6 +299,9 @@ class NetworkDeviceService:
             last_error_code=device.last_error_code,
             last_error_at=device.last_error_at,
             consecutive_failures=device.consecutive_failures,
+            snmp_status=device.snmp_status,
+            monitoring_paused_at=device.monitoring_paused_at,
+            monitoring_pause_reason=device.monitoring_pause_reason,
             interfaces_total=counts.get("interfaces_total", 0),
             interfaces_up=counts.get("interfaces_up", 0),
             neighbors_total=counts.get("neighbors_total", 0),
@@ -582,6 +588,10 @@ class NetworkDeviceService:
         ):
             device.monitoring_enabled = body.monitoring_enabled
             changed.append("monitoring_enabled")
+            if body.monitoring_enabled:
+                # Reactivar la monitorización es una decisión explícita del admin: levanta la
+                # pausa automática y da al equipo una oportunidad completa de nuevo.
+                network_jobs.clear_pause(device)
         if not changed:
             return self.get(public_id)
         if reassigned:
@@ -654,7 +664,7 @@ class NetworkDeviceService:
             modules_requested=list(poll.modules_requested or []),
             modules=dict(poll.modules or {}),
             error_code=poll.error_code,
-            error_message=poll.error_message,
+            error_message=network_jobs.safe_error_message(poll.error_code, poll.error_message),
             counts=PollCounts(**counts),
             changes=PollChanges(**(poll.changes or {})),
             created_at=poll.created_at,
@@ -682,6 +692,38 @@ class NetworkDeviceService:
         device = self.row(public_id, lock=True)
         poll = network_jobs.create_poll(self._session, self._settings, device, actor)
         return self._poll_read(poll, device)
+
+    def compatibility_check(self, public_id: uuid.UUID, actor: Actor) -> NetworkPollRead:
+        """Consulta mínima (solo el grupo system) para verificar que el equipo tiene SNMP
+        utilizable con el perfil asignado, sin recorrer tablas grandes. Su resultado fija
+        snmp_status como cualquier consulta."""
+        device = self.row(public_id, lock=True)
+        poll = network_jobs.create_poll(
+            self._session, self._settings, device, actor, trigger="check", modules=["system"]
+        )
+        return self._poll_read(poll, device)
+
+    def resume_monitoring(
+        self, public_id: uuid.UUID, body: NetworkDeviceResume, actor: Actor
+    ) -> NetworkDeviceDetail:
+        session = self._session
+        device = self._locked(public_id, body.version)
+        if device.monitoring_paused_at is None:
+            return self.get(public_id)
+        reason = device.monitoring_pause_reason
+        network_jobs.clear_pause(device)
+        device.version += 1
+        audit_service.record(
+            session,
+            actor,
+            "network_monitoring_resumed",
+            target_type="network_device",
+            target_id=device.public_id,
+            details={"reason": "manual", "paused_reason": reason},
+            commit=False,
+        )
+        session.commit()
+        return self.get(public_id)
 
     def cancel_poll(self, poll_public: uuid.UUID, actor: Actor) -> NetworkPollRead:
         session = self._session

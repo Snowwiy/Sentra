@@ -56,6 +56,13 @@ credenciales. Los resultados de Response ya llegan saneados (Fase 5D).
   renderiza el HTML dentro de la aplicación.
 - **PDF**: sin acciones (`/URI`, `/JavaScript`, `/Launch`, `/OpenAction`), sin ficheros
   incrustados; el texto va como cadenas hexadecimales (sin problemas de escape).
+- **Plantilla v2 (Fase 6D.5)**: mismas garantías. El HTML v2 no añade scripts, manejadores
+  on*, `src` ni URLs; sus únicos enlaces son anclas internas del índice (`#s-N`) y los SVG
+  solo llevan números, colores de una paleta cerrada y texto escapado. El PDF v2 sigue sin
+  fuentes incrustadas, imágenes ni anotaciones (solo las tres Helvetica estándar). Las
+  etiquetas de gráficas y los nombres de nodos de la topología pasan por la redacción dos
+  veces (al entrar en el snapshot y al construir el documento). El resumen ejecutivo v2 sigue
+  sin IDs, IPs, evidencia técnica, topología ni trazas de cálculo.
 - **CSV**: toda celda de texto que empiece por `=`, `+`, `-`, `@`, tabulador o retorno de
   carro se prefija con `'` (CSV/formula injection). Columnas fijas por tabla.
 - **ZIP**: nombres fijos, sin rutas absolutas, sin `..`, sin enlaces simbólicos, permisos

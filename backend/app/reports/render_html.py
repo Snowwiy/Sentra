@@ -12,15 +12,17 @@ Seguridad (docs/report-security.md):
 from html import escape
 
 from app.reports.document import (
+    AnyDocument,
     BarChart,
     Block,
     Bullets,
-    Document,
+    DocumentV2,
     KeyValues,
     Notice,
     Paragraph,
     Table,
 )
+from app.reports.render_html_v2 import render_html_v2
 
 _CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none';"
@@ -98,7 +100,11 @@ def _block(block: Block) -> str:
     return _chart(block)
 
 
-def render_html(document: Document) -> bytes:
+def render_html(document: AnyDocument) -> bytes:
+    # Fase 6D.5: la plantilla v2 tiene su propio renderer; el camino v1 no cambia (mismo
+    # snapshot v1 → mismos bytes que antes).
+    if isinstance(document, DocumentV2):
+        return render_html_v2(document)
     sections = "".join(
         f"<section><h2>{_e(section.title)}</h2>{''.join(_block(b) for b in section.blocks)}"
         "</section>"

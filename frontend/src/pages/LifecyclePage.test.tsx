@@ -205,7 +205,7 @@ function session(role: Role): AuthState {
     permissions: ROLE_PERMISSIONS[role],
     csrf_token: `csrf-${role}`,
     session_expires_at: new Date(Date.now() + 3_600_000).toISOString(),
-    server_version: "0.1.0",
+    server_version: "0.2.0",
   };
 }
 

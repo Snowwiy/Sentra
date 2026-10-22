@@ -106,6 +106,12 @@ class SnmpCollector:
             transport = self._factory()
         except SnmpError as exc:
             return self._report(statuses, 0, exc.code, [exc.code], "failed")
+        except Exception as exc:
+            # Fallo del propio colector al preparar el transporte (biblioteca SNMP, bucle de
+            # eventos...): se informa como "internal", que el servidor muestra como error del
+            # colector y nunca como diagnóstico del equipo. El tipo solo va al log local.
+            logger.warning("snmp transport setup crashed", extra={"error": type(exc).__name__})
+            return self._report(statuses, 0, "internal", ["transport: internal"], "failed")
         walker = Walker(transport, self._budget, self._max_repetitions)
         try:
             for name in self._modules:
@@ -137,12 +143,19 @@ class SnmpCollector:
                         break
                     continue
                 except Exception as exc:
+                    # Ojo: "module" es un atributo reservado de logging.LogRecord; usarlo en
+                    # `extra` lanza KeyError dentro del propio manejador y esa excepción
+                    # sustituía al fallo real ("snmp error: KeyError" en el job, Fase 6D).
                     logger.warning(
-                        "snmp module crashed", extra={"module": name, "error": type(exc).__name__}
+                        "snmp module crashed",
+                        extra={"snmp_module": name, "error": type(exc).__name__},
                     )
                     statuses[name] = "failed"
-                    error_code = error_code or "internal"
                     errors.append(f"{name}: internal")
+                    if name == "system":
+                        # Igual que con un error SNMP: sin system no hay equipo que inventariar.
+                        return self._report(statuses, records, "internal", errors, "failed")
+                    error_code = error_code or "internal"
                     continue
                 statuses[name] = result.status
                 if result.records:

@@ -129,7 +129,17 @@ const NETWORK_MESSAGES: Record<string, string> = {
   network_poll_not_found: "La consulta no existe o ya no está disponible.",
   network_poll_unavailable: "No se puede consultar el equipo ahora mismo.",
   network_poll_busy: "Ya hay una consulta en curso para este equipo. Espera a que termine o cancélala.",
+  network_poll_open: "Ya hay una consulta abierta para este equipo. Espera a que termine o cancélala.",
   network_poll_finished: "La consulta ya ha terminado y no se puede cancelar.",
+};
+
+// Topología de red (Fase 6D). topology_link_conflict: otro admin revisó el enlace; la UI
+// recarga antes de reintentar (nunca se sobrescribe en silencio).
+const TOPOLOGY_MESSAGES: Record<string, string> = {
+  topology_link_conflict: "Otro administrador ha revisado este enlace. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  topology_build_running: "Ya hay una reconstrucción de la topología en curso para este site. Espera a que termine.",
+  topology_link_not_found: "El enlace no existe o ya no está disponible.",
+  topology_node_not_found: "El nodo no existe en este site o ya no está disponible.",
 };
 
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
@@ -165,6 +175,7 @@ function translate(code: string, message: string): string {
   if (REPORT_MESSAGES[code]) return REPORT_MESSAGES[code];
   if (SITE_MESSAGES[code]) return SITE_MESSAGES[code];
   if (NETWORK_MESSAGES[code]) return NETWORK_MESSAGES[code];
+  if (TOPOLOGY_MESSAGES[code]) return TOPOLOGY_MESSAGES[code];
   // Dirección fuera de las redes del site: el detalle (inglés) dice qué dirección y por qué.
   if (code === "network_address_out_of_scope") return `Dirección fuera de las redes autorizadas del site: ${message}`;
   // CIDR rechazado: el detalle (inglés) dice el motivo (host bits, /0, multicast, tamaño...).
@@ -206,6 +217,19 @@ async function parseError(response: Response): Promise<ApiError> {
     );
   }
   return new ApiError(response.status, "http_error", `HTTP ${response.status}`);
+}
+
+/**
+ * Error lanzado por fetch() antes de recibir cabeceras. Una cancelación (AbortError) se
+ * propaga tal cual para que la UI la ignore; un plazo vencido (AbortSignal.timeout →
+ * TimeoutError) se distingue de "API no disponible" porque el remedio es distinto.
+ */
+function fetchFailure(error: unknown): unknown {
+  if (error instanceof DOMException && error.name === "AbortError") return error;
+  if (error instanceof DOMException && error.name === "TimeoutError") {
+    return new ApiError(0, "timeout", "La API de Sentra no respondió a tiempo.");
+  }
+  return new ApiError(0, "network_error", "No se pudo conectar con la API de Sentra");
 }
 
 // --- Sesión del dashboard (Fase 4G) ------------------------------------------------------
@@ -267,8 +291,7 @@ async function request<T>(
       signal,
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
-    throw new ApiError(0, "network_error", "No se pudo conectar con la API de Sentra");
+    throw fetchFailure(error);
   }
   if (!response.ok && !acceptStatuses.includes(response.status)) {
     const error = await parseError(response);
@@ -337,16 +360,31 @@ export async function apiDownload(path: string, { signal }: { signal?: AbortSign
       signal,
     });
   } catch (error) {
-    if (error instanceof DOMException && error.name === "AbortError") throw error;
-    throw new ApiError(0, "network_error", "No se pudo conectar con la API de Sentra");
+    throw fetchFailure(error);
   }
   if (!response.ok) {
     const error = await parseError(response);
     if (response.status === 401) unauthorizedHandler?.();
     throw error;
   }
+  // Fase 6D.6: el cuerpo llega DESPUÉS de las cabeceras. Si la conexión se corta a mitad
+  // (proxy que cierra, servidor que cae, red), blob() rechaza con un TypeError genérico; antes
+  // se propagaba sin traducir. Se distingue de "API no disponible": el servidor sí respondió.
+  let blob: Blob;
+  try {
+    blob = await response.blob();
+  } catch (error) {
+    if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
+      throw new DOMException("Descarga cancelada", "AbortError");
+    }
+    throw new ApiError(
+      response.status,
+      "download_interrupted",
+      "La descarga se interrumpió antes de completarse (conexión cortada). El fichero no se ha guardado: vuelve a intentarlo.",
+    );
+  }
   return {
-    blob: await response.blob(),
+    blob,
     filename: filenameFromDisposition(response.headers.get("Content-Disposition")),
     sha256: response.headers.get("X-Sentra-SHA256")?.trim().toLowerCase() || undefined,
   };

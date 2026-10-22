@@ -149,6 +149,7 @@ def _settings(**changes: Any) -> Settings:
     base = {
         "cors_origins": DASHBOARD_ORIGIN,
         "discovery_allowed_networks": f"{NETWORK},{OTHER}",
+        "discovery_interval_minutes": None,
     }
     return get_settings().model_copy(update={**base, **changes})
 

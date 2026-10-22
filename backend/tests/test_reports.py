@@ -470,7 +470,10 @@ def test_g_cutoff_excludes_data_created_after_it(
     stored = db.scalar(select(Report).where(Report.public_id == UUID(report["id"])))
     assert stored is not None and stored.snapshot is not None
     meta = stored.snapshot["meta"]
-    assert meta["cutoff_at"] and meta["template_version"] == 1 and meta["timezone"] == "UTC"
+    # Fase 6D.5: los informes nuevos usan la plantilla v2 (la versión queda en el snapshot y
+    # en la fila; los v1 ya generados conservan la suya).
+    assert meta["cutoff_at"] and meta["template_version"] == 2 and meta["timezone"] == "UTC"
+    assert stored.template_version == 2
     assert seed["asset"]
 
 

@@ -285,10 +285,60 @@ Ver `.env.example`: `SNMP_CREDENTIAL_KEY_FILE`, `SNMP_ALLOW_V2C`,
 | limit_exceeded | Tablas MAC muy grandes | Subir `SNMP_MAX_VARBINDS_PER_JOB` o `SNMP_MAX_ROWS_PER_TABLE` con cuidado |
 | credentials_unavailable | Fichero de claves ausente o perfil revocado durante el job | Revisar `SNMP_CREDENTIAL_KEY_FILE` y el perfil |
 | sensor_offline / sensor_lost | El sensor no está conectado o no cerró el job | Revisar el servicio del sensor |
+| internal | Fallo interno del colector del sensor (no dice nada del equipo) | Revisar el log del sensor (`snmp module crashed`, con el tipo de error); actualizar el sensor a 0.5.1 |
+
+## Diagnóstico por equipo y pausa automática (Fase 6D)
+
+Cada cierre de consulta fija `snmp_status` del equipo en una taxonomía propia; nunca se
+muestra el nombre de una excepción:
+
+| snmp_status | Significado |
+|-------------|-------------|
+| `unverified` | Nunca se ha consultado |
+| `compatible` | Respondió por SNMP (consulta correcta o parcial) |
+| `no_response` | Sin respuesta y sin ningún éxito previo: SNMP no disponible o compatibilidad sin confirmar. Con SNMPv3, un equipo sin servicio SNMP es indistinguible de uno que descarta la petición |
+| `timeout` | Sin respuesta, pero el equipo respondió antes |
+| `unreachable` | El sensor no puede llegar a la dirección |
+| `auth_failed` | Usuario, claves o protocolos del perfil rechazados |
+| `unsupported_version` | Versión o nivel de seguridad no admitidos |
+| `malformed_response` | Respuesta SNMP mal formada |
+| `collector_error` | Fallo interno del colector del sensor; no es un diagnóstico del equipo |
+
+Los fallos que no hablan del equipo (sensor caído, job caducado o rechazado, cancelación,
+credencial no entregable) no cambian el diagnóstico.
+
+**Pausa automática.** Tras `SNMP_AUTO_PAUSE_FAILURES` (3; 0 = nunca) fallos seguidos con
+diagnóstico `no_response`, `unreachable`, `auth_failed` o `unsupported_version`, el
+programador deja de consultar el equipo (`monitoring_paused_at`, `monitoring_pause_reason`,
+estado `paused`, evento `network_monitoring_paused`). Un `collector_error` nunca pausa. La
+consulta manual sigue disponible; una consulta correcta, `POST
+/network/devices/{id}/monitoring/resume` (admin) o reactivar la monitorización levantan la
+pausa (`network_monitoring_resumed`) y ponen a cero los fallos seguidos.
+
+**Verificación de compatibilidad.** `POST /network/devices/{id}/compatibility-check`
+(`network:poll`) encola una consulta con solo el módulo `system` (trigger `check`) para saber
+si el equipo tiene SNMP utilizable con su perfil antes de activar la monitorización. Solo
+actualiza el diagnóstico (`snmp_status`), los fallos seguidos y la pausa: no cambia
+`last_poll_at`, `last_success_at` ni `last_modules`, porque no es una consulta completa y no
+debe hacer pasar por recientes interfaces, LLDP o FDB antiguos ni retrasar la consulta
+periódica.
+
+### Caso Archer GX90 (`snmp error: KeyError`)
+
+Causa reproducida en el sensor: cuando un lector de módulo lanzaba una excepción que no era
+un error SNMP, el colector la registraba con `extra={"module": ...}`; `module` es un atributo
+reservado de `logging.LogRecord`, así que el propio log lanzaba `KeyError`, que escapaba del
+colector y sustituía al fallo real. No tiene relación con AES ni con el almacén de secretos.
+Sensor 0.5.1: la clave del log es `snmp_module`, un fallo interno de un módulo se informa
+como `internal` (y si es `system`, el job falla con ese motivo), y un test recorre todas las
+llamadas de log del sensor para impedir claves reservadas. El servidor muestra los mensajes
+antiguos («snmp error: KeyError», guardados por sensores <= 0.5.0) como error interno del
+colector. Con el router sin servicio SNMP, el resultado esperado tras actualizar es
+`no_response` y, tras tres intentos periódicos, la pausa automática.
 
 ## Limitaciones conocidas
 
-- Sin topología ni enlaces inferidos (Fase 6D). Sin SNMP traps, sin syslog, sin sondeo de
+- La topología (Fase 6D, docs/topology-engine.md) usa LLDP/CDP y las tablas MAC como evidencia; nunca infiere enlaces por subred. Sin SNMP traps, sin syslog, sin sondeo de
   rendimiento continuo (los contadores son una foto por consulta).
 - La VLAN de una MAC depende de que el equipo publique el mapa FDB → VLAN; si no, se asume
   y se indica.

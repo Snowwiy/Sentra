@@ -481,6 +481,8 @@ def test_role_permissions_are_least_privilege() -> None:
     # Fase 6B: credenciales SNMP y registro de equipos de red, solo admin.
     assert Permission.SNMP_CREDENTIALS_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     assert Permission.NETWORK_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
+    # Fase 6D: reconstruir la topología y revisar enlaces, solo admin.
+    assert Permission.TOPOLOGY_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Resumen ejecutivo, técnico global, cancelar ajenos y borrar informes: solo admin (5E).
     assert Permission.REPORTS_ADMIN not in ROLE_PERMISSIONS[Role.ANALYST]
     # Acciones MEDIUM, gestión de playbooks y cancelación (response:manage): solo admin (5D).
@@ -586,6 +588,16 @@ def _matrix_requests(
         ("POST", f"{API}/network/devices/{uuid4()}/polls", None, Permission.NETWORK_POLL),
         ("POST", f"{API}/network/polls/{uuid4()}/cancel", None, Permission.NETWORK_POLL),
         ("GET", f"{API}/network/devices", None, Permission.MONITORING_READ),
+        # Fase 6D: enlace inexistente -> 404 con permiso, 403 sin él.
+        ("GET", f"{API}/topology/graph", None, Permission.MONITORING_READ),
+        ("GET", f"{API}/topology/status", None, Permission.MONITORING_READ),
+        ("GET", f"{API}/topology/links/{uuid4()}", None, Permission.MONITORING_READ),
+        (
+            "PATCH",
+            f"{API}/topology/links/{uuid4()}/review",
+            {"review_state": "accepted", "version": 1},
+            Permission.TOPOLOGY_MANAGE,
+        ),
     ]
 
 
@@ -666,6 +678,8 @@ def _concrete(path: str) -> str:
         "profile_id", "device_id", "poll_id",
         # Fase 6C.3: inventario Wi-Fi.
         "access_point_id", "bss_id",
+        # Fase 6D: topología (un nodo con clave no válida responde 404, igual que uno ajeno).
+        "link_id", "node_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.

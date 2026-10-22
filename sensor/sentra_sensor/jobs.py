@@ -15,7 +15,7 @@ puerta de entrada al site. Por eso:
 
 import ipaddress
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 from typing import Any
 
@@ -51,8 +51,11 @@ SNMP_PARAMETER_KEYS = frozenset(
         "deadline_seconds",
     }
 )
-# Única versión del esquema de discovery_advanced que entiende este sensor.
+# Versiones del esquema de discovery_advanced que entiende este sensor. v2 (Corrección 6C) =
+# v1 + sondas de nombre (`identify`) con su presupuesto (`max_name_queries`); el servidor
+# solo la envía a sensores que declaran network.discovery.names.
 ADVANCED_SCHEMA_VERSION = 1
+NAMES_SCHEMA_VERSION = 2
 ADVANCED_PROFILES = frozenset({"quick", "standard", "deep"})
 
 JOB_KEYS = frozenset(
@@ -102,6 +105,7 @@ ADVANCED_PARAMETER_KEYS = frozenset(
         "max_hosts",
     }
 )
+NAMES_PARAMETER_KEYS = ADVANCED_PARAMETER_KEYS | {"identify", "max_name_queries"}
 MAX_DEADLINE_SECONDS = 24 * 3600
 
 
@@ -141,6 +145,10 @@ class DiscoveryParameters:
     forward_dns: bool = False
     dns_timeout_ms: int | None = None
     max_dns_queries: int | None = None
+    # Corrección 6C (discovery_advanced v2): sondas de nombre y su presupuesto (consultas
+    # mDNS + NetBIOS + descripción UPnP + el M-SEARCH). Sin v2, sin sondas de nombre.
+    identify: bool = False
+    max_name_queries: int | None = None
 
 
 @dataclass(frozen=True)
@@ -348,12 +356,18 @@ def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
     Si el servidor es anterior a 6A (sin topes avanzados en la config), los topes valen 0 y
     cualquier job avanzado se rechaza: el sensor nunca supone límites que nadie le dio.
     """
-    if not isinstance(params, dict) or set(params) != ADVANCED_PARAMETER_KEYS:
-        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
-    if params["schema_version"] != ADVANCED_SCHEMA_VERSION or isinstance(
-        params["schema_version"], bool
+    if not isinstance(params, dict) or set(params) not in (
+        ADVANCED_PARAMETER_KEYS,
+        NAMES_PARAMETER_KEYS,
     ):
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+    version = params.get("schema_version")
+    if isinstance(version, bool) or version not in (ADVANCED_SCHEMA_VERSION, NAMES_SCHEMA_VERSION):
         raise JobRejectedError("schema_unsupported", "unsupported discovery_advanced schema")
+    # Esquema exacto por versión: una clave de v2 en un job v1 (o al revés) es un rechazo.
+    expected = NAMES_PARAMETER_KEYS if version == NAMES_SCHEMA_VERSION else ADVANCED_PARAMETER_KEYS
+    if set(params) != expected:
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
     if params["profile"] not in ADVANCED_PROFILES:
         raise JobRejectedError("invalid_schema", "unknown scan profile")
     if config.advanced_max_timeout_ms <= 0 or config.advanced_max_ports <= 0:
@@ -391,6 +405,16 @@ def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
             params["max_dns_queries"], "max_dns_queries", 0, config.max_dns_queries
         ),
     )
+    if version == NAMES_SCHEMA_VERSION:
+        # El presupuesto de sondas de nombre tiene el mismo tope que el de DNS que fija el
+        # servidor en la configuración: el sensor nunca acepta más carga que esa.
+        parameters = replace(
+            parameters,
+            identify=_bool(params["identify"], "identify"),
+            max_name_queries=_int(
+                params["max_name_queries"], "max_name_queries", 0, config.max_dns_queries
+            ),
+        )
     if parameters.forward_dns and not parameters.reverse_dns:
         raise JobRejectedError("invalid_schema", "forward_dns requires reverse_dns")
     if not (parameters.ports or parameters.icmp or parameters.arp):

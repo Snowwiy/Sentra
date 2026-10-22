@@ -319,6 +319,34 @@ Los pesos (puntos, factores, saturación) son constantes de `app/risk/config.py`
 cambia lo que significa un score: hay que subir `FORMULA_VERSION`, que se guarda en cada
 cálculo y en cada snapshot.
 
+## Trazabilidad del score (Fase 6D.8)
+
+Cada cálculo guarda `breakdown.trace` (base, factores de criticidad, tipo y contexto, puntos
+brutos, codo de saturación, puntos saturados y score) y cada contribución de detección
+`details.nominal_breakdown` (puntos de severidad, factor de confianza, de ocurrencias y de
+correlación). La API y los informes v2 lo muestran como cadena: severidad x confianza x
+ocurrencias x correlación x vigencia x estado x posición = aporte; suma = base; x criticidad x
+tipo x contexto = bruto; saturación = score. Los cálculos anteriores no lo tienen y la UI lo
+omite. La fórmula no cambia (FORMULA_VERSION sigue en 5).
+
+### Diagnóstico ravenslg: riesgo 100 con CORR-002 ~99,81 puntos
+
+- CORR-002 alta (70) x confianza alta (1,0, hay procesos nuevos en la ventana) x correlación
+  (1,15) x ocurrencias. Con 4 ocurrencias el factor es 1 + 0,12 x log2(4) = 1,24: 70 x 1,24 x
+  1,15 = 99,82, el aporte observado. Sumado a criticidad, tipo y contexto, el bruto supera
+  ~190 y la saturación lo deja en 99,5-100.
+- Las 4 «ocurrencias» no eran 4 secuencias: con cooldown 0, cada proceso nuevo dentro de la
+  ventana reevaluaba la misma pareja PowerShell + servicio y sumaba una ocurrencia
+  (reproducido en `tests/test_detections.py::test_correlation_wave_counts_once_despite_new_processes`:
+  5 en lugar de 1). Corregido en la versión 2 de las correlaciones (docs/detection-engine.md).
+- No se clasifica como falso positivo por ser un equipo de desarrollo: la secuencia
+  PowerShell sospechoso + servicio nuevo existe y requiere revisión. Con una sola ocurrencia el
+  aporte sería 70 x 1,0 x 1,15 = 80,5 (crítico si la criticidad del activo es alta).
+- Para revisar el caso real: abrir la detección CORR-002 de ravenslg, comprobar su evidencia
+  (eventos 4104 y 7045, procesos), su `occurrence_count` y la traza del riesgo. Una detección
+  ya abierta conserva su contador: resolverla (si se confirma legítima) deja que la memoria de
+  resueltas la desvanezca; una nueva secuencia abrirá una detección con el conteo corregido.
+
 ## Limitaciones conocidas
 
 - La exposición solo cuenta los puertos sensibles que ve discovery desde el servidor; sin

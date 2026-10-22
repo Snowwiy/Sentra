@@ -47,6 +47,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/network", label: "Red", icon: "network" },
       { to: "/infrastructure", label: "Infraestructura", icon: "infrastructure", permission: "monitoring:read" },
       { to: "/wlan", label: "Wi-Fi", icon: "wifi", permission: "monitoring:read" },
+      { to: "/topology", label: "Topología", icon: "topology", permission: "monitoring:read" },
       { to: "/agents", label: "Agentes", icon: "agent" },
       { to: "/sensors", label: "Sensores", icon: "sensor", permission: "monitoring:read" },
       { to: "/settings/sites", label: "Sites", icon: "site", permission: "monitoring:read" },

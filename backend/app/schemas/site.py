@@ -359,6 +359,34 @@ class PortObservation(RequestModel):
     state: Literal["open", "closed", "filtered"]
 
 
+# Corrección 6C: texto que publica un dispositivo ajeno (UPnP, SSDP). Imprimible y acotado
+# igual que en el discovery local (app/discovery/names.py: MAX_TEXT, clean_text).
+_DEVICE_TEXT = r"^[^\x00-\x1f\x7f]{1,128}$"
+_DEVICE_NAME = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}$"
+
+
+class SensorUpnpIn(RequestModel):
+    friendly_name: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    manufacturer: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    model_name: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    model_number: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    device_type: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+
+
+class SensorIdentityIn(RequestModel):
+    """Nombres que el host publica de sí mismo, vistos por el sensor (discovery_advanced v2).
+
+    Mismo contenido que guardan las sondas locales en identity_observations: el servidor los
+    interpreta con el mismo motor (app/discovery/classify.py). El sensor nunca envía
+    clasificaciones, solo lo observado.
+    """
+
+    mdns_name: str | None = Field(default=None, pattern=_DEVICE_NAME)
+    netbios_name: str | None = Field(default=None, pattern=_DEVICE_NAME, max_length=15)
+    ssdp_server: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    upnp: SensorUpnpIn | None = None
+
+
 class ObservationIn(RequestModel):
     address: str = Field(min_length=2, max_length=45)
     mac: str | None = Field(default=None, max_length=17)
@@ -374,6 +402,9 @@ class ObservationIn(RequestModel):
     # inverso con una consulta directa. Opcionales: un sensor 0.1.x no los envía.
     rtt_ms: int | None = Field(default=None, ge=0, le=120_000)
     forward_dns_match: bool | None = None
+    # Corrección 6C (discovery_advanced v2): nombres publicados por el host. Opcional: los
+    # sensores anteriores a 0.5.0 y los jobs v1 no lo envían.
+    identity: SensorIdentityIn | None = None
     observed_at: AwareDatetime
 
     @field_validator("address")

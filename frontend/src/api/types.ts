@@ -26,10 +26,42 @@ export interface ClassificationEvidence {
   value: string;
 }
 
+/** Corrección 6C: nombre observado con procedencia. kind: agent (hostname del agente), device
+ * (publicado por el propio equipo), dhcp (DNS local del router, inferido), dns (DNS de dominio)
+ * o generic (valor por defecto de un SO: nunca se usa como nombre). */
+export type ObservedNameKind = "agent" | "device" | "dhcp" | "dns" | "generic";
+
+export interface ObservedName {
+  source: string;
+  value: string;
+  kind: ObservedNameKind;
+  /** Nombre automático elegido. */
+  selected: boolean;
+  /** Confirmación directa del DNS inverso (el nombre resuelve a esta IP); null = no aplica. */
+  confirmed: boolean | null;
+  /** Ninguna fuente lo repite desde hace tiempo. */
+  stale: boolean;
+}
+
+/** Fase 6D.3: labelled (etiqueta manual), named (nombre automático), generic_only (solo un
+ * nombre genérico del sistema) o unnamed (ninguna fuente lo ha nombrado). */
+export type AssetNameStatus = "labelled" | "named" | "generic_only" | "unnamed";
+
 export interface Asset {
   asset_id: string;
-  /** Nombre resuelto, hostname, DNS inverso o la IP: siempre presente (alertas, búsquedas). */
+  /** Etiqueta personalizada, nombre resuelto, hostname, DNS inverso o la IP: siempre presente
+   * (alertas, búsquedas). */
   display_name: string;
+  /** Corrección 6C: nombre visible puesto por una persona; null = nombre automático. */
+  custom_label: string | null;
+  /** Versión para PATCH /assets/{id}/label (409 asset_label_conflict si cambió). */
+  custom_label_version: number;
+  custom_label_updated_at: IsoDateTime | null;
+  custom_label_updated_by: string | null;
+  /** Nombres observados con procedencia (vacío hasta la siguiente identificación). */
+  observed_names: ObservedName[];
+  /** Fase 6D.3: por qué el activo tiene (o no) nombre. Opcional: backends anteriores no lo envían. */
+  name_status?: AssetNameStatus;
   monitoring_method: MonitoringMethod;
   /** Reported by the agent; null for assets only seen on the network. */
   hostname: string | null;
@@ -1276,7 +1308,9 @@ export type Permission =
   // Fase 6B: consultas SNMP (analyst y admin), registro de equipos y perfiles SNMP (admin).
   | "network:poll"
   | "network:manage"
-  | "snmp_credentials:manage";
+  | "snmp_credentials:manage"
+  // Fase 6D: reconstruir la topología y revisar enlaces (solo admin).
+  | "topology:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -1868,6 +1902,31 @@ export interface RiskAssetDetail extends RiskAssetSummary {
   trend_24h: number | null;
   breakdown: Record<string, unknown> | null;
   thresholds: RiskLevelRange[];
+}
+
+/**
+ * Fase 6D.8: traza del cálculo guardada en `breakdown.trace` (los cálculos anteriores no la
+ * tienen y la UI la omite). Cadena: suma de aportes = base; × criticidad × tipo × contexto =
+ * bruto; saturación → score.
+ */
+export interface RiskTrace {
+  base_points: number;
+  criticality_factor: number;
+  type_factor: number;
+  context_factor: number;
+  raw_points: number;
+  saturation_knee: number;
+  saturated_points: number;
+  score: number;
+  formula_version: number;
+}
+
+/** Fase 6D.8: `details.nominal_breakdown` de una contribución de detección. */
+export interface RiskNominalBreakdown {
+  severity_points: number;
+  confidence_factor: number;
+  occurrence_factor: number;
+  correlation_factor: number;
 }
 
 export interface RiskHistory {
@@ -3932,10 +3991,13 @@ export type MonitoringStatus =
   | "polling"
   | "ok"
   | "partial"
-  | "failing";
+  | "failing"
+  // Fase 6D.4: consultas periódicas pausadas tras fallos repetidos.
+  | "paused";
 export type EvidenceFreshness = "recent" | "historical" | "none";
 export type PollStatus = "queued" | "running" | "succeeded" | "partial" | "failed" | "cancelled" | "expired";
-export type PollTrigger = "manual" | "scheduled";
+// "check" (Fase 6D.4): verificación de compatibilidad SNMP (solo el módulo system).
+export type PollTrigger = "manual" | "scheduled" | "check";
 export type NetworkModuleName = "system" | "entity" | "interfaces" | "lldp" | "cdp" | "bridge" | "vlan";
 export type ModuleStatus = "complete" | "partial" | "unsupported" | "failed" | "skipped";
 export type SnmpErrorCode =
@@ -3956,6 +4018,17 @@ export type SnmpErrorCode =
   | "limit_exceeded"
   | "malformed_response"
   | "internal";
+/** Fase 6D.4: compatibilidad SNMP de un equipo, comprobada por el sensor. */
+export type SnmpStatus =
+  | "unverified"
+  | "compatible"
+  | "no_response"
+  | "timeout"
+  | "unreachable"
+  | "auth_failed"
+  | "unsupported_version"
+  | "malformed_response"
+  | "collector_error";
 export type PortKind = "physical" | "lag" | "logical" | "vlan" | "loopback" | "tunnel" | "wireless" | "other";
 export type AdminStatus = "up" | "down" | "testing" | "unknown";
 export type OperStatus = "up" | "down" | "testing" | "unknown" | "dormant" | "not_present" | "lower_layer_down";
@@ -4083,6 +4156,12 @@ export interface NetworkDevice {
   last_error_code: SnmpErrorCode | null;
   last_error_at: string | null;
   consecutive_failures: number;
+  /** Fase 6D.4: estado de compatibilidad SNMP comprobado (textos en lib/network.ts). */
+  snmp_status: SnmpStatus;
+  /** Consultas periódicas pausadas automáticamente tras fallos repetidos (null = activas). */
+  monitoring_paused_at: string | null;
+  /** Motivo de la pausa: mismos códigos que snmp_status. */
+  monitoring_pause_reason: SnmpStatus | null;
   interfaces_total: number;
   interfaces_up: number;
   neighbors_total: number;
@@ -4728,4 +4807,158 @@ export interface WlanClientQuery {
   freshness?: WlanFreshness;
   limit?: number;
   offset?: number;
+}
+
+// --- Fase 6D: motor de topología (/api/v1/topology) -------------------------------------------
+// Contrato en docs/topology-engine.md. Los nodos son referencias al inventario (activo, equipo
+// de red, AP o identidad externa): la UI enlaza al inventario en lugar de duplicarlo.
+
+export type TopologyLinkKind = "physical" | "logical" | "observed" | "candidate" | "unknown";
+export type TopologyMedium = "wired" | "wireless" | "unknown";
+export type TopologyConfidence = "high" | "medium" | "low";
+export type TopologyReviewState = "unreviewed" | "accepted" | "rejected";
+export type TopologyNodeKind = "asset" | "network_device" | "wlan_ap" | "external";
+export type TopologyNodeRole = "infrastructure" | "endpoint" | "unknown";
+
+export interface TopologyNode {
+  /** Clave estable: asset:<uuid>, network_device:<uuid>, wlan_ap:<uuid> o external:<hex16>. */
+  id: string;
+  kind: TopologyNodeKind;
+  label: string;
+  automatic_name: string | null;
+  custom_label: string | null;
+  asset_id: string | null;
+  network_device_id: string | null;
+  ip: string | null;
+  mac: string | null;
+  vendor: string | null;
+  device_type: string | null;
+  role: TopologyNodeRole;
+  status: string | null;
+  managed: boolean | null;
+  risk_score: number | null;
+  risk_level: RiskLevel | null;
+  criticality: AssetCriticality | null;
+  groups: string[];
+  sources: string[];
+  identity_confidence: "high" | "medium" | "low" | "none" | null;
+  link_count: number;
+}
+
+export interface TopologyLink {
+  id: string;
+  source: string;
+  target: string;
+  kind: TopologyLinkKind;
+  medium: TopologyMedium;
+  relation: string;
+  confidence: TopologyConfidence;
+  source_port: string | null;
+  target_port: string | null;
+  evidence_sources: string[];
+  present: boolean;
+  first_seen_at: IsoDateTime | null;
+  last_seen_at: IsoDateTime | null;
+  last_evidence_at: IsoDateTime | null;
+  review_state: TopologyReviewState;
+}
+
+export interface TopologyEvidence {
+  source: string;
+  detail: string;
+  observed_at: IsoDateTime | null;
+}
+
+export interface TopologyLinkDetail extends TopologyLink {
+  evidence: TopologyEvidence[];
+  /** Datos informados del extremo externo (LLDP/CDP), o null. */
+  target_external: Record<string, unknown> | null;
+  review_note: string | null;
+  reviewed_by: string | null;
+  reviewed_at: IsoDateTime | null;
+  version: number;
+}
+
+export interface TopologyGroup {
+  /** network:<cidr> o "unassigned". */
+  id: string;
+  kind: string;
+  cidr: string | null;
+  name: string | null;
+  node_count: number;
+}
+
+export interface TopologyBuild {
+  id: string;
+  site_id: string;
+  status: string;
+  trigger: string;
+  requested_by: string | null;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
+  duration_ms: number | null;
+  counts: Record<string, number>;
+  error_code: string | null;
+}
+
+export interface TopologySiteRef {
+  id: string;
+  name: string;
+}
+
+export interface TopologyGraph {
+  site: TopologySiteRef;
+  generated_at: IsoDateTime;
+  /** null si el site nunca se reconstruyó. */
+  last_build: Partial<TopologyBuild> | null;
+  truncated: boolean;
+  limits: { max_nodes: number; max_links: number };
+  nodes: TopologyNode[];
+  links: TopologyLink[];
+  groups: TopologyGroup[];
+}
+
+export interface TopologyLinkList {
+  items: TopologyLink[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export interface TopologyNodeDetail {
+  node: TopologyNode;
+  links: TopologyLink[];
+  observed_names: ObservedName[];
+  /** Ruta del frontend al detalle del activo o equipo (p. ej. /assets/<uuid>), o null. */
+  inventory_path: string | null;
+}
+
+export interface TopologyEvidenceAvailability {
+  lldp_cdp: boolean;
+  fdb: boolean;
+  wlan: boolean;
+  agent_gateways: boolean;
+}
+
+export interface TopologyStatus {
+  site: TopologySiteRef;
+  last_build: TopologyBuild | null;
+  links_present: number;
+  links_by_kind: Partial<Record<TopologyLinkKind, number>>;
+  evidence_available: TopologyEvidenceAvailability;
+}
+
+export interface TopologyReviewRequest {
+  review_state: TopologyReviewState;
+  note: string | null;
+  version: number;
+}
+
+export interface TopologyGraphQuery {
+  siteId?: string;
+  kinds?: TopologyLinkKind[];
+  includeAbsent?: boolean;
+  includeRejected?: boolean;
+  deviceType?: string;
+  q?: string;
 }

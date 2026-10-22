@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import type { Asset } from "../api/types";
-import { assetTitle, deviceTypeLabel, evidenceLabel, isProbable, osLabel, typeWithConfidence } from "./identity";
+import {
+  assetTitle,
+  automaticTitle,
+  deviceTypeLabel,
+  evidenceLabel,
+  isProbable,
+  normalizeLabel,
+  osLabel,
+  typeWithConfidence,
+} from "./identity";
 
 type Identity = Pick<
   Asset,
@@ -54,5 +63,24 @@ describe("identificación: textos en español", () => {
   it("describe las evidencias con su fuente", () => {
     expect(evidenceLabel({ source: "mac_vendor", value: "Huawei" })).toBe("Fabricante MAC: Huawei");
     expect(evidenceLabel({ source: "nueva_fuente", value: "x" })).toBe("nueva_fuente: x");
+  });
+});
+
+describe("Corrección 6C: etiqueta personalizada", () => {
+  const named = { device_name: "Echo-Salon", hostname: null, device_type: "iot", classification_confidence: "low" as const };
+
+  it("la etiqueta gana al nombre automático, que sigue disponible aparte", () => {
+    expect(assetTitle({ ...named, custom_label: "Alexa Sala" })).toBe("Alexa Sala");
+    expect(automaticTitle({ ...named })).toBe("Echo-Salon");
+    expect(assetTitle({ ...named, custom_label: null })).toBe("Echo-Salon");
+  });
+
+  it("normaliza como el servidor", () => {
+    expect(normalizeLabel("  Alexa \u00a0 Sala ")).toEqual({ label: "Alexa Sala" });
+    expect(normalizeLabel("Salo\u0301n")).toEqual({ label: "Sal\u00f3n" });
+    expect("error" in normalizeLabel("")).toBe(true);
+    expect("error" in normalizeLabel("a\nb")).toBe(true);
+    expect("error" in normalizeLabel("x".repeat(65))).toBe(true);
+    expect(normalizeLabel("x".repeat(64))).toEqual({ label: "x".repeat(64) });
   });
 });

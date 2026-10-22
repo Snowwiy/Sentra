@@ -230,8 +230,12 @@ def create_poll(
     device: NetworkDevice,
     actor: Actor,
     trigger: str = "manual",
+    modules: list[str] | None = None,
 ) -> NetworkDevicePoll:
-    """Encola la consulta y su job de sensor. Sin commit en el error; con commit si va bien."""
+    """Encola la consulta y su job de sensor. Sin commit en el error; con commit si va bien.
+
+    `modules` restringe los módulos (verificación de compatibilidad: solo system); nunca
+    añade módulos que el sensor no declare."""
     from app.services.sensor_service import sweep
 
     blockers, ctx = poll_blockers(session, settings, device)
@@ -252,6 +256,13 @@ def create_poll(
         )
     now = datetime.now(UTC)
     sweep(session, now, ctx.sensor.id)
+    if modules is not None:
+        ctx = PollContext(
+            site=ctx.site,
+            profile=ctx.profile,
+            sensor=ctx.sensor,
+            modules=[m for m in ctx.modules if m in modules],
+        )
     parameters = _parameters(settings, device, ctx.profile, ctx.modules)
     poll = NetworkDevicePoll(
         public_id=uuid.uuid4(),
@@ -289,7 +300,10 @@ def create_poll(
     session.add(job)
     session.flush()
     poll.sensor_job_id = job.id
-    device.last_poll_at = now
+    if trigger != "check":
+        # La verificación de compatibilidad solo pide system: no cuenta como consulta completa
+        # y no debe retrasar la siguiente consulta periódica.
+        device.last_poll_at = now
     audit_service.record(
         session,
         actor,
@@ -336,6 +350,114 @@ def _close_poll(
         device.consecutive_failures += 1
         device.last_error_code = error_code
         device.last_error_at = now
+        diagnosis = diagnose(error_code, device)
+        if diagnosis is not None:
+            device.snmp_status = diagnosis
+        _maybe_pause(session, device, diagnosis, now, poll.trigger)
+
+
+# --- diagnóstico SNMP y pausa automática (Fase 6D) --------------------------------------------
+
+# Código de error de una consulta → diagnóstico del equipo. Los códigos que no dicen nada del
+# equipo (sensor caído, job caducado o rechazado, cancelación, credencial no entregable) no
+# cambian el diagnóstico: el último que se conoce sigue siendo el válido.
+_DIAGNOSIS = {
+    "host_unreachable": "unreachable",
+    "auth_failed": "auth_failed",
+    "unsupported_version": "unsupported_version",
+    "malformed_response": "malformed_response",
+    "internal": "collector_error",
+}
+# Con alguno de estos códigos el equipo SÍ respondió por SNMP (consulta parcial o tablas que
+# no publica): es compatible.
+_ANSWERED = frozenset({"partial", "limit_exceeded", "oid_unavailable", "no_lldp", "no_cdp"})
+# Diagnósticos que indican que no hay SNMP utilizable con esta configuración: repetirlos
+# periódicamente no aporta nada (el equipo no va a cambiar solo) y gasta sensor y red.
+PAUSE_DIAGNOSES = frozenset({"no_response", "unreachable", "auth_failed", "unsupported_version"})
+_SAFE_MESSAGES = {
+    "internal": "internal error in the sensor SNMP collector (not a device diagnosis)",
+}
+
+
+def diagnose(error_code: str | None, device: NetworkDevice) -> str | None:
+    """Diagnóstico SNMP del equipo para el cierre de una consulta, o None si no cambia.
+
+    Un timeout sin ningún éxito previo no demuestra un "timeout" del equipo: con SNMPv3 un
+    equipo sin servicio SNMP (o que descarta la petición) es indistinguible de uno lento, así
+    que se informa como "no_response" (SNMP no disponible o compatibilidad sin confirmar).
+    """
+    if error_code is None or error_code in _ANSWERED:
+        return "compatible"
+    if error_code == "timeout":
+        # Una verificación de compatibilidad correcta también demuestra que el equipo responde,
+        # aunque no actualice last_success_at (no trae inventario completo).
+        answered_before = device.last_success_at is not None or device.snmp_status in (
+            "compatible",
+            "timeout",
+        )
+        return "timeout" if answered_before else "no_response"
+    return _DIAGNOSIS.get(error_code)
+
+
+def safe_error_message(error_code: str | None, message: str | None) -> str | None:
+    """Mensaje de una consulta apto para la API: un fallo interno del colector nunca se
+    presenta con el nombre de la excepción del sensor (p. ej. "snmp error: KeyError" de
+    sensores <= 0.5.0, guardado así en el historial)."""
+    if error_code in _SAFE_MESSAGES:
+        return _SAFE_MESSAGES[error_code]
+    if message and message.startswith(("snmp error:", "scan error:")):
+        return _SAFE_MESSAGES["internal"]
+    return message
+
+
+def clear_pause(device: NetworkDevice) -> None:
+    """Levanta la pausa automática. Pone a cero los fallos seguidos: si no, el siguiente fallo
+    periódico volvería a pausar el equipo sin darle una oportunidad real."""
+    if device.monitoring_paused_at is None:
+        return
+    device.monitoring_paused_at = None
+    device.monitoring_pause_reason = None
+    device.consecutive_failures = 0
+
+
+def _maybe_pause(
+    session: Session,
+    device: NetworkDevice,
+    diagnosis: str | None,
+    now: datetime,
+    trigger: str,
+    settings: Settings | None = None,
+) -> None:
+    if settings is None:
+        from app.core.config import get_settings
+
+        settings = get_settings()
+    limit = settings.snmp_auto_pause_failures
+    if (
+        not limit
+        or diagnosis not in PAUSE_DIAGNOSES
+        or not device.monitoring_enabled
+        or device.monitoring_paused_at is not None
+        or device.consecutive_failures < limit
+    ):
+        return
+    device.monitoring_paused_at = now
+    device.monitoring_pause_reason = diagnosis
+    device.version += 1
+    audit_service.record(
+        session,
+        SCHEDULER,
+        "network_monitoring_paused",
+        target_type="network_device",
+        target_id=device.public_id,
+        details={
+            "reason": diagnosis,
+            "consecutive_failures": device.consecutive_failures,
+            # Quien pausa es siempre el sistema; aquí queda qué consulta lo provocó.
+            "poll_trigger": trigger,
+        },
+        commit=False,
+    )
 
 
 def finish_poll_for_job(session: Session, job: SensorJob, now: datetime) -> None:
@@ -557,7 +679,12 @@ def complete_poll(
             fallback = "job_rejected"
         failed_code = sensor_error or fallback
         _close_poll(
-            session, poll, "failed", failed_code, (errors[0] if errors else failed_code), now
+            session,
+            poll,
+            "failed",
+            failed_code,
+            safe_error_message(failed_code, errors[0] if errors else failed_code),
+            now,
         )
         _audit_failure(session, device, poll, failed_code)
         return poll
@@ -578,16 +705,36 @@ def complete_poll(
     if missing_batches:
         message = f"{missing_batches} result batch(es) missing: partial result"
     elif errors:
-        message = errors[0]
+        message = safe_error_message(code, errors[0])
     poll.counts = result.counts
     poll.changes = result.changes
     _close_poll(session, poll, status, code, message, now)
-    device.last_modules = modules
+    check = poll.trigger == "check"
+    if not check:
+        # Una verificación (solo system) no sustituye el estado de la última consulta completa:
+        # si lo hiciera, la frescura diría "reciente" con interfaces, LLDP o FDB antiguos y se
+        # perdería la marca de tabla MAC truncada.
+        device.last_modules = modules
     if status in ("succeeded", "partial"):
-        device.last_success_at = now
+        if not check:
+            device.last_success_at = now
         device.consecutive_failures = 0
         device.last_error_code = None if status == "succeeded" else code
         device.last_error_at = None if status == "succeeded" else now
+        device.snmp_status = "compatible"
+        if device.monitoring_paused_at is not None:
+            reason = device.monitoring_pause_reason
+            clear_pause(device)
+            device.version += 1
+            audit_service.record(
+                session,
+                SCHEDULER,
+                "network_monitoring_resumed",
+                target_type="network_device",
+                target_id=device.public_id,
+                details={"reason": "poll_succeeded", "paused_reason": reason},
+                commit=False,
+            )
     changed = result.changes
     sensor = session.get(Sensor, job.sensor_id)
     if any(
@@ -654,6 +801,8 @@ def schedule_due_polls(session: Session, settings: Settings) -> dict[str, int]:
         .where(
             NetworkDevice.status == "active",
             NetworkDevice.monitoring_enabled,
+            # Fase 6D: un equipo pausado por fallos repetidos no se reintenta solo.
+            NetworkDevice.monitoring_paused_at.is_(None),
             # Sin perfil o sin sensor es configuración pendiente, no un fallo: ni se encola ni
             # se registra un intento fallido (y no ocupan el lote de los que sí se pueden).
             NetworkDevice.profile_id.is_not(None),

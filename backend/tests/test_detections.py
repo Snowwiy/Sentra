@@ -882,3 +882,30 @@ def test_migration_0018_round_trip_keeps_existing_data(client: TestClient, engin
     _send(client, agent, [ev(1102, _ago(1), level="critical")])
     _run(engine)
     assert [d["rule_id"] for d in _detections(client)] == ["DEF-001"]
+
+
+def test_correlation_wave_counts_once_despite_new_processes(
+    client: TestClient, engine: Engine
+) -> None:
+    """Fase 6D.8 (caso ravenslg): un PowerShell y UN servicio nuevo seguidos de varios
+    procesos nuevos dentro de la ventana son UNA secuencia. Antes, cada proceso nuevo volvía a
+    evaluar CORR-002, añadía evidencia y sumaba una "ocurrencia" (cooldown 0), con lo que el
+    factor de ocurrencias del riesgo subía como si se hubiera repetido el ataque."""
+    agent = _agent(client)
+    base = [f"C:\\App\\p{i}.exe" for i in range(20)]
+    _processes(client, agent, _ago(40), base)
+    _run(engine)
+    ps = ev(4104, _ago(12), channel="Microsoft-Windows-PowerShell/Operational",
+            provider="Microsoft-Windows-PowerShell")  # fmt: skip
+    svc = ev(7045, _ago(11), channel="System", provider="Service Control Manager",
+             ServiceName="DevSvc", ImagePath="C:\\Tools\\devsvc.exe")  # fmt: skip
+    _send(client, agent, [ps, svc])
+    _run(engine)
+    extra: list[str] = []
+    for minutes in (10, 8, 6, 4):
+        extra.append(f"C:\\Users\\ana\\AppData\\Local\\Temp\\tool{minutes}.exe")
+        _processes(client, agent, _ago(minutes), base + extra)
+        _run(engine)
+    corr = _by_rule(client)["CORR-002"]
+    assert corr["occurrence_count"] == 1
+    assert corr["confidence"] == "high"

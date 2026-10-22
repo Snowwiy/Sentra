@@ -233,7 +233,9 @@ ya observó, y se guarda en el activo (`services/identification.py`).
 
 ### Prioridad del nombre
 
-1. Nombre manual: no existe todavía (Sentra no permite renombrar activos).
+1. Etiqueta personalizada (Corrección 6C): la pone un admin y gana en la presentación,
+   pero no es un nombre observado; ver [asset-identity-labels.md](asset-identity-labels.md),
+   que también describe los nombres genéricos, las clases de nombre y su prioridad.
 2. Hostname reportado por el agente (MANAGED).
 3. Nombre DHCP: Sentra no es servidor DHCP; el DNS del router suele registrar esos
    nombres y llegan por el punto siguiente.

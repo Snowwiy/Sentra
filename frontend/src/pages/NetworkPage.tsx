@@ -1,7 +1,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { sentraApi as api, type AssetSortKey } from "../api/sentra";
-import type { DiscoveryJob, MonitoringMethod } from "../api/types";
+import type { Asset, DiscoveryJob, MonitoringMethod } from "../api/types";
+import { useAuth } from "../auth/AuthContext";
+import { AssetLabelDialog } from "../components/asset/AssetLabelDialog";
 import {
   DISABLED_MESSAGE,
   DISCOVERY_FEATURE,
@@ -115,6 +117,9 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
   const schedule = usePolling(fetchSchedule, SCHEDULE_MS);
   const consoleState = useConsole(DISCOVERY_FEATURE, "discovery:run");
   const [modal, setModal] = useState<ModalState>();
+  // Corrección 6C: etiqueta personalizada desde la propia tabla (assets:manage).
+  const canLabel = useAuth().can("assets:manage");
+  const [labelAsset, setLabelAsset] = useState<Asset>();
   const [tab, setTab] = useState<NetworkTab>("assets");
   const tableRef = useRef<HTMLElement>(null);
   const navigate = useNavigate();
@@ -359,7 +364,7 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
                           onClick={() => navigate(`/assets/${asset.asset_id}`)}
                         >
                           <td>
-                            <AssetName asset={asset} showIp={false} />
+                            <AssetName asset={asset} showIp={false} onEditLabel={canLabel ? setLabelAsset : undefined} />
                           </td>
                           <td className="mono">{asset.primary_ip}</td>
                           <td className="small muted">
@@ -383,7 +388,7 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
                             {asset.last_network_seen_at ? formatRelative(asset.last_network_seen_at) : "—"}
                           </td>
                           <td>
-                            <PortList ports={asset.open_ports} />
+                            <PortList ports={asset.open_ports} address={asset.primary_ip} />
                           </td>
                         </tr>
                       ))}
@@ -404,6 +409,10 @@ function NetworkView({ scopeId }: { scopeId: string | undefined }) {
         onOpen={(job) => setModal({ jobId: job.job_id })}
         showSite={showSite}
       />
+
+      {labelAsset && (
+        <AssetLabelDialog asset={labelAsset} onClose={() => setLabelAsset(undefined)} onSaved={() => refreshList()} />
+      )}
 
       {modal && (
         <DiscoveryModal

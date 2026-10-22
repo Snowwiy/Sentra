@@ -69,6 +69,9 @@ puede superar el `max_hosts` efectivo del job (`discovery_scope_too_large`).
 ## Sensor
 
 - Tipo de job `discovery_advanced`, esquema versionado (`schema_version: 1`, claves exactas).
+  Corrección 6C: `schema_version: 2` añade `identify` y `max_name_queries` (sondas de nombre
+  mDNS/NetBIOS/SSDP/UPnP) y solo se envía a sensores 0.5.0 con la capacidad
+  `network.discovery.names`; ver [asset-identity-labels.md](asset-identity-labels.md).
 - Capability requerida `network.discovery.advanced` (sensor 0.2.0). A un sensor 0.1.x nunca
   se le asigna (409 `sensor_not_available`, `details[0].required_capability`); sigue
   recibiendo `discovery_basic`.

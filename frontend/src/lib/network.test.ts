@@ -134,3 +134,19 @@ describe("device form", () => {
     });
   });
 });
+
+// Fase 6D.4: estado SNMP con los textos del contrato y sin nombres de excepción.
+describe("estado SNMP", () => {
+  it("traduce cada estado y tolera valores nuevos sin mostrar detalles internos", async () => {
+    const { SNMP_STATUS_LABELS, snmpStatusText, snmpErrorText, POLL_TRIGGER_LABELS, MONITORING_STATUS_LABELS } = await import(
+      "./network"
+    );
+    expect(snmpStatusText("compatible")).toBe("SNMP operativo");
+    expect(snmpStatusText(null)).toBe("Sin verificar");
+    expect(snmpStatusText("future_state")).toBe("Estado SNMP desconocido (future_state)");
+    expect(Object.keys(SNMP_STATUS_LABELS)).toHaveLength(9);
+    expect(snmpErrorText("internal")).toBe("Error interno del colector");
+    expect(POLL_TRIGGER_LABELS.check).toBe("verificación");
+    expect(MONITORING_STATUS_LABELS.paused).toBe("En pausa");
+  });
+});

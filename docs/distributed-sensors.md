@@ -11,6 +11,10 @@ Fase 6A: los sensores 0.2.0 aceptan además `discovery_advanced` (capability
 `network.discovery.advanced`, límites revalidados en el sensor); ver
 [advanced-network-discovery.md](advanced-network-discovery.md).
 
+Corrección 6C: los sensores 0.5.0 declaran además `network.discovery.names` y reciben
+`discovery_advanced` con `schema_version: 2` (sondas de nombre mDNS, NetBIOS y SSDP/UPnP con
+presupuesto propio); ver [asset-identity-labels.md](asset-identity-labels.md).
+
 ## Arquitectura
 
 ```

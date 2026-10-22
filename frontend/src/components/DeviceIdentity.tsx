@@ -1,11 +1,15 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router-dom";
 import type { Asset, ClassificationConfidence } from "../api/types";
+import { formatDateTime } from "../lib/format";
 import {
   NAME_SOURCE_LABELS,
   assetTitle,
+  automaticTitle,
   confidenceLabel,
   evidenceLabel,
+  nameStatusHelp,
+  observedNameNote,
   osLabel,
   typeWithConfidence,
 } from "../lib/identity";
@@ -34,22 +38,48 @@ export function AssetName({
   asset,
   link = true,
   showIp = true,
+  onEditLabel,
 }: {
   asset: Asset;
   link?: boolean;
   showIp?: boolean;
+  /** Corrección 6C: acceso rápido a la etiqueta (solo se pasa con assets:manage). */
+  onEditLabel?: (asset: Asset) => void;
 }) {
   const title = assetTitle(asset);
-  const named = Boolean(asset.device_name || asset.hostname);
+  const named = Boolean(asset.custom_label || asset.device_name || asset.hostname);
+  // Con etiqueta, el nombre automático queda a la vista (en el tooltip y debajo).
+  const automatic = asset.custom_label ? automaticTitle(asset) : null;
+  // Fase 6D.3: sin nombre útil, el tooltip explica por qué (no es un fallo de Sentra).
+  const why = asset.custom_label ? null : nameStatusHelp(asset.name_status);
   return (
     <div className="asset-name">
       {link ? (
-        <Link to={`/assets/${asset.asset_id}`} className={named ? "strong" : "strong muted"}>
+        <Link
+          to={`/assets/${asset.asset_id}`}
+          className={named ? "strong" : "strong muted"}
+          title={automatic ? `Etiqueta personalizada. Nombre automático: ${automatic}` : (why ?? undefined)}
+        >
           {title}
         </Link>
       ) : (
         <span className="strong">{title}</span>
       )}
+      {onEditLabel && (
+        <button
+          type="button"
+          className="button button--small asset-name__edit"
+          aria-label={`Editar etiqueta de ${title}`}
+          onClick={(event) => {
+            // La fila de la tabla navega al detalle: editar no debe hacerlo.
+            event.stopPropagation();
+            onEditLabel(asset);
+          }}
+        >
+          {asset.custom_label ? "Editar" : "Etiquetar"}
+        </button>
+      )}
+      {automatic && <div className="small muted">auto: {automatic}</div>}
       {showIp && <div className="mono small muted">{asset.primary_ip}</div>}
     </div>
   );
@@ -92,12 +122,48 @@ export function IdentificationPanel({ asset }: { asset: Asset }) {
         </span>
       </div>
       <dl className="fields">
-        <Row label="Nombre">
-          {assetTitle(asset)}
-          {asset.name_source && (
+        {asset.custom_label && (
+          <Row label="Etiqueta">
+            {asset.custom_label}
+            <span className="muted small">
+              {" "}
+              (personalizada
+              {asset.custom_label_updated_by && ` por ${asset.custom_label_updated_by}`}
+              {asset.custom_label_updated_at && `, ${formatDateTime(asset.custom_label_updated_at)}`})
+            </span>
+          </Row>
+        )}
+        <Row label={asset.custom_label ? "Nombre automático" : "Nombre"}>
+          {automaticTitle(asset)}
+          {asset.device_name && asset.name_source && (
             <span className="muted small"> ({NAME_SOURCE_LABELS[asset.name_source] ?? asset.name_source})</span>
           )}
+          {!asset.custom_label && nameStatusHelp(asset.name_status) && (
+            <div className="muted small" data-testid="name-status-help">
+              {nameStatusHelp(asset.name_status)}
+            </div>
+          )}
         </Row>
+        {asset.observed_names.length > 0 && (
+          <Row label="Nombres observados">
+            <ul className="plain-list small" aria-label="Nombres observados">
+              {asset.observed_names.map((name) => (
+                <li key={`${name.source}:${name.value}`}>
+                  <span className={name.kind === "generic" || name.confirmed === false ? "muted" : undefined}>
+                    {name.value}
+                  </span>
+                  {name.selected && (
+                    <>
+                      {" "}
+                      <span className="badge badge--info">elegido</span>
+                    </>
+                  )}{" "}
+                  <span className="muted">{observedNameNote(name)}</span>
+                </li>
+              ))}
+            </ul>
+          </Row>
+        )}
         <Row label="IP">
           <span className="mono">{asset.primary_ip}</span>
         </Row>

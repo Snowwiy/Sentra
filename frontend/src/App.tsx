@@ -73,6 +73,8 @@ const InfrastructureDevicePage = lazy(() =>
 // Fase 6C.3: inventario Wi-Fi / AP / WLAN en su propio chunk.
 const WlanPage = lazy(() => import("./pages/WlanPage").then((m) => ({ default: m.WlanPage })));
 const infrastructureFallback = <LoadingState label="Cargando infraestructura…" />;
+// Topología de red (Fase 6D): su propio chunk (lienzo SVG y exportación).
+const TopologyPage = lazy(() => import("./pages/TopologyPage").then((m) => ({ default: m.TopologyPage })));
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -341,6 +343,16 @@ export function AppRoutes() {
               <RequirePermission permission="monitoring:read">
                 <Suspense fallback={<LoadingState label="Cargando Wi-Fi…" />}>
                   <WlanPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="topology"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={<LoadingState label="Cargando topología…" />}>
+                  <TopologyPage />
                 </Suspense>
               </RequirePermission>
             }

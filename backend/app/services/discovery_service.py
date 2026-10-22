@@ -67,7 +67,12 @@ from app.models.inventory import AssetInventory
 from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.discovery_observations import ObservationRecorder
-from app.services.identification import oui_database, record_observation, refresh_identity
+from app.services.identification import (
+    oui_database,
+    record_observation,
+    record_reverse_dns,
+    refresh_identity,
+)
 from app.services.reconciliation import interface_identity
 from app.services.site_service import default_site_id
 from app.vulnerabilities.queue import mark_dirty
@@ -828,8 +833,9 @@ class ResultApplier:
         asset.discovery_sources = sorted(set(asset.discovery_sources or ()) | obs.sources)
         if obs.mac and not asset.mac_address:
             asset.mac_address = obs.mac
-        if obs.reverse_dns:
-            asset.reverse_dns = obs.reverse_dns
+        # Corrección 6C: el DNS inverso nuevo solo sustituye al anterior si no es más débil
+        # (genérico o desmentido por la consulta directa frente a uno confirmado).
+        record_reverse_dns(asset, obs.reverse_dns, obs.forward_dns_match, now)
         if not asset.is_managed:
             # The agent reports its own address; a discovered host is where it was seen.
             asset.primary_ip = obs.address
@@ -948,7 +954,7 @@ class ResultApplier:
         # Sin tabla de rutas legible no sabemos quién es el gateway: None conserva lo anterior
         # en vez de "desclasificar" el router por un fallo de lectura del propio servidor.
         is_gateway = (obs.address in self._gateways) if self._gateways else None
-        record_observation(asset, obs, is_gateway)
+        record_observation(asset, obs, is_gateway, now)
         change = refresh_identity(asset, open_ports, self._oui)
         # Un cambio de tipo es historial, no una alerta de seguridad: una heurística que
         # mejora con más evidencia no debe despertar a nadie.

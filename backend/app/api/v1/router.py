@@ -31,6 +31,7 @@ from app.api.v1.routes import (
     sites,
     telemetry,
     threat_intel,
+    topology,
     users,
     vulnerabilities,
     vulnerability_sources,
@@ -78,3 +79,4 @@ api_router.include_router(sensors.router, responses=_COMMON)
 api_router.include_router(sensor_protocol.router, responses=_COMMON)
 api_router.include_router(network.router, responses=_COMMON)
 api_router.include_router(wlan.router, responses=_COMMON)
+api_router.include_router(topology.router, responses=_COMMON)

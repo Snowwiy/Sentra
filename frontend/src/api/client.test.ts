@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ApiError, apiGet, apiPost, onUnauthorized, setCsrfToken } from "./client";
+import { ApiError, apiDownload, apiGet, apiPost, onUnauthorized, setCsrfToken } from "./client";
 
 function respond(status: number, body: string, contentType = "application/json") {
   const fetchMock = vi.fn(async () => new Response(body, { status, headers: { "Content-Type": contentType } }));
@@ -217,5 +217,83 @@ describe("mensajes de política", () => {
     expect((await failure(apiPost("/users", {}))).message).toBe("Ya existe un usuario con ese nombre.");
     respond(409, JSON.stringify({ error: { code: "conflict", message: "Something else" } }));
     expect((await failure(apiPost("/users", {}))).message).toBe("Something else");
+  });
+});
+
+// Fase 6D.6: lo que pasa DESPUÉS de recibir cabeceras no es "API no disponible".
+describe("apiDownload", () => {
+  it("devuelve blob, nombre y SHA-256 de las cabeceras", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response("abc", {
+            status: 200,
+            headers: { "Content-Disposition": 'attachment; filename="../x/informe.pdf"', "X-Sentra-SHA256": " ABCDEF " },
+          }),
+      ),
+    );
+    const file = await apiDownload("/reports/1/artifact");
+    expect(file.filename).toBe("informe.pdf");
+    expect(file.sha256).toBe("abcdef");
+    expect(file.blob.size).toBe(3);
+  });
+
+  it("un cuerpo cortado a mitad es download_interrupted con el estado HTTP real", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(
+        async () =>
+          new Response(
+            new ReadableStream({
+              start(controller) {
+                controller.error(new TypeError("terminated"));
+              },
+            }),
+            { status: 200 },
+          ),
+      ),
+    );
+    const error = await failure(apiDownload("/reports/1/artifact"));
+    expect(error.code).toBe("download_interrupted");
+    expect(error.status).toBe(200);
+  });
+
+  it("un plazo vencido (AbortSignal.timeout) es timeout, no network_error", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("signal timed out", "TimeoutError");
+      }),
+    );
+    const error = await failure(apiDownload("/reports/1/artifact"));
+    expect(error.code).toBe("timeout");
+    expect(error.status).toBe(0);
+  });
+
+  it("una cancelación se propaga como AbortError (la UI no avisa)", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new DOMException("aborted", "AbortError");
+      }),
+    );
+    await expect(apiDownload("/reports/1/artifact")).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("un 502 del proxy sin sobre conserva network_error con el estado", async () => {
+    respond(502, "", "text/plain");
+    const error = await failure(apiDownload("/reports/1/artifact"));
+    expect(error.code).toBe("network_error");
+    expect(error.status).toBe(502);
+  });
+});
+
+describe("mensajes de topología", () => {
+  it("traduce el conflicto de revisión y la reconstrucción en curso", async () => {
+    respond(409, JSON.stringify({ error: { code: "topology_link_conflict", message: "x" } }));
+    expect((await failure(apiPost("/topology/links/1/review", {}))).message).toMatch(/Otro administrador ha revisado/);
+    respond(409, JSON.stringify({ error: { code: "topology_build_running", message: "x" } }));
+    expect((await failure(apiPost("/topology/rebuild", {}))).message).toMatch(/reconstrucción de la topología en curso/);
   });
 });

@@ -24,17 +24,89 @@ consultas ni tipos definidos por el usuario.
 | `response_activity` | Actividad de Response | html, pdf, csv, evidence | activos, ejecuciones, playbooks, estados, include_archived | analyst |
 | `lifecycle_change` | Ciclo de vida y cambios | html, pdf, csv | activos, plataformas, include_archived | analyst |
 
-Cada tipo lleva `template_version` (hoy 1). Cambiar lo que muestra una plantilla obliga a
-subirla; los informes ya generados conservan la versión con que se hicieron.
+Cada tipo lleva `template_version` (hoy 2, ver "Plantilla v2"). Cambiar lo que muestra una
+plantilla obliga a subirla; los informes ya generados conservan la versión con que se hicieron.
 
 El resumen ejecutivo omite IDs, direcciones IP y evidencia técnica: solo cifras agregadas,
 estado general, hallazgos principales y frases deterministas.
+
+## Plantilla v2 (Fase 6D.5)
+
+Los informes nuevos se generan con la plantilla **v2**; los v1 ya generados no cambian.
+
+**Cómo se versiona.** La versión vive donde ya vivía: la columna `reports.template_version`
+y `snapshot.meta.template_version` (sin migración). El catálogo fija la de los informes
+nuevos (`TEMPLATE_VERSION = 2` en `app/reports/catalog.py`) y `render_document` elige la
+plantilla por la versión **del snapshot**, nunca por la del catálogo: un snapshot v1 guardado
+se vuelve a renderizar con la plantilla y los renderers v1 y produce los mismos bytes que
+antes (lo comprueban `tests/test_reports_v2.py` con hashes obtenidos del código anterior).
+La petición no elige plantilla: no hay forma de pedir hoy un informe nuevo en v1.
+
+**Datos adicionales.** Con v2 el snapshot lleva además `extended`, construido por
+`app/reports/builders_v2.py` en la **misma** transacción REPEATABLE READ y con la misma hora
+de corte. Las gráficas salen solo del snapshot: el render nunca consulta la base de datos.
+
+| Gráfica | Tipos | Origen en el snapshot |
+|---|---|---|
+| Evolución del riesgo por activo (líneas, 0-100) | ejecutivo, técnico, riesgo, activo | `extended.risk_history` (snapshots del Risk Engine y último valor anterior al periodo) / `data.risk.history` |
+| Detecciones por severidad y estado (apiladas) | técnico, activo, detecciones | `extended.detection_matrix` |
+| Aportes al Risk Engine por categoría y por regla | técnico, riesgo, activo | `extended.risk_contributions` (suma de `asset_risk.contributions` vigentes) / `data.risk.contributions` |
+| Tendencia diaria (semanal en rangos > 92 días) de eventos y detecciones | ejecutivo, técnico, activo, detecciones | `extended.activity` (cubos con ceros) |
+| Comparativa de activos por criticidad y nivel | ejecutivo, técnico, riesgo | `extended.criticality` |
+| Vulnerabilidades por severidad y evidencia, y exposición (puertos) | ejecutivo, técnico, activo, vulnerabilidades | datos v1 + `extended.exposure` |
+| Topología verificada (diagrama estático) | técnico, activo | `extended.topology` (`app.topology.service.report_topology`) |
+| Tendencias de Response y de activos nuevos, actividad del incidente | Response, ciclo de vida, incidente | `extended.executions`, `extended.new_assets`, filas del snapshot |
+
+**Estructura del documento.** Portada técnica con identidad SENTRA (vectorial, sin
+imágenes), índice con número de página, resumen ejecutivo con indicadores y hora de corte,
+hallazgos prioritarios, metodología y alcance, análisis gráfico, secciones de detalle (las
+tablas de v1 con estados legibles), topología verificada, trazabilidad del cálculo de riesgo
+(si el Risk Engine guardó `breakdown.trace` y `details.nominal_breakdown`; si no, la sección no
+aparece), evidencias y referencias, recomendaciones (cada una nombra el dato que la motiva),
+conclusiones y anexo técnico (metadatos, versiones, tablas truncadas, serie temporal y
+glosario). Todas las frases son deterministas y salen de cifras del snapshot.
+
+**Estados de los datos.** Se distinguen siempre: `0` (medido y cero), "Sin datos en el
+periodo" (la fuente existe pero no hay registros), "No medido" con el motivo (p. ej. eventos
+sin ningún agente en el alcance, exposición de activos sin escaneo de puertos), "Desconocido"
+y "Sin calcular" (activo aún no puntuado por el Risk Engine). Una serie no medida nunca se
+dibuja como ceros.
+
+**Gráficas.** Vectoriales y deterministas: SVG en línea en HTML y operadores vectoriales en
+PDF, con título, unidad, ejes con marcas (enteras para recuentos), valores, leyenda y notas.
+Como máximo 15 categorías por gráfica (las de más valor) y "Y N categorías más"; los valores
+no finitos o negativos no se dibujan; los enormes se compactan (M, mil M, B).
+
+**Topología.** Solo enlaces presentes, no rechazados y de clase física, lógica u observada
+entre nodos del resultado; los candidatos y desconocidos no se dibujan y nunca se infiere un
+enlace. La disposición se calcula al construir el documento: raíz = router/firewall (o la
+infraestructura con más enlaces), capas por distancia, orden por baricentro y etiqueta, capas
+anchas plegadas en filas de 8. Sin relaciones verificadas, una nota explícita. Si el motor de
+topología no está disponible o falla, la sección lo dice y el informe se genera igualmente
+(la llamada va en un SAVEPOINT). Tope de 60 nodos y 3 sites; debajo del diagrama, la tabla
+completa de enlaces.
+
+**Paginación del PDF v2.** Secciones principales en página nueva, títulos que se mantienen
+con su primer bloque, gráficas que no se parten, tablas con la cabecera repetida en cada
+página y el rótulo "(continuación)", filas que nunca se cortan entre páginas (las celdas muy
+largas se acotan a 10 líneas con "…"; el HTML y el CSV conservan el texto completo) y
+"Página X de Y" en todas las páginas.
+
+**Caracteres en el PDF.** Sin fuentes incrustadas (licencia, tamaño y determinismo): se
+mantienen Helvetica con WinAnsiEncoding (cp1252: español, €, comillas tipográficas, rayas,
+viñetas). `app/reports/charset.py` translitera de forma determinista los símbolos frecuentes
+(→ `->`, ≥ `>=`, ≤ `<=`, ≠ `!=`, ✓ `[OK]`, ✗ `[X]`, espacios especiales, guiones Unicode,
+comillas angulares, superíndices `^n`, letras con diacríticos fuera de cp1252 vía NFKD) y lo
+que siga sin representación se escribe como `[U+XXXX]` (nunca "?"). Limitación: el texto en
+otras escrituras (cirílico, CJK, árabe…) y los emojis aparecen en el PDF como marcadores; el
+HTML conserva siempre el Unicode completo. Solo v2: v1 conserva su "?".
 
 ## Formatos
 
 - **HTML**: documento autocontenido (CSS en línea, gráficos SVG en línea), sin scripts, sin
   recursos externos y con CSP `default-src 'none'`. Se puede abrir sin conexión.
-- **PDF**: generado por un escritor PDF propio (`app/reports/render_pdf.py`), sin
+- **PDF**: generado por un escritor PDF propio (`app/reports/render_pdf.py`; v2 en
+  `app/reports/render_pdf_v2.py`), sin
   dependencias nuevas, sin navegador y sin Internet. Fuentes estándar Helvetica (WinAnsi),
   tablas con cabecera repetida en cada página, gráficos de barras vectoriales, cabecera con
   clasificación y pie con "Página X de Y". Sin enlaces, JavaScript ni ficheros incrustados.
@@ -144,3 +216,8 @@ Menú **Informes**: catálogo, rango (24 h, 7 d, 30 d, 90 d o personalizado), fi
 formato, clasificación, vista previa, generar, historial, detalle, descarga (verifica el
 SHA-256 en el navegador) y checksum. Botones "Generar informe" en Incidente, Activo,
 Detección y Response. La UI nunca renderiza el HTML de un informe dentro de la aplicación.
+
+Errores de descarga (Fase 6D.6): el aviso «No se pudo conectar con la API de Sentra» indica que
+la API no respondía en ese instante (normalmente un reinicio de uvicorn `--reload` o un 502 del
+proxy), no que el informe falte. Diagnóstico, reproducción y la tabla de mensajes separados en
+[report-download-errors.md](report-download-errors.md).

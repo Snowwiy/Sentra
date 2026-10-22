@@ -18,6 +18,19 @@ TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "t
 
 # TypeScript interface -> OpenAPI schema (response models only).
 INTERFACES = {
+    # Fase 6D.1: topología de red.
+    "TopologySiteRef": "TopologySiteRef",
+    "TopologyBuild": "TopologyBuild",
+    "TopologyNode": "TopologyNode",
+    "TopologyLink": "TopologyLink",
+    "TopologyEvidence": "TopologyEvidence",
+    "TopologyLinkDetail": "TopologyLinkDetail",
+    "TopologyLinkList": "TopologyLinkList",
+    "TopologyGroup": "TopologyGroup",
+    "TopologyGraph": "TopologyGraph",
+    "TopologyNodeDetail": "TopologyNodeDetail",
+    "TopologyEvidenceAvailability": "TopologyEvidenceAvailability",
+    "TopologyStatus": "TopologyStatus",
     # Fase 6C.4: fuentes oficiales del catálogo.
     "VulnerabilitySource": "VulnerabilitySourceRead",
     "VulnerabilitySourceList": "VulnerabilitySourceList",

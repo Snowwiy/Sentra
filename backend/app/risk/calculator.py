@@ -303,6 +303,9 @@ class _Item:
     exposure: ExposureInput | None = None
     vulnerability: VulnerabilityInput | None = None
     threat: ThreatMatchInput | None = None
+    # Fase 6D: factores que componen `nominal` (solo detecciones), para explicar el score
+    # paso a paso sin recalcularlo en la API ni en los informes.
+    factors: dict[str, float] | None = None
 
 
 def half_life_factor(age_seconds: float, half_life_seconds: float) -> float:
@@ -349,6 +352,12 @@ def _detection_item(d: DetectionInput, config: RiskConfig, now: datetime) -> _It
         # Sin resolver nunca baja del suelo: una detección abierta olvidada sigue contando.
         recency = max(config.active_floor, recency)
         status = config.status_factor[d.status]
+    factors = {
+        "severity_points": config.severity_points[d.severity],
+        "confidence_factor": config.confidence_factor[d.confidence],
+        "occurrence_factor": round(_occurrence_factor(d.occurrence_count, config), 4),
+        "correlation_factor": config.correlation_factor if d.kind == "correlation" else 1.0,
+    }
     nominal = (
         config.severity_points[d.severity]
         * config.confidence_factor[d.confidence]
@@ -369,6 +378,7 @@ def _detection_item(d: DetectionInput, config: RiskConfig, now: datetime) -> _It
         # Orden estable en empates: más reciente, luego regla y id.
         order=(-d.last_seen_at.timestamp(), d.rule_id, d.id),
         detection=d,
+        factors=factors,
     )
 
 
@@ -747,6 +757,21 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         "data_completeness": completeness,
         "omitted_contributions": omitted,
         "thresholds": list(config.thresholds),
+        # Fase 6D.8: la cadena completa del cálculo en un solo sitio (base x criticidad x tipo
+        # x contexto = bruto; saturación por encima del codo; redondeo = score). Permite
+        # explicar, por ejemplo, por qué una sola correlación fuerte en un activo crítico
+        # queda cerca de 100 sin que el motor cambie de comportamiento.
+        "trace": {
+            "base_points": _round(base),
+            "criticality_factor": criticality,
+            "type_factor": type_factor,
+            "context_factor": context_factor,
+            "raw_points": _round(raw),
+            "saturation_knee": config.saturation_knee,
+            "saturated_points": _round(saturated),
+            "score": score,
+            "formula_version": FORMULA_VERSION,
+        },
     }
     return RiskResult(
         score=score,
@@ -869,6 +894,7 @@ def _lead_contribution(
                 "status": d.status.value,
                 "occurrence_count": d.occurrence_count,
                 "last_seen_at": d.last_seen_at.isoformat(),
+                "nominal_breakdown": dict(lead.factors or {}),
             },
         )
     v = lead.vulnerability
@@ -912,6 +938,7 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
                 "status": d.status.value,
                 "occurrence_count": d.occurrence_count,
                 "last_seen_at": d.last_seen_at.isoformat(),
+                "nominal_breakdown": dict(item.factors or {}),
             },
         )
     v = item.vulnerability

@@ -603,7 +603,7 @@ class RepeatedRule:
 
 CORR_001 = RuleMeta(
     id="CORR-001",
-    version=1,
+    version=2,
     kind=CORRELATION,
     category="authentication",
     title="Posible acceso no autorizado tras fallos de inicio de sesión",
@@ -634,6 +634,10 @@ CORR_001 = RuleMeta(
         " aislar el equipo según el procedimiento institucional.",
     ),
     mitre=Mitre("TA0006", "T1110"),
+    # Fase 6D.8 (v2): una oleada dura la ventana de la correlación. Antes, con cooldown 0, cada
+    # evaluación que añadía evidencia (p. ej. cada proceso nuevo en la ventana) contaba como
+    # otra ocurrencia de la MISMA secuencia e inflaba el factor de ocurrencias del riesgo.
+    cooldown_setting="correlation_window",
 )
 
 
@@ -747,7 +751,7 @@ class FailedThenSuccess:
 
 CORR_002 = RuleMeta(
     id="CORR-002",
-    version=1,
+    version=2,
     kind=CORRELATION,
     category="persistence",
     title="PowerShell sospechoso seguido de persistencia",
@@ -784,6 +788,10 @@ CORR_002 = RuleMeta(
         " institucional antes de borrar nada (conservar evidencia).",
     ),
     mitre=Mitre("TA0003", "T1543", "T1543.003"),
+    # Fase 6D.8 (v2): una oleada dura la ventana de la correlación. Antes, con cooldown 0, cada
+    # evaluación que añadía evidencia (p. ej. cada proceso nuevo en la ventana) contaba como
+    # otra ocurrencia de la MISMA secuencia e inflaba el factor de ocurrencias del riesgo.
+    cooldown_setting="correlation_window",
 )
 
 
@@ -835,7 +843,7 @@ class PowerShellPersistence:
 
 CORR_003 = RuleMeta(
     id="CORR-003",
-    version=1,
+    version=2,
     kind=CORRELATION,
     category="network",
     title="Nueva exposición de red asociada a software local",
@@ -869,6 +877,10 @@ CORR_003 = RuleMeta(
         "Restringir el puerto con el firewall a los orígenes necesarios.",
         "Revisar si el servicio se expone fuera de la red prevista.",
     ),
+    # Fase 6D.8 (v2): una oleada dura la ventana de la correlación. Antes, con cooldown 0, cada
+    # evaluación que añadía evidencia (p. ej. cada proceso nuevo en la ventana) contaba como
+    # otra ocurrencia de la MISMA secuencia e inflaba el factor de ocurrencias del riesgo.
+    cooldown_setting="change_window",
 )
 
 
@@ -926,7 +938,7 @@ class ExposureWithNewSoftware:
 
 CORR_004 = RuleMeta(
     id="CORR-004",
-    version=1,
+    version=2,
     kind=CORRELATION,
     category="account",
     title="Cuenta nueva con privilegios y usada",
@@ -955,6 +967,10 @@ CORR_004 = RuleMeta(
         "Revisar el resto de grupos privilegiados del activo.",
     ),
     mitre=Mitre("TA0003", "T1136"),
+    # Fase 6D.8 (v2): una oleada dura la ventana de la correlación. Antes, con cooldown 0, cada
+    # evaluación que añadía evidencia (p. ej. cada proceso nuevo en la ventana) contaba como
+    # otra ocurrencia de la MISMA secuencia e inflaba el factor de ocurrencias del riesgo.
+    cooldown_setting="correlation_window",
 )
 
 
@@ -1097,7 +1113,7 @@ LIN_AUTH_001 = RuleMeta(
 
 LIN_AUTH_002 = RuleMeta(
     id="LIN-AUTH-002",
-    version=1,
+    version=2,
     kind=CORRELATION,
     category="authentication",
     title="Acceso SSH tras fallos repetidos (Linux)",
@@ -1128,6 +1144,10 @@ LIN_AUTH_002 = RuleMeta(
         " privilegiados, y aislar el equipo según el procedimiento institucional.",
     ),
     mitre=Mitre("TA0006", "T1110"),
+    # Fase 6D.8 (v2): una oleada dura la ventana de la correlación. Antes, con cooldown 0, cada
+    # evaluación que añadía evidencia (p. ej. cada proceso nuevo en la ventana) contaba como
+    # otra ocurrencia de la MISMA secuencia e inflaba el factor de ocurrencias del riesgo.
+    cooldown_setting="correlation_window",
 )
 
 _KERNEL_CATEGORY = {

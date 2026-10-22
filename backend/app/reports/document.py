@@ -41,6 +41,19 @@ class Table:
 class BarChart:
     title: str
     items: tuple[tuple[str, float], ...]
+    # Campos de la plantilla v2 (Fase 6D.5). Los renderers v1 no los leen y las plantillas
+    # v1 nunca los rellenan, así que la salida v1 no cambia.
+    # Unidad del eje de valores ("detecciones", "puntos de riesgo"...).
+    unit: str = ""
+    note: str | None = None
+    # Categorías sin valor numérico y el motivo, que se muestra en lugar de una barra: así un
+    # dato no medido o desconocido nunca se dibuja como 0.
+    missing: tuple[tuple[str, str], ...] = ()
+    # Categorías que no se dibujan por el tope de la gráfica ("y N más").
+    more: int = 0
+    # Color de cada barra (hex "#rrggbb" de las paletas de este módulo); vacío = color base.
+    colors: tuple[str, ...] = ()
+    empty_text: str = "Sin datos en el periodo."
 
 
 @dataclass(frozen=True)
@@ -115,3 +128,166 @@ def bars(title: str, counts: dict[str, Any] | None, labels: dict[str, str] | Non
     if not items:
         return Paragraph(f"{title}: sin datos.")
     return BarChart(title, items)
+
+
+# --- Documento v2 (Fase 6D.5) ----------------------------------------------------------------
+#
+# La plantilla v2 añade bloques nuevos (gráficas apiladas, de líneas, diagrama de topología,
+# indicadores, subtítulos y saltos de página) sin tocar los de v1: los renderers v1 siguen
+# recibiendo solo `Document` con bloques v1, y los v2 reciben `DocumentV2`. Todo bloque v2 es
+# un dato ya resuelto (posiciones, colores de una paleta cerrada, textos planos): los
+# renderers no consultan nada ni toman decisiones que dependan de otra cosa que el bloque.
+
+# Paletas cerradas. Los renderers solo aceptan colores con forma "#rrggbb" y las plantillas
+# solo usan estos valores.
+BRAND = "#1f4e79"
+SEVERITY_COLORS = {
+    "critical": "#9b1c1c",
+    "high": "#d9480f",
+    "medium": "#e8a317",
+    "low": "#2b6cb0",
+    "informational": "#718096",
+}
+CATEGORICAL = (
+    "#1f4e79",
+    "#d9480f",
+    "#2f855a",
+    "#805ad5",
+    "#b7791f",
+    "#c53030",
+    "#319795",
+    "#4a5568",
+)
+LINK_STYLES = {"physical": "solid", "logical": "dashed", "observed": "dotted"}
+
+
+@dataclass(frozen=True)
+class StackedBarChart:
+    """Barras horizontales apiladas: una fila por categoría y un tramo por serie."""
+
+    title: str
+    series: tuple[str, ...]
+    rows: tuple[tuple[str, tuple[float, ...]], ...]
+    colors: tuple[str, ...]
+    unit: str = ""
+    note: str | None = None
+    missing: tuple[tuple[str, str], ...] = ()
+    more: int = 0
+    empty_text: str = "Sin datos en el periodo."
+
+
+@dataclass(frozen=True)
+class LineSeries:
+    label: str
+    # (x en [0, 1] sobre el eje temporal, valor). La posición se calcula en la plantilla a
+    # partir de las fechas del snapshot: el renderer solo escala.
+    points: tuple[tuple[float, float], ...]
+    color: str
+
+
+@dataclass(frozen=True)
+class LineChart:
+    title: str
+    series: tuple[LineSeries, ...]
+    x_ticks: tuple[tuple[float, str], ...]
+    unit: str
+    # Máximo fijo del eje (p. ej. 100 en el score de riesgo); None = automático.
+    y_max: float | None = None
+    x_label: str = ""
+    note: str | None = None
+    missing: tuple[tuple[str, str], ...] = ()
+    more: int = 0
+    empty_text: str = "Sin datos en el periodo."
+
+
+@dataclass(frozen=True)
+class DiagramNode:
+    key: str
+    label: str
+    # Posición normalizada (0..1) calculada al construir el documento (disposición
+    # determinista por capas); el renderer solo la escala a su lienzo.
+    x: float
+    y: float
+    role: str
+
+
+@dataclass(frozen=True)
+class DiagramEdge:
+    source: str
+    target: str
+    kind: str
+
+
+@dataclass(frozen=True)
+class Diagram:
+    title: str
+    nodes: tuple[DiagramNode, ...]
+    edges: tuple[DiagramEdge, ...]
+    # Filas de nodos (para que el renderer reserve la altura adecuada).
+    rows: int
+    legend: tuple[tuple[str, str], ...]
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Metric:
+    label: str
+    value: str
+    detail: str = ""
+
+
+@dataclass(frozen=True)
+class Metrics:
+    items: tuple[Metric, ...]
+    note: str | None = None
+
+
+@dataclass(frozen=True)
+class Subheading:
+    text: str
+
+
+@dataclass(frozen=True)
+class PageBreak:
+    pass
+
+
+BlockV2 = (
+    Paragraph
+    | Bullets
+    | KeyValues
+    | Table
+    | BarChart
+    | Notice
+    | StackedBarChart
+    | LineChart
+    | Diagram
+    | Metrics
+    | Subheading
+    | PageBreak
+)
+
+
+@dataclass(frozen=True)
+class SectionV2:
+    title: str
+    blocks: tuple[BlockV2, ...]
+    # Las secciones principales (resumen, anexo) empiezan en página nueva en PDF e impresión.
+    new_page: bool = False
+
+
+@dataclass(frozen=True)
+class DocumentV2:
+    title: str
+    report_name: str
+    report_id: str
+    generated_at: str
+    cutoff_at: str
+    classification: str
+    # Datos de la portada técnica (pares etiqueta-valor ya formateados).
+    cover: tuple[tuple[str, str], ...]
+    sections: tuple[SectionV2, ...]
+    template_version: int = 2
+
+
+AnyDocument = Document | DocumentV2
