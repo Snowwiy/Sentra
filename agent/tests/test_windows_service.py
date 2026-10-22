@@ -619,14 +619,24 @@ def test_unexpected_error_is_reported_as_a_service_failure_for_recovery() -> Non
 
 def test_long_stop_keeps_the_scm_informed_and_never_reports_after_stopped() -> None:
     recorder = Recorder()
-    reporter = StatusReporter(recorder, threading.Event(), ping_seconds=0.02, ping_limit_seconds=5)
+    pending_ready = threading.Event()
+
+    def capture_status(status: ServiceStatus) -> None:
+        recorder(status)
+        if status.state == SERVICE_STOP_PENDING and status.checkpoint >= 3:
+            pending_ready.set()
+
+    reporter = StatusReporter(
+        capture_status, threading.Event(), ping_seconds=0.02, ping_limit_seconds=5
+    )
 
     def body(stop: threading.Event) -> None:
-        reporter.handle_control(SERVICE_CONTROL_STOP)
-        time.sleep(0.15)  # un ciclo largo que termina después de pedir la parada
+        assert reporter.handle_control(SERVICE_CONTROL_STOP) == NO_ERROR
+        assert stop.is_set()
+        assert pending_ready.wait(timeout=3.0), "STOP_PENDING checkpoints not received"
 
-    run_service_body(reporter, body)
-    time.sleep(0.1)  # el hilo de avisos ya no debe enviar nada
+    assert run_service_body(reporter, body) == 0
+    time.sleep(0.1)
 
     states = recorder.states()
     pending = [s for s in recorder.statuses if s.state == SERVICE_STOP_PENDING]
