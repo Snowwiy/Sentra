@@ -31,6 +31,8 @@ from app.schemas.topology import (
     TopologyStatus,
 )
 from app.services.auth_service import AuthContext
+from app.topology.errors import TopologyRebuildCooldownError
+from app.topology.history_service import rebuild_cooldown_remaining
 from app.topology.service import TopologyService
 
 router = APIRouter(prefix="/topology", tags=["topology"], responses=error_responses(401, 403))
@@ -164,11 +166,27 @@ def get_node(node_id: str, service: Topology, site_id: SiteFilter = None) -> Top
     return service.node_detail(service.site(site_id), node_id)
 
 
-@router.post("/rebuild", response_model=TopologyBuild, responses=error_responses(404, 409))
-def rebuild(body: TopologyRebuildRequest, service: Topology, ctx: Manager) -> TopologyBuild:
+@router.post("/rebuild", response_model=TopologyBuild, responses=error_responses(404, 409, 429))
+def rebuild(
+    body: TopologyRebuildRequest,
+    service: Topology,
+    ctx: Manager,
+    session: DbSession,
+    settings: AppSettings,
+) -> TopologyBuild:
     """Reconstruye en la petición (acotado por TOPOLOGY_MAX_LINKS). 409
-    topology_build_running si ya hay una en curso para el site. Auditado (topology_rebuilt)."""
-    return service.rebuild(service.site(body.site_id), "manual", actor(ctx))
+    topology_build_running si ya hay una en curso para el site; 429
+    topology_rebuild_cooldown si la última manual fue hace menos del enfriamiento. Auditado
+    (topology_rebuilt)."""
+    site = service.site(body.site_id)
+    # Fase 6E.1: enfriamiento de la reconstrucción manual (la programada no cuenta). Acota
+    # la carga que un admin (o una sesión robada) puede generar pulsando «Reconstruir».
+    wait = rebuild_cooldown_remaining(session, settings, site.id)
+    if wait > 0:
+        raise TopologyRebuildCooldownError(
+            "A manual rebuild ran recently for this site", retry_after=wait, scope="topology"
+        )
+    return service.rebuild(site, "manual", actor(ctx))
 
 
 @router.get(

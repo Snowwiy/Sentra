@@ -19,7 +19,13 @@ DISCOVERY_ADVANCED = "discovery_advanced"
 # Fase 6B: inventario SNMP de solo lectura (app/network/catalog.py). Sus capacidades dependen
 # de la versión SNMP y de los módulos, así que no tiene una única capacidad requerida.
 SNMP_INVENTORY = SNMP_JOB_TYPE
-JOB_TYPES: frozenset[str] = frozenset({DISCOVERY_BASIC, DISCOVERY_ADVANCED, SNMP_INVENTORY})
+# Fase 6E.2: lectura de un fichero local de leases DHCP que el operador del sensor declaró en
+# su sensor.toml. El job solo lleva el NOMBRE de esa entrada, nunca una ruta.
+DHCP_LEASES = "dhcp_leases"
+DHCP_CAPABILITY = "dhcp.leases.file"
+JOB_TYPES: frozenset[str] = frozenset(
+    {DISCOVERY_BASIC, DISCOVERY_ADVANCED, SNMP_INVENTORY, DHCP_LEASES}
+)
 
 ADVANCED_CAPABILITY = "network.discovery.advanced"
 # Corrección 6C: el sensor sabe hacer las sondas de nombre del discovery local (mDNS, NetBIOS,
@@ -36,6 +42,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "network.icmp",
         "network.tcp",
         "network.dns",
+        DHCP_CAPABILITY,
         *SNMP_CAPABILITIES,
     }
 )
@@ -44,10 +51,11 @@ CAPABILITIES: frozenset[str] = frozenset(
 REQUIRED_CAPABILITY = {
     DISCOVERY_BASIC: "network.discovery.basic",
     DISCOVERY_ADVANCED: ADVANCED_CAPABILITY,
+    DHCP_LEASES: DHCP_CAPABILITY,
 }
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.5.1"
+SENSOR_RUNTIME_VERSION = "0.6.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

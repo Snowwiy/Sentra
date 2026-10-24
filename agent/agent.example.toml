@@ -21,3 +21,45 @@ log_level = "INFO"
 # wireless_enabled = true
 # 0 = con cada inventario; si no, entre 60 y 86400 segundos.
 # wireless_interval_seconds = 0
+
+# Fase 6E (agente 0.5.0). Secciones opcionales: aquí van comentadas con sus valores por
+# defecto. Cada clave admite también SENTRA_AGENT_<SECCION>_<CLAVE> (p. ej.
+# SENTRA_AGENT_TELEMETRY_ENABLED=false). Detalles en docs/endpoint-telemetry-agent.md.
+
+# Actividad del endpoint: procesos, red, servicios, persistencia, protección y firewall.
+# [telemetry]
+# enabled = true
+# Sondeo de procesos (2-300 s): un proceso más corto que esto puede no verse.
+# process_poll_seconds = 5
+# network_enabled = true
+# Línea de comandos: "off", "redacted" (quita contraseñas y tokens) o "full".
+# cmdline = "redacted"
+# SHA-256 de los ejecutables nuevos (cuesta disco y CPU; con caché y tope en MB).
+# hash_executables = false
+# hash_max_mb = 50
+# Cola en disco si el servidor no responde (100-200000); al llenarse se descartan los más viejos.
+# activity_queue_max_events = 20000
+# services_poll_seconds = 120
+# persistence_poll_seconds = 300
+# state_poll_seconds = 300
+# Sysmon (solo Windows, si está instalado): evento 1 como fuente de procesos.
+# sysmon_enabled = true
+# sysmon_poll_seconds = 10
+# health_seconds = 300
+
+# Acciones forenses de solo lectura pedidas desde el servidor.
+# [forensics]
+# Raíces donde forensic_file_metadata puede mirar. Sin definir: programas y sistema de la
+# plataforma (nunca perfiles de usuario). El servidor no puede ampliarlas.
+# allowed_roots = ["C:/Program Files", "C:/Windows"]
+# Tamaño máximo del artefacto (64-16384 KB); se recorta la lista y se marca truncated.
+# max_artifact_kb = 2048
+# hash_max_mb = 100
+
+# Comunicación con el helper de aislamiento (opcional, ver docs/safe-isolation-helper.md).
+# La política de verdad es del helper (isolation.toml), no de este fichero.
+# [isolation]
+# exchange_dir = "C:/ProgramData/Sentra/Agent/isolation"
+# policy_file = "C:/ProgramData/Sentra/Isolation/isolation.toml"
+# wait_seconds = 60
+# status_max_age_seconds = 180

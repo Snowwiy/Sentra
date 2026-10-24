@@ -141,6 +141,12 @@ class TopologyLink(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # Hora de la evidencia más reciente (no de la reconstrucción): vigencia real del enlace.
     last_evidence_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 6E.1: reconstrucciones seguidas sin derivar el enlace y desde cuándo. Un enlace
+    # ausente solo se da por eliminado (link_removed) tras varias ausencias con su fuente de
+    # evidencia sana; `removed_at` evita registrar la misma eliminación dos veces.
+    absent_builds: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    absent_since: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    removed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # --- revisión humana (sobrevive a las reconstrucciones) ---
     review_state: Mapped[str] = mapped_column(
         String(16), default="unreviewed", server_default="unreviewed"

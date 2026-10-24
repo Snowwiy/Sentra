@@ -88,7 +88,7 @@ def rejected(job: dict[str, Any], config: ServerConfig = CONFIG) -> str:
 def test_capability_and_version_declared() -> None:
     assert "network.discovery.advanced" in CAPABILITIES
     assert "network.discovery.basic" in CAPABILITIES  # compatibilidad con 5F
-    assert __version__ == "0.5.1"
+    assert __version__ == "0.6.0"
     assert "network.discovery.names" in CAPABILITIES  # Corrección 6C
     # Nada que el sensor no implemente: las snmp.* solo con el extra snmp instalado (6B).
     assert not any(c.startswith(("network.snmp", "network.lldp")) for c in CAPABILITIES)

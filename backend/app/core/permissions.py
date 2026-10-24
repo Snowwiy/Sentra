@@ -129,6 +129,24 @@ class Permission(enum.StrEnum):
     # revisar enlaces (aceptar/rechazar): solo admin, porque la revisión cambia lo que ven
     # todos los usuarios y los informes, y una reconstrucción carga la base de datos.
     TOPOLOGY_MANAGE = "topology:manage"
+    # Fase 6E.2. Declarar fuentes DHCP, importar leases y pedir lecturas a un sensor: solo
+    # admin, porque una fuente decide qué nombre ven todos para cada equipo. Leer leases e
+    # identidad es monitoring:read, como el resto del inventario.
+    DHCP_MANAGE = "dhcp:manage"
+    # Fase 6E.3/6E.4. Actividad del endpoint y árbol de procesos: líneas de comando, usuarios
+    # y conexiones son datos sensibles, así que viewer no los ve.
+    TELEMETRY_READ = "telemetry:read"
+    # Fase 6E.6. Investigaciones forenses. Leer y adquirir (acciones de solo lectura del
+    # Response Engine) y descargar evidencias: analyst. Cerrar, conservar y borrar: admin.
+    FORENSICS_READ = "forensics:read"
+    FORENSICS_ACQUIRE = "forensics:acquire"
+    FORENSICS_DOWNLOAD = "forensics:download"
+    FORENSICS_MANAGE = "forensics:manage"
+    # Fase 6E.7. Aislamiento de un endpoint. Ver el estado y la vista previa: analyst.
+    # Aislar y liberar: solo admin (acción automática sobre un activo, con confirmación).
+    CONTAINMENT_PREVIEW = "containment:preview"
+    CONTAINMENT_ISOLATE = "containment:isolate"
+    CONTAINMENT_RELEASE = "containment:release"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -167,6 +185,11 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.REPORTS_READ,
             Permission.REPORTS_GENERATE,
             Permission.NETWORK_POLL,
+            Permission.TELEMETRY_READ,
+            Permission.FORENSICS_READ,
+            Permission.FORENSICS_ACQUIRE,
+            Permission.FORENSICS_DOWNLOAD,
+            Permission.CONTAINMENT_PREVIEW,
         }
     ),
     Role.ADMIN: frozenset(Permission),

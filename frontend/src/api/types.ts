@@ -669,7 +669,9 @@ export type AlertRule =
   | "monitoring_lost"
   | "security_detection"
   | "risk_critical"
-  | "vulnerability";
+  | "vulnerability"
+  // Fase 6E.7: el estado de aislamiento del equipo no coincide con el del servidor.
+  | "isolation_state";
 export type AlertSeverity = "info" | "warning" | "critical";
 /** "acknowledged": seen by an operator, still active (not resolved). */
 export type AlertStatus = "open" | "acknowledged" | "resolved";
@@ -1310,7 +1312,19 @@ export type Permission =
   | "network:manage"
   | "snmp_credentials:manage"
   // Fase 6D: reconstruir la topología y revisar enlaces (solo admin).
-  | "topology:manage";
+  | "topology:manage"
+  // Fase 6E.2: fuentes DHCP (solo admin). 6E.3/6E.4: actividad y árbol de procesos (analyst y admin).
+  | "dhcp:manage"
+  | "telemetry:read"
+  // Fase 6E.6: investigaciones forenses: leer, adquirir y descargar (analyst y admin), gestionar (admin).
+  | "forensics:read"
+  | "forensics:acquire"
+  | "forensics:download"
+  | "forensics:manage"
+  // Fase 6E.7: aislamiento: ver (analyst y admin), aislar y liberar (solo admin).
+  | "containment:preview"
+  | "containment:isolate"
+  | "containment:release";
 
 export interface CurrentUser {
   user_id: string;
@@ -4961,4 +4975,583 @@ export interface TopologyGraphQuery {
   includeRejected?: boolean;
   deviceType?: string;
   q?: string;
+}
+
+// --- Fase 6E.1: historial de topología, snapshots, diferencias y cambios de red -----------------
+
+export type TopologySnapshotQuality = "complete" | "partial" | "degraded";
+
+export interface TopologySnapshot {
+  id: string;
+  site_id: string;
+  sequence: number;
+  content_hash: string;
+  node_count: number;
+  link_count: number;
+  quality: TopologySnapshotQuality;
+  quality_reasons: string[];
+  taken_at: IsoDateTime;
+  confirmed_at: IsoDateTime;
+  confirmations: number;
+  preserved: boolean;
+}
+
+export interface TopologySnapshotList {
+  items: TopologySnapshot[];
+  next_before_sequence: number | null;
+}
+
+export interface TopologySnapshotDetail extends TopologySnapshot {
+  nodes: Record<string, unknown>;
+  links: Record<string, unknown>;
+  degraded_nodes: string[];
+}
+
+export interface TopologyDiffSummary {
+  total: number;
+  by_type: Record<string, number>;
+}
+
+export interface TopologyDiff {
+  site_id: string;
+  from_snapshot: TopologySnapshot;
+  to_snapshot: TopologySnapshot;
+  summary: TopologyDiffSummary;
+  /** Cambios calculados entre los dos snapshots (forma libre: se muestran como datos). */
+  changes: Record<string, unknown>[];
+}
+
+export type NetworkChangeType =
+  | "device_appeared"
+  | "device_not_observed"
+  | "device_disappeared"
+  | "device_retired"
+  | "ip_changed"
+  | "mac_changed"
+  | "name_changed"
+  | "vendor_changed"
+  | "gateway_changed"
+  | "role_changed"
+  | "classification_changed"
+  | "connectivity_changed"
+  | "link_added"
+  | "link_not_observed"
+  | "link_removed"
+  | "link_port_changed"
+  | "link_vlan_changed"
+  | "link_kind_changed"
+  | "link_confidence_changed"
+  | "wifi_association_changed"
+  | "wifi_ap_changed";
+
+export type NetworkChangeStatus = "detected" | "confirmed" | "dismissed";
+
+export interface NetworkChange {
+  id: string;
+  site_id: string;
+  change_type: NetworkChangeType;
+  subject_type: "node" | "link";
+  subject_key: string;
+  subject_label: string | null;
+  asset_id: string | null;
+  before: Record<string, unknown> | null;
+  after: Record<string, unknown> | null;
+  evidence: Record<string, unknown>[];
+  source: string;
+  confidence: TopologyConfidence;
+  status: NetworkChangeStatus;
+  review_note: string | null;
+  reviewed_by: string | null;
+  reviewed_at: IsoDateTime | null;
+  detected_at: IsoDateTime;
+  preserved: boolean;
+  version: number;
+}
+
+export interface NetworkChangeList {
+  total: number;
+  items: NetworkChange[];
+}
+
+export interface NetworkChangeReview {
+  status: NetworkChangeStatus;
+  note: string | null;
+  version: number;
+}
+
+export interface TopologyHistoryEntry {
+  snapshot_id: string;
+  sequence: number;
+  since: IsoDateTime;
+  until: IsoDateTime;
+  present: boolean;
+  value: Record<string, unknown> | null;
+}
+
+export interface TopologyHistory {
+  site_id: string;
+  subject_type: "node" | "link";
+  subject_key: string;
+  entries: TopologyHistoryEntry[];
+}
+
+// --- Fase 6E.2: DHCP e identidad avanzada -------------------------------------------------------
+
+export type DhcpSourceKind = "lease_import" | "sensor_file";
+export type DhcpFormat = "dnsmasq" | "isc_dhcpd" | "kea_csv" | "windows_dhcp_csv" | "generic_csv";
+export type DhcpSourceStatus = "pending" | "ok" | "error" | "disabled";
+export type DhcpLeaseState = "active" | "expired" | "released" | "unknown";
+export type DhcpLeaseMatch = "mac_ip" | "mac_moved" | "ip_only" | "randomized_mac" | "ambiguous" | "no_asset" | "expired";
+
+export interface DhcpSiteRef {
+  id: string;
+  name: string;
+}
+
+export interface DhcpSource {
+  id: string;
+  site: DhcpSiteRef;
+  name: string;
+  kind: DhcpSourceKind;
+  format: DhcpFormat;
+  sensor_id: string | null;
+  sensor_name: string | null;
+  sensor_source_name: string | null;
+  poll_interval_minutes: number;
+  status: DhcpSourceStatus;
+  last_requested_at: IsoDateTime | null;
+  last_import_at: IsoDateTime | null;
+  last_error_code: string | null;
+  last_stats: Record<string, unknown> | null;
+  lease_count: number;
+  created_by: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  version: number;
+}
+
+export interface DhcpSourceList {
+  items: DhcpSource[];
+}
+
+export interface DhcpSourceCreate {
+  site_id?: string | null;
+  name: string;
+  kind: DhcpSourceKind;
+  format: DhcpFormat;
+  sensor_id?: string | null;
+  sensor_source_name?: string | null;
+  poll_interval_minutes?: number;
+}
+
+export interface DhcpSourceUpdate {
+  version: number;
+  enabled?: boolean | null;
+  format?: DhcpFormat | null;
+  poll_interval_minutes?: number | null;
+}
+
+export interface DhcpImportResult {
+  source: DhcpSource;
+  lines: number;
+  parsed: number;
+  skipped: number;
+  truncated: boolean;
+  matched: number;
+  named: number;
+  ambiguous: number;
+}
+
+export interface DhcpReadRequested {
+  source: DhcpSource;
+  sensor_job_id: string;
+}
+
+export interface DhcpLease {
+  source_id: string;
+  source_name: string;
+  ip: string;
+  mac: string;
+  mac_randomized: boolean;
+  hostname: string | null;
+  hostname_usable: boolean;
+  state: DhcpLeaseState;
+  starts_at: IsoDateTime | null;
+  ends_at: IsoDateTime | null;
+  match: DhcpLeaseMatch;
+  asset_id: string | null;
+  asset_name: string | null;
+  first_seen_at: IsoDateTime;
+  last_seen_at: IsoDateTime;
+}
+
+export interface DhcpLeaseList {
+  items: DhcpLease[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export type UnidentifiedReason =
+  | "no_name_sources"
+  | "randomized_mac"
+  | "only_generic_names"
+  | "dhcp_source_missing"
+  | "dhcp_no_lease"
+  | "dhcp_lease_unusable_name"
+  | "names_stale"
+  | "only_vendor";
+
+export interface AssetWifiRef {
+  ssid: string | null;
+  bssid: string | null;
+  access_point_name: string | null;
+  band: string | null;
+  state: string;
+  last_seen_at: IsoDateTime;
+}
+
+export interface AssetIdentity {
+  asset_id: string;
+  /** Etiqueta personalizada si existe; si no, el nombre automático (lo decide el servidor). */
+  display_name: string;
+  custom_label: string | null;
+  automatic_name: string | null;
+  name_source: string | null;
+  names: ObservedName[];
+  ip: string;
+  mac: string | null;
+  mac_randomized: boolean;
+  vendor: string | null;
+  device_type: string | null;
+  classification_confidence: string | null;
+  leases: DhcpLease[];
+  wifi: AssetWifiRef | null;
+  unidentified_reasons: UnidentifiedReason[];
+}
+
+export type IdentityField = "name" | "label" | "ip" | "mac" | "vendor" | "device_type";
+
+export interface AssetIdentityHistoryEntry {
+  field: IdentityField;
+  old_value: string | null;
+  new_value: string | null;
+  source: string;
+  confidence: string;
+  observed_at: IsoDateTime;
+}
+
+export interface AssetIdentityHistory {
+  asset_id: string;
+  items: AssetIdentityHistoryEntry[];
+  next_before_id: number | null;
+}
+
+// --- Fase 6E.3/6E.4: telemetría de endpoint y árbol de procesos --------------------------------
+
+export type ActivityCategory =
+  | "process"
+  | "network"
+  | "service"
+  | "scheduled_task"
+  | "persistence"
+  | "auth"
+  | "dns"
+  | "protection"
+  | "firewall"
+  | "agent_health";
+
+export interface ProcessNode {
+  instance_key: string;
+  pid: number;
+  ppid: number | null;
+  parent_instance_key: string | null;
+  parent_relation: string | null;
+  name: string | null;
+  exe: string | null;
+  /** Ya redactada según la política del servidor y del agente (gana la más restrictiva). */
+  cmdline: string | null;
+  username: string | null;
+  sha256: string | null;
+  signer: string | null;
+  integrity: string | null;
+  source: string;
+  started_at: IsoDateTime | null;
+  ended_at: IsoDateTime | null;
+  running: boolean;
+  children_count: number;
+}
+
+export interface ProcessTree {
+  asset_id: string;
+  parent: string | null;
+  at: IsoDateTime | null;
+  nodes: ProcessNode[];
+  truncated: boolean;
+}
+
+export interface ActivityEvent {
+  id: number;
+  event_uid: string;
+  category: ActivityCategory;
+  action: string;
+  source: string;
+  instance_key: string | null;
+  data: Record<string, unknown>;
+  occurred_at: IsoDateTime;
+  received_at: IsoDateTime;
+}
+
+export interface ActivityList {
+  asset_id: string;
+  items: ActivityEvent[];
+  next_before_id: number | null;
+}
+
+export interface ProcessInstanceDetail {
+  asset_id: string;
+  process: ProcessNode;
+  ancestors: ProcessNode[];
+  connections: ActivityEvent[];
+}
+
+export type CmdlinePolicy = "off" | "redacted" | "full";
+
+export interface EndpointTelemetryStatus {
+  asset_id: string;
+  enabled: boolean;
+  reported_at: IsoDateTime | null;
+  stats: Record<string, unknown> | null;
+  last_event_at: IsoDateTime | null;
+  events_last_hour: number;
+  ingest_lag_p50_seconds: number | null;
+  ingest_lag_p95_seconds: number | null;
+  cmdline_policy: CmdlinePolicy;
+}
+
+export interface EndpointMetrics {
+  window_hours: number;
+  events_last_hour: number;
+  assets_reporting_last_hour: number;
+  ingest_lag_p50_seconds: number | null;
+  ingest_lag_p95_seconds: number | null;
+  ingest_lag_max_seconds: number | null;
+  behavior_detections_24h: number;
+  detection_latency_p50_seconds: number | null;
+  detection_latency_p95_seconds: number | null;
+}
+
+// --- Fase 6E.5: excepciones de reglas integradas ------------------------------------------------
+
+export type DetectionExclusionField = "exe" | "name" | "sha256" | "signer" | "parent_name" | "remote_address";
+
+export interface DetectionExclusion {
+  id: string;
+  rule_id: string;
+  asset_id: string | null;
+  asset_name: string | null;
+  field: DetectionExclusionField;
+  value: string;
+  reason: string;
+  created_by: string;
+  created_at: IsoDateTime;
+  expires_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  revoked_by: string | null;
+  active: boolean;
+  hits: number;
+  last_hit_at: IsoDateTime | null;
+}
+
+export interface DetectionExclusionList {
+  items: DetectionExclusion[];
+}
+
+export interface DetectionExclusionCreate {
+  rule_id: string;
+  asset_id?: string | null;
+  field: DetectionExclusionField;
+  value: string;
+  reason: string;
+  expires_at?: string | null;
+}
+
+// --- Fase 6E.6: investigación forense remota ----------------------------------------------------
+
+export type InvestigationStatus = "open" | "closed";
+export type ArtifactIntegrity = "verified" | "mismatch";
+export type InvestigationNoteKind = "note" | "ai_summary";
+
+export interface Investigation {
+  id: string;
+  asset_id: string;
+  asset_label: string;
+  asset_exists: boolean;
+  incident_id: string | null;
+  title: string;
+  status: InvestigationStatus;
+  legal_hold: boolean;
+  created_by: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  closed_at: IsoDateTime | null;
+  closed_by: string | null;
+  version: number;
+  artifact_count: number;
+  mismatch_count: number;
+}
+
+export interface InvestigationList {
+  items: Investigation[];
+  total: number;
+}
+
+export interface InvestigationCreate {
+  asset_id: string;
+  title: string;
+  incident_id?: string | null;
+}
+
+export interface ForensicArtifact {
+  id: string;
+  action: string;
+  operator: string;
+  scope: Record<string, unknown>;
+  /** Calculado por el servidor sobre el JSON canónico recibido. */
+  sha256: string;
+  /** El que declaró el agente; si no coincide, integrity = mismatch. */
+  agent_sha256: string | null;
+  integrity: ArtifactIntegrity;
+  size_bytes: number;
+  truncated: boolean;
+  limitations: Record<string, unknown>[];
+  agent_version: string | null;
+  platform: string | null;
+  collected_at: IsoDateTime | null;
+  received_at: IsoDateTime;
+  execution_id: string | null;
+}
+
+export interface ForensicArtifactDetail extends ForensicArtifact {
+  investigation_id: string;
+  /** Contenido tal como se recibió: se muestra siempre como texto, nunca como HTML. */
+  content: unknown;
+}
+
+export interface InvestigationNote {
+  id: string;
+  kind: InvestigationNoteKind;
+  body: string;
+  author: string;
+  created_at: IsoDateTime;
+}
+
+export interface InvestigationCollection {
+  execution_id: string;
+  action: string;
+  status: string;
+  actor: string;
+  created_at: IsoDateTime;
+  finished_at: IsoDateTime | null;
+  error_code: string | null;
+}
+
+export interface EvidencePackage {
+  id: string;
+  sha256: string;
+  size_bytes: number;
+  artifact_count: number;
+  includes_mismatch: boolean;
+  created_by: string;
+  created_at: IsoDateTime;
+}
+
+export interface InvestigationDetail {
+  investigation: Investigation;
+  artifacts: ForensicArtifact[];
+  notes: InvestigationNote[];
+  collections: InvestigationCollection[];
+  packages: EvidencePackage[];
+}
+
+// --- Fase 6E.7: aislamiento seguro --------------------------------------------------------------
+
+export type IsolationStatus =
+  | "requested"
+  | "approved"
+  | "applying"
+  | "isolated"
+  | "reverting"
+  | "restored"
+  | "failed"
+  | "expired"
+  | "unknown";
+
+export interface IsolationReason {
+  code: string;
+  message: string;
+}
+
+export interface IsolationSession {
+  id: string;
+  asset_id: string;
+  asset_label: string;
+  status: IsolationStatus;
+  reason: string;
+  duration_minutes: number;
+  requested_by: string;
+  requested_at: IsoDateTime;
+  approved_by: string | null;
+  approved_at: IsoDateTime | null;
+  expires_at: IsoDateTime;
+  applied_at: IsoDateTime | null;
+  released_by: string | null;
+  release_reason: string | null;
+  released_at: IsoDateTime | null;
+  ended_at: IsoDateTime | null;
+  method: string | null;
+  verified: boolean;
+  allowed: string[];
+  rules: Record<string, unknown>[];
+  error_code: string | null;
+  reported_state: string | null;
+  reported_at: IsoDateTime | null;
+  isolate_execution_id: string | null;
+  release_execution_id: string | null;
+  version: number;
+}
+
+export interface IsolationSessionList {
+  items: IsolationSession[];
+  total: number;
+}
+
+export interface IsolationOverview {
+  asset_id: string;
+  asset_label: string;
+  available: boolean;
+  unavailable_message: string | null;
+  reasons: IsolationReason[];
+  server_enabled: boolean;
+  platform: string | null;
+  helper: Record<string, unknown> | null;
+  helper_reported_at: IsoDateTime | null;
+  /** Nombre exacto que hay que escribir para confirmar. */
+  confirm_name: string;
+  default_minutes: number;
+  max_minutes: number;
+  impact: string[];
+  manual_recommendations: string[];
+  current: IsolationSession | null;
+}
+
+export interface IsolationRequest {
+  duration_minutes: number;
+  reason: string;
+  confirm_name: string;
+}
+
+export interface IsolationReleaseRequest {
+  version: number;
+  reason: string;
 }

@@ -20,6 +20,7 @@ from app.core.security import (
     hash_token,
     token_matches,
 )
+from app.isolation.state import reconcile_report
 from app.models.asset import Asset, AssetStatus
 from app.models.response import AgentCommand
 from app.repositories.asset_repository import AssetRepository
@@ -46,6 +47,17 @@ AGENT_COMMAND_TYPES = frozenset(
         "collect_events",
         "collect_telemetry",
         "collect_diagnostics",
+        "forensic_processes",
+        "forensic_connections",
+        "forensic_services",
+        "forensic_scheduled_tasks",
+        "forensic_persistence",
+        "forensic_sessions",
+        "forensic_network_config",
+        "forensic_firewall_state",
+        "forensic_file_metadata",
+        "isolate_host",
+        "release_isolation",
     }
 )
 
@@ -332,6 +344,15 @@ class AgentService:
         record_contact(self._session, asset, now)
         if data.host is not None:
             apply_host_info(asset, data.host)
+        if data.telemetry is not None:
+            # Se conserva lo que solo trae el lote de actividad (boot_id del árbol de procesos).
+            asset.telemetry_status = {
+                **(asset.telemetry_status or {}),
+                **data.telemetry.model_dump(mode="json", exclude_none=True),
+            }
+            asset.telemetry_status_at = now
+        if data.isolation is not None:
+            reconcile_report(self._session, asset, data.isolation.model_dump(mode="json"), now)
         self._session.commit()
         return HeartbeatResponse(
             asset_id=asset.public_id,

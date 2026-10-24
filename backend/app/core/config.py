@@ -711,6 +711,55 @@ class Settings(BaseSettings):
     # truncated en vez de fallar.
     topology_max_nodes: int = Field(default=1500, ge=10, le=50_000)
     topology_max_links: int = Field(default=5000, ge=10, le=200_000)
+    # Fase 6E.1 (docs/topology-history.md): un enlace ausente solo se da por eliminado
+    # (link_removed) tras este número de reconstrucciones seguidas sin derivarse y con su
+    # fuente de evidencia sana. 0 = nunca concluir eliminaciones (solo link_not_observed).
+    topology_link_removal_confirmations: int = Field(default=3, ge=0, le=1000)
+    # Retención del historial. A diferencia de las retenciones opt-in de 4M, estas vienen
+    # activas: 6D dejó topology_builds creciendo ~96 filas por site y día sin límite. Vacío =
+    # sin purga. Nunca se borra lo preservado (incidentes, investigaciones), el último
+    # snapshot y la última reconstrucción de cada site, ni enlaces revisados por una persona.
+    topology_build_retention_days: int | None = Field(default=30, ge=1, le=36_500)
+    topology_snapshot_retention_days: int | None = Field(default=180, ge=1, le=36_500)
+    network_change_retention_days: int | None = Field(default=365, ge=1, le=36_500)
+    topology_absent_link_retention_days: int | None = Field(default=90, ge=1, le=36_500)
+    # Segundos mínimos entre dos reconstrucciones MANUALES del mismo site (429 con
+    # Retry-After). 0 = sin enfriamiento.
+    topology_manual_rebuild_cooldown_seconds: int = Field(default=60, ge=0, le=86_400)
+
+    # --- Fase 6E.2: identidad y DHCP (docs/dhcp-identity.md) -----------------------------
+    # Tope del contenido de un fichero de leases importado a mano (KiB). Va dentro del límite
+    # global del cuerpo de la petición (max_request_bytes), que sigue mandando.
+    dhcp_import_max_kb: int = Field(default=2048, ge=16, le=3072)
+    # Días que se conserva un lease que ninguna lectura vuelve a ver. Null = sin purga.
+    dhcp_lease_retention_days: int | None = Field(default=90, ge=1, le=36_500)
+    # Días de historial de identidad de un activo. Null = sin purga.
+    asset_identity_history_retention_days: int | None = Field(default=365, ge=1, le=36_500)
+
+    # --- Fase 6E.3/6E.4: telemetría avanzada de endpoint (docs/process-tree.md) ----------
+    # Política de línea de comandos en el servidor. Se aplica además de la del agente: si el
+    # agente la envía completa y aquí se pide redacted, se guarda redactada.
+    telemetry_cmdline_policy: Literal["off", "redacted", "full"] = "redacted"
+    # Lotes de POST /agents/activity por agente y minuto (429 con Retry-After por encima).
+    telemetry_activity_max_per_minute: int = Field(default=120, ge=1, le=10_000)
+    # Días de eventos de actividad y de instancias de proceso terminadas. Null = sin purga.
+    telemetry_activity_retention_days: int | None = Field(default=14, ge=1, le=3650)
+    process_instance_retention_days: int | None = Field(default=30, ge=1, le=3650)
+
+    # --- Fase 6E.6: investigación forense --------------------------------------------------
+    # Tamaño máximo del JSON canónico de un artefacto (el agente recorta a 2048 KiB por su
+    # lado). Uno mayor no se guarda: la ejecución falla con artifact_too_large.
+    forensics_artifact_max_kb: int = Field(default=2048, ge=64, le=3072)
+    # Suma máxima de artefactos de un paquete ZIP (se genera en memoria).
+    forensics_package_max_mb: int = Field(default=64, ge=1, le=512)
+
+    # --- Fase 6E.7: aislamiento seguro -----------------------------------------------------
+    # Desactivado por defecto. Aun activado aquí, el equipo solo se aísla si su helper local
+    # está instalado y su política local (isolation.toml) también lo permite.
+    isolation_enabled: bool = False
+    # Duración máxima que puede pedir un admin (el helper aplica además su propio máximo).
+    isolation_max_minutes: int = Field(default=240, ge=5, le=1440)
+    isolation_default_minutes: int = Field(default=60, ge=5, le=1440)
 
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"

@@ -1,0 +1,8 @@
+1792699200 aa:bb:cc:dd:ee:01 192.168.50.23 pixel-7 01:aa:bb:cc:dd:ee:01
+0 aa:bb:cc:dd:ee:02 192.168.50.10 nas-01 *
+1700000000 02:11:22:33:44:55 192.168.50.31 * ff:56:50:4d:98:00:02:00:00:ab:11:9f:36:2b:c7:aa:13:0c:d2
+esto no es un lease
+1792699200 zz:bb:cc:dd:ee:03 192.168.50.40 bad-mac *
+1792699200 aa:bb:cc:dd:ee:04 192.168.50.300 bad-ip *
+duid 00:01:00:01:2c:1f:5b:3a:aa:bb:cc:dd:ee:ff
+1792699200 1234567 fd00::1234 laptop-v6 00:01:00:01:2c:1f:5b:3a:aa:bb:cc:dd:ee:05

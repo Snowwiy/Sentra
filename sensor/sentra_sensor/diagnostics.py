@@ -1,6 +1,8 @@
 """`status` (solo estado local) y `diagnostics` (comprueba servidor, TLS, credencial, spool).
 
 Ninguno muestra la credencial: como mucho, si está cargada y si sus permisos son correctos.
+Tampoco el contenido de los ficheros de leases DHCP (Fase 6E): solo nombre, formato, ruta,
+si existen, si se pueden abrir y su tamaño.
 """
 
 import os
@@ -14,6 +16,7 @@ from sentra_sensor import CAPABILITIES, __version__
 from sentra_sensor.client import ApiError, SensorClient, TlsError, Transport, TransportError
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.credentials import CredentialError, CredentialStore
+from sentra_sensor.dhcp import describe_sources
 from sentra_sensor.fsperm import is_private
 from sentra_sensor.spool import Spool
 from sentra_sensor.state import host_metadata, load_state
@@ -72,7 +75,30 @@ def local_status(config: LocalConfig) -> dict[str, Any]:
         status["allowed_networks"] = state.server_config.get("allowed_networks", [])
         status["jobs_enabled"] = state.server_config.get("jobs_enabled")
     status["spool"] = _spool_summary(config.spool_file(), config)
+    status["dhcp_sources"] = describe_sources(config)
     return status
+
+
+def _dhcp_checks(config: LocalConfig) -> list[Check]:
+    """Una comprobación por fuente DHCP: falla si el job no podría leerla ahora mismo."""
+    checks: list[Check] = []
+    for source in describe_sources(config):
+        if not source["exists"]:
+            ok, state = False, "file missing"
+        elif not source["readable"]:
+            ok, state = False, "file not readable by this account"
+        elif source["too_large"]:
+            ok, state = False, f"{source['size_bytes']} bytes exceeds dhcp_max_file_kb"
+        else:
+            ok, state = True, f"readable, {source['size_bytes']} bytes"
+        checks.append(
+            Check(
+                f"dhcp_source:{source['name']}",
+                ok,
+                f"{source['format']} {source['path']}: {state}",
+            )
+        )
+    return checks
 
 
 def run_diagnostics(config: LocalConfig, transport: Transport) -> list[Check]:
@@ -90,6 +116,8 @@ def run_diagnostics(config: LocalConfig, transport: Transport) -> list[Check]:
             "owner-only" if private else "data_dir is accessible to other accounts",
         )
     )
+    # Antes de la credencial: el estado de las fuentes locales se ve aunque no esté enrolado.
+    checks.extend(_dhcp_checks(config))
     store = CredentialStore(config.credential_file())
     try:
         identity = store.load()

@@ -10,6 +10,7 @@ import type {
   ReportTypeInfo,
 } from "../api/types";
 import { PREFILL_PARAMS, type IdFilterKey } from "./reportLinks";
+import { sha256HexSync } from "./sha256";
 
 export { reportHref } from "./reportLinks";
 export type { IdFilterKey } from "./reportLinks";
@@ -316,7 +317,11 @@ export function safeFilename(name: string | null | undefined, fallback: string):
   return cleaned && cleaned !== "." && cleaned !== ".." ? cleaned.slice(0, 200) : fallback;
 }
 
-/** No se puede calcular el SHA-256 en este navegador (sin crypto.subtle: http fuera de localhost). */
+/**
+ * No se pudo calcular el SHA-256 en este navegador. Desde la Fase 6E hay una implementación
+ * propia para cuando falta crypto.subtle (http fuera de localhost), así que solo queda para un
+ * fallo inesperado; se conserva para que quien llama siga fallando cerrado.
+ */
 export class ChecksumUnavailableError extends Error {
   constructor() {
     super("SHA-256 no disponible en este navegador");
@@ -326,8 +331,9 @@ export class ChecksumUnavailableError extends Error {
 
 /**
  * Bytes de un Blob. Blob.arrayBuffer() existe en los navegadores soportados; FileReader cubre un
- * Blob que no lo implementa: con Node >= 24 y jsdom 26 (tests), fetch construye la respuesta con
- * el Blob global de jsdom, que no tiene arrayBuffer().
+ * Blob que no lo implementa: con Node >= 24 y jsdom 26 (tests), el Blob global de jsdom no tiene
+ * arrayBuffer(). Las descargas ya no pasan por aquí (apiDownload entrega los bytes leídos de la
+ * respuesta); queda para Blobs creados en la propia página.
  */
 async function blobBytes(blob: Blob): Promise<Uint8Array<ArrayBuffer>> {
   if (typeof blob.arrayBuffer === "function") return new Uint8Array(await blob.arrayBuffer());
@@ -340,14 +346,17 @@ async function blobBytes(blob: Blob): Promise<Uint8Array<ArrayBuffer>> {
 }
 
 /**
- * SHA-256 (hex, minúsculas) de un Blob. Lanza ChecksumUnavailableError si el navegador no
- * ofrece crypto.subtle y propaga cualquier error de Web Crypto: quien llama NUNCA debe guardar
- * un fichero cuyo hash no se ha podido comprobar.
+ * SHA-256 (hex, minúsculas) de unos bytes o de un Blob. Usa Web Crypto si existe y, si no
+ * (contexto no seguro), la implementación propia de lib/sha256.ts. Propaga cualquier error:
+ * quien llama NUNCA debe guardar un fichero cuyo hash no se ha podido comprobar.
  */
-export async function sha256Hex(blob: Blob): Promise<string> {
-  if (typeof crypto === "undefined" || !crypto.subtle) throw new ChecksumUnavailableError();
-  const digest = await crypto.subtle.digest("SHA-256", await blobBytes(blob));
-  return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+export async function sha256Hex(data: Blob | Uint8Array<ArrayBuffer>): Promise<string> {
+  const bytes = data instanceof Uint8Array ? data : await blobBytes(data);
+  if (typeof crypto !== "undefined" && crypto.subtle) {
+    const digest = await crypto.subtle.digest("SHA-256", bytes);
+    return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  }
+  return sha256HexSync(bytes);
 }
 
 /**
@@ -366,6 +375,8 @@ export function saveBlob(blob: Blob, filename: string): void {
     link.click();
   } finally {
     link.remove();
-    window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+    // Margen amplio antes de revocar: con «Preguntar dónde guardar» el navegador lee el Blob
+    // después de que la persona elige la carpeta, y revocarlo antes rompe la descarga.
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 }

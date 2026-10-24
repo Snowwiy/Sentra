@@ -49,6 +49,8 @@ export const EVIDENCE_LABELS: Record<string, string> = {
   ports: "Puertos",
   gateway: "Gateway",
   conflict: "Evidencia contradictoria",
+  // Fase 6E.2: hostname de una concesión DHCP con coincidencia alta (MAC e IP).
+  dhcp_lease: "Concesión DHCP",
 };
 
 /** Corrección 6C: clase de cada nombre observado, tal y como la decide el servidor. */
@@ -67,6 +69,7 @@ export const NAME_SOURCE_LABELS: Record<string, string> = {
   netbios: "NetBIOS",
   upnp: "UPnP",
   vendor_model: "fabricante y modelo",
+  dhcp_lease: "Concesión DHCP",
 };
 
 /** Tipo en español; "Desconocido" si no se pudo determinar. */

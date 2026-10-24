@@ -29,6 +29,7 @@ from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_lifecycle_policy import LifecyclePolicy
 from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
+from app.services.retention_6e import purge_phase_6e
 from app.services.retention_service import RetentionPolicy, RetentionService
 from app.threat_intel.config import ThreatIntelConfig
 from app.threat_intel.matching import SYSTEM as THREAT_INTEL_ACTOR
@@ -251,9 +252,15 @@ def run_vulnerability_sources() -> None:
 
 
 def purge_old_data() -> None:
-    policy = RetentionPolicy.from_settings(get_settings())
+    settings = get_settings()
+    policy = RetentionPolicy.from_settings(settings)
     with get_sessionmaker()() as session:
         result = RetentionService(session, policy).purge()
+        # Fase 6E: retenciones propias de los módulos nuevos (topología, DHCP, telemetría).
+        # Cada una tiene su plazo y nunca borra lo preservado por incidentes o investigaciones.
+        extra = purge_phase_6e(session, settings)
+    if any(extra.values()):
+        logger.info("phase 6e data purged", extra={f"purged_{k}": v for k, v in extra.items()})
     if result.total:
         logger.info(
             "old data purged",
@@ -299,22 +306,30 @@ def run_response_engine() -> None:
     Solo trabaja sobre filas vivas (índices parciales) y en lotes acotados. Nunca lanza
     acciones nuevas por su cuenta: solo continúa playbooks que un usuario empezó.
     """
+    from app.isolation.state import sweep_isolation
     from app.services.discovery_runner import get_discovery_runner
     from app.services.response_service import ResponseService
 
     with get_sessionmaker()() as session:
         counts = ResponseService(session, get_settings(), get_discovery_runner).sweep()
+        # Fase 6E.7: sesiones de aislamiento cuyo comando acaba de cerrarse sin resultado.
+        isolation = sweep_isolation(session)
     if any(counts[key] for key in ("expired", "timed_out", "cancelled", "redelivered")):
         logger.info("response sweep", extra={f"response_{k}": v for k, v in counts.items()})
+    if any(isolation.values()):
+        logger.warning("isolation sweep", extra={f"isolation_{k}": v for k, v in isolation.items()})
 
 
 def run_sensor_maintenance() -> None:
     """Fase 5F: caduca jobs de sensor sin empezar, devuelve a la cola leases no confirmados
     y falla (sin conclusiones negativas) los jobs cuyo sensor dejó de responder."""
+    from app.dhcp.service import schedule_due_reads
     from app.services.sensor_service import run_sensor_maintenance as sweep_sensors
 
     with get_sessionmaker()() as session:
         sweep_sensors(session)
+        # Fase 6E.2: lecturas periódicas de las fuentes DHCP de sensor (poll_interval_minutes).
+        schedule_due_reads(session, get_settings())
 
 
 def run_network_maintenance() -> None:

@@ -48,6 +48,7 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/infrastructure", label: "Infraestructura", icon: "infrastructure", permission: "monitoring:read" },
       { to: "/wlan", label: "Wi-Fi", icon: "wifi", permission: "monitoring:read" },
       { to: "/topology", label: "Topología", icon: "topology", permission: "monitoring:read" },
+      { to: "/dhcp", label: "DHCP", icon: "dhcp", permission: "monitoring:read" },
       { to: "/agents", label: "Agentes", icon: "agent" },
       { to: "/sensors", label: "Sensores", icon: "sensor", permission: "monitoring:read" },
       { to: "/settings/sites", label: "Sites", icon: "site", permission: "monitoring:read" },
@@ -59,8 +60,17 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/vulnerabilities", label: "Vulnerabilidades", icon: "vulnerability", permission: "vulnerabilities:read" },
       { to: "/threat-intel", label: "Inteligencia", icon: "intel", permission: "threat_intel:read" },
-      { to: "/detections/rules", label: "Reglas", icon: "rules", permission: "rules:read" },
+      {
+        to: "/detections/rules",
+        label: "Reglas",
+        icon: "rules",
+        permission: "rules:read",
+        // Fase 6E.5: las excepciones de reglas cuelgan de Reglas, no de Detecciones.
+        match: ["/detections/exclusions"],
+      },
       { to: "/response", label: "Response", icon: "response", permission: "response:read" },
+      { to: "/investigations", label: "Investigaciones", icon: "forensics", permission: "forensics:read" },
+      { to: "/containment", label: "Aislamiento", icon: "isolation", permission: "containment:preview" },
       { to: "/playbooks", label: "Playbooks", icon: "playbook", permission: "response:read" },
     ],
   },

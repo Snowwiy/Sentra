@@ -12,7 +12,8 @@ if [ "$1" = "remove" ] || [ "$1" = "purge" ]; then
   rmdir /opt/sentra-agent/bin /opt/sentra-agent 2>/dev/null || true
 fi
 if [ "$1" = "purge" ]; then
-  rm -rf /etc/sentra-agent /var/lib/sentra-agent /var/log/sentra-agent /opt/sentra-agent
+  rm -rf /etc/sentra-agent /var/lib/sentra-agent /var/log/sentra-agent /opt/sentra-agent \
+    /var/lib/sentra-isolation /var/log/sentra-isolation
   if getent passwd sentra-agent >/dev/null 2>&1; then
     userdel sentra-agent || true
   fi

@@ -58,6 +58,13 @@ class SignalKind(enum.StrEnum):
     # evento crítico del kernel (OOM, errores de sistema de ficheros o de hardware, BUG).
     SUDO_COMMAND = "sudo_command"
     KERNEL_CRITICAL = "kernel_critical"
+    # Fase 6E.5: telemetría de endpoint (agente 0.5.0). Solo eventos que encajan en un patrón
+    # de app/detection/behavior.py: no hay una señal por cada proceso.
+    PROCESS_START = "process_start"
+    PROCESS_NETWORK = "process_network"
+    PERSISTENCE_CHANGE = "persistence_change"
+    PROTECTION_CHANGE = "protection_change"
+    FIREWALL_CHANGE = "firewall_change"
 
 
 class SourceType(enum.StrEnum):
@@ -66,6 +73,7 @@ class SourceType(enum.StrEnum):
     PROCESS_SNAPSHOT = "process_snapshot"
     DISCOVERY = "discovery"
     THREAT_INTEL = "threat_intel"
+    ENDPOINT_ACTIVITY = "endpoint_activity"
 
 
 @dataclass(frozen=True)

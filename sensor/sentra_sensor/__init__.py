@@ -1,9 +1,9 @@
 """Sentra Sensor: runtime del sensor distribuido de un Site (5F; 6A discovery avanzado; 6B SNMP;
-6C.3 módulo SNMP wlan; Corrección 6C sondas de nombre)."""
+6C.3 módulo SNMP wlan; Corrección 6C sondas de nombre; 6E leases DHCP de ficheros locales)."""
 
 from sentra_sensor import snmp as _snmp
 
-__version__ = "0.5.1"
+__version__ = "0.6.0"
 
 # Capacidades realmente implementadas. Se declaran al servidor en enroll y heartbeat; no se
 # anuncia nada que el sensor no sepa hacer. Wi-Fi (6C.3) solo como inventario SNMP de lectura
@@ -22,5 +22,9 @@ CAPABILITIES: tuple[str, ...] = (
     "network.tcp",
     "network.icmp",
     "network.arp",
+    # Fase 6E: job dhcp_leases. Solo lee ficheros de leases que el operador del host declara
+    # en [[dhcp_lease_files]]; se anuncia siempre porque el job falla limpio
+    # (dhcp_source_unknown) si el nombre no está configurado.
+    "dhcp.leases.file",
     *_snmp.capabilities(),
 )

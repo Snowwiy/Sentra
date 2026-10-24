@@ -14,12 +14,16 @@ from app.api.v1.routes import (
     dashboard,
     detection_rules,
     detections,
+    dhcp,
     discovery,
+    endpoint,
     enrollment_tokens,
     events,
+    forensics,
     health,
     incidents,
     inventory,
+    isolation,
     metrics,
     network,
     processes,
@@ -32,6 +36,7 @@ from app.api.v1.routes import (
     telemetry,
     threat_intel,
     topology,
+    topology_history,
     users,
     vulnerabilities,
     vulnerability_sources,
@@ -80,3 +85,13 @@ api_router.include_router(sensor_protocol.router, responses=_COMMON)
 api_router.include_router(network.router, responses=_COMMON)
 api_router.include_router(wlan.router, responses=_COMMON)
 api_router.include_router(topology.router, responses=_COMMON)
+api_router.include_router(topology_history.router, responses=_COMMON)
+api_router.include_router(dhcp.router, responses=_COMMON)
+api_router.include_router(dhcp.identity_router, responses=_COMMON)
+api_router.include_router(endpoint.agent_router, responses=_COMMON)
+api_router.include_router(endpoint.asset_router, responses=_COMMON)
+api_router.include_router(endpoint.metrics_router, responses=_COMMON)
+api_router.include_router(endpoint.exclusion_router, responses=_COMMON)
+api_router.include_router(forensics.router, responses=_COMMON)
+api_router.include_router(isolation.router, responses=_COMMON)
+api_router.include_router(isolation.overview_router, responses=_COMMON)

@@ -92,6 +92,12 @@ def validate_steps(raw_steps: list[PlaybookStepIn] | list[dict[str, Any]]) -> Va
             raise PlaybookError(
                 "playbook_action_unavailable", f"Step {order}: action not available"
             )
+        if action.category in ("forensic", "containment"):
+            # La evidencia necesita una investigación y el aislamiento su propio flujo con
+            # confirmación: ninguno de los dos puede ser un paso automático de un playbook.
+            raise PlaybookError(
+                "playbook_action_not_allowed", f"Step {order}: action not allowed in playbooks"
+            )
         if action.target_type != "asset":
             raise PlaybookError(
                 "playbook_action_target", f"Step {order}: playbooks only run asset actions"

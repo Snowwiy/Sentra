@@ -34,6 +34,7 @@ from app.core.metrics import REGISTRY
 from app.detection import text
 from app.detection.config import DetectionConfig
 from app.detection.custom.runtime import CustomRule, CustomRuleIndex, load_index
+from app.detection.exclusions import Exclusions, load_exclusions
 from app.detection.rules import (
     ANY_SUBJECT,
     RULES,
@@ -55,6 +56,7 @@ from app.models.detection import (
     DetectionStatus,
 )
 from app.models.detection_rule import DetectionRuleMatch, DetectionRuleStats, RuleSource
+from app.models.endpoint import DetectionExclusion
 from app.repositories.alert_repository import AlertRepository
 from app.risk.queue import request_recalculation
 from app.services.alert_service import AlertService, AlertThresholds
@@ -309,6 +311,8 @@ class DetectionEngine:
         self._load_custom = custom is None and load_custom
         self._custom: CustomRuleIndex | None = custom
         self._stats: dict[str, _RuleStat] = {}
+        # Fase 6E.5: excepciones vigentes por regla (se recargan en cada lote).
+        self._exclusions: Exclusions = {}
         for rule in rules:
             if rule.meta.id in config.disabled_rules:
                 continue
@@ -331,6 +335,7 @@ class DetectionEngine:
             if not signals:
                 break
             self._refresh_custom()
+            self._exclusions = load_exclusions(self._session)
             context = _Context(self._session, self._config)
             for signal in signals:
                 self._evaluate(context, signal, run)
@@ -387,6 +392,11 @@ class DetectionEngine:
                     )
                     if not rule.matches(signal.kind, signal.subject, signal.data, asset)[0]:
                         continue
+                excluded = self._excluded(rule.meta.id, signal)
+                if excluded is not None:
+                    excluded.hits += 1
+                    excluded.last_hit_at = datetime.now(UTC)
+                    continue
                 with self._session.begin_nested():
                     for result in rule.evaluate(context, signal):
                         stat.matches += 1
@@ -420,6 +430,20 @@ class DetectionEngine:
                 stat.seconds += elapsed
                 if elapsed > SLOW_EVALUATION_SECONDS:
                     stat.slow += 1
+
+    def _excluded(self, rule_id: str, signal: DetectionSignal) -> DetectionExclusion | None:
+        """Excepción vigente de la regla que coincide con un campo de la señal, o None."""
+        candidates = self._exclusions.get(rule_id)
+        if not candidates:
+            return None
+        data = signal.data if isinstance(signal.data, dict) else {}
+        for exclusion in candidates:
+            if exclusion.asset_id is not None and exclusion.asset_id != signal.asset_id:
+                continue
+            value = data.get(exclusion.field)
+            if isinstance(value, str) and value.strip().lower() == exclusion.value:
+                return exclusion
+        return None
 
     def _flush_stats(self) -> None:
         """Vuelca los contadores del lote: una sentencia, sin tocar la fila de la regla."""

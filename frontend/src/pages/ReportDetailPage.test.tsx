@@ -182,14 +182,29 @@ describe("ReportDetailPage", () => {
     expect(click).not.toHaveBeenCalled();
   });
 
-  it("refuses to save a download when the browser cannot compute SHA-256", async () => {
+  // Fase 6E: sin crypto.subtle (http desde otra PC de la LAN) el SHA-256 se calcula con la
+  // implementación propia. Antes el botón mostraba un error aunque la descarga era correcta.
+  it("verifies with the built-in SHA-256 when crypto.subtle is missing and still saves", async () => {
     vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    const createObjectURL = vi.fn(() => "blob:report");
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    renderPage("viewer");
+    fireEvent.click(await screen.findByRole("button", { name: "Descargar" }));
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(screen.queryByText(/SHA-256/, { selector: "[role=alert]" })).toBeNull();
+    expect(createObjectURL).toHaveBeenCalledTimes(1);
+  });
+
+  it("still refuses a mismatching download when only the built-in SHA-256 is available", async () => {
+    vi.stubGlobal("crypto", { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    artifactSha = "0".repeat(64);
     const createObjectURL = vi.fn(() => "blob:report");
     vi.stubGlobal("URL", Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }));
     const click = vi.spyOn(HTMLAnchorElement.prototype, "click");
     renderPage("viewer");
     fireEvent.click(await screen.findByRole("button", { name: "Descargar" }));
-    expect(await screen.findByText(/no puede verificar el SHA-256/)).toBeInTheDocument();
+    expect(await screen.findByText(/no coincide con su SHA-256/)).toBeInTheDocument();
     expect(createObjectURL).not.toHaveBeenCalled();
     expect(click).not.toHaveBeenCalled();
   });

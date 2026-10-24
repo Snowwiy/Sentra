@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-21 (Fase 6D: topología, informes v2, diagnóstico SNMP y API 0.2.0).
+Last updated: 2026-10-22 (Fase 6E: historial de red, identidad DHCP, telemetría de endpoint, forense y aislamiento seguro; servidor y frontend 0.3.0, agente 0.5.0, sensor 0.6.0).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0038 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0043 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -165,6 +165,13 @@ Topología (Fase 6D): `GET /topology/graph`, `/topology/status`, `/topology/link
 /topology/links/{id}/review` y `POST /topology/rebuild` (topology:manage, solo admin). SNMP:
 `POST /network/devices/{id}/compatibility-check`, `POST /network/devices/{id}/monitoring/resume`
 (docs/topology-engine.md, docs/snmp-network-intelligence.md, docs/compatibility-matrix.md).
+Fase 6E: historial `/topology/snapshots`, `/topology/diff` (+ `/export`), `/topology/changes`,
+`/topology/history/*` (docs/topology-history.md); `/dhcp/sources`, `/dhcp/leases`,
+`/assets/{id}/identity` (+ `/history`) (docs/dhcp-identity.md); `POST /agents/activity`,
+`/assets/{id}/process-tree`, `/process-instances/{instance_id}`, `/activity`,
+`/telemetry-status`, `/endpoint/metrics` (docs/process-tree.md); `/detection-exclusions`
+(docs/behavioral-detection.md); `/investigations/*` (docs/forensic-investigation.md);
+`/assets/{id}/isolation*`, `/isolation/sessions` (docs/safe-isolation.md).
 Details: `docs/agent-protocol.md`.
 
 ## Run
@@ -189,6 +196,10 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Known issues and limitations
 
+- Fase 6E (detalle en docs/fase-6e-known-issues.md): forense y aislamiento solo probados con
+  agentes y helpers simulados; el aislamiento está desactivado por defecto en servidor y
+  helper, sin macOS, con helper privilegiado separado (decidido el 2026-10-22); la
+  telemetría por sondeo pierde procesos de menos de ~5 s sin Sysmon; sin colector DNS.
 - Fase 6D (detalle en docs/fase-6d-known-issues.md): topología sin historial temporal (6E) ni
   retención de `topology_builds` ni purga de enlaces ausentes; reconstrucción manual sin
   enfriamiento (solo admin, serializada por site); informes v2 dibujan como máximo 3 sites y
@@ -426,6 +437,14 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   the dashboard shows its metrics as "—". On-demand: `python -m app.cli purge-old-data`.
 
 ## Recommended next phase
+
+Fase 6E implementada (servidor y frontend 0.3.0, agente 0.5.0, sensor 0.6.0, migraciones
+0039-0043): aplicar el parche y las migraciones, actualizar agentes y sensores, importar o leer
+los leases DHCP del Archer GX90 (docs/dhcp-identity.md), revisar el árbol de procesos y las
+detecciones BEH-* en un equipo real, abrir una investigación y descargar su paquete, y probar
+el aislamiento solo en un equipo de laboratorio tras decidir el modelo de privilegios
+(docs/safe-isolation.md). Pasos en docs/fase-6e-architecture.md y HANDOFF de la entrega.
+Siguiente migración libre: 0044.
 
 Fase 6D implementada (servidor y frontend 0.2.0, sensor 0.5.1, agente sin cambios): aplicar la
 migración 0038; abrir Topología y pulsar «Reconstruir» en cada site; revisar enlaces y nodos;

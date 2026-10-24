@@ -4,6 +4,7 @@ It lets the agent tests exercise real HTTP, JSON and error handling without a da
 Backend behavior itself is covered by the backend test suite.
 """
 
+import gzip
 import json
 import threading
 import uuid
@@ -15,9 +16,9 @@ from typing import Any
 
 import pytest
 
-from sentra_agent import credentials, wifi
+from sentra_agent import credentials, runner, wifi
 from sentra_agent.client import SentraClient
-from sentra_agent.config import AgentConfig
+from sentra_agent.config import AgentConfig, IsolationSettings
 from sentra_agent.credentials import CredentialStoreUnavailableError
 from sentra_agent.identity import IdentityStore
 
@@ -65,6 +66,14 @@ class FakeApiState:
     commands: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     command_results: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     commands_endpoint: bool = True
+    # Fase 6E: POST /agents/activity (False = servidor anterior, 404), lotes recibidos,
+    # event_uid ya vistos (deduplicación como el servidor real) y campos de primer nivel del
+    # heartbeat que este servidor no conoce (422 extra_forbidden, como un backend 0.2.0).
+    activity_endpoint: bool = True
+    activity: list[dict[str, Any]] = field(default_factory=list)
+    activity_uids: set[str] = field(default_factory=set)
+    unknown_heartbeat_fields: set[str] = field(default_factory=set)
+    max_activity_body: int | None = None
 
     def paths(self) -> list[str]:
         return [path for path, _ in self.requests]
@@ -90,6 +99,13 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length)
+            if self.headers.get("Content-Encoding") == "gzip":
+                # Como el servidor real: descompresión acotada a max_request_bytes.
+                raw = gzip.decompress(raw)
+                if len(raw) > state.max_body:
+                    state.requests.append((self.path.removeprefix("/api/v1"), {}))
+                    self._send(413, {"error": {"code": "payload_too_large", "message": "big"}})
+                    return
             if length > state.max_body:
                 state.requests.append((self.path.removeprefix("/api/v1"), {}))
                 self._send(413, {"error": {"code": "payload_too_large", "message": "big"}})
@@ -144,6 +160,10 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 or self.headers.get("Authorization") != f"Bearer {state.tokens[agent_id]}"
             ):
                 self._send(401, {"error": {"code": "unauthorized", "message": "bad token"}})
+            elif path == "/agents/heartbeat" and self._reject_unknown_heartbeat_fields(body):
+                return
+            elif path == "/agents/activity":
+                self._activity(body, len(raw))
             elif path == "/agents/heartbeat":
                 response: dict[str, Any] = {"asset_id": state.agents[agent_id], "status": "online"}
                 if state.commands.get(agent_id):
@@ -217,6 +237,42 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
             else:
                 self._send(404, {"error": {"code": "http_error", "message": "Not Found"}})
 
+        def _reject_unknown_heartbeat_fields(self, body: dict[str, Any]) -> bool:
+            details = [
+                {"loc": ["body", name], "msg": "Extra inputs", "type": "extra_forbidden"}
+                for name in sorted(state.unknown_heartbeat_fields & set(body))
+            ]
+            if details:
+                error = {"code": "validation_error", "message": "bad", "details": details}
+                self._send(422, {"error": error})
+            return bool(details)
+
+        def _activity(self, body: dict[str, Any], size: int) -> None:
+            if not state.activity_endpoint:
+                self._send(404, {"error": {"code": "http_error", "message": "Not Found"}})
+                return
+            if state.max_activity_body is not None and size > state.max_activity_body:
+                self._send(413, {"error": {"code": "payload_too_large", "message": "big"}})
+                return
+            events = body.get("events")
+            if not isinstance(events, list) or not 1 <= len(events) <= 1000:
+                self._send(422, {"error": {"code": "validation_error", "message": "events"}})
+                return
+            state.activity.append(body)
+            accepted = duplicates = 0
+            for event in events:
+                uid = event.get("event_uid")
+                if uid in state.activity_uids:
+                    duplicates += 1
+                else:
+                    state.activity_uids.add(uid)
+                    accepted += 1
+            asset = state.agents[body["agent_id"]]
+            self._send(
+                200,
+                {"asset_id": asset, "accepted": accepted, "duplicates": duplicates, "rejected": []},
+            )
+
         def _reject_unknown_host_fields(self, path: str, body: dict[str, Any]) -> bool:
             if path == "/agents/register":
                 host, prefix = body, ["body"]
@@ -263,6 +319,13 @@ def fake_api() -> Iterator[tuple[str, FakeApiState]]:
 def make_config(tmp_path: Path) -> Any:
     def factory(api_url: str, **overrides: Any) -> AgentConfig:
         overrides.setdefault("enrollment_key", ENROLLMENT_KEY)
+        # Fase 6E: nunca las rutas reales del helper de aislamiento del equipo de pruebas.
+        overrides.setdefault(
+            "isolation",
+            IsolationSettings(
+                exchange_dir=tmp_path / "isolation", policy_file=tmp_path / "isolation.toml"
+            ),
+        )
         return AgentConfig(api_url=api_url, state_dir=tmp_path / "state", **overrides).validate()
 
     return factory
@@ -324,3 +387,14 @@ def _no_host_wireless(request: pytest.FixtureRequest, monkeypatch: pytest.Monkey
     """
     if request.node.get_closest_marker("host_wireless") is None:
         monkeypatch.setattr(wifi, "collect_wireless", lambda platform=None: None)
+
+
+@pytest.fixture(autouse=True)
+def _no_host_telemetry(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Fase 6E: el agente de los tests no sondea los procesos ni servicios reales.
+
+    Los tests de telemetría inyectan un TelemetryService con fuentes simuladas; los que
+    quieran la real usan la marca `host_telemetry`.
+    """
+    if request.node.get_closest_marker("host_telemetry") is None:
+        monkeypatch.setattr(runner, "default_telemetry", lambda config: None)

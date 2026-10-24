@@ -33,15 +33,23 @@ from app.models.detection_rule import (
     RuleSource,
     RuleStatus,
 )
+from app.models.dhcp import AssetIdentityHistory, DhcpLease, DhcpSource
 from app.models.discovery import (
     DiscoveryJob,
     DiscoveryJobStatus,
     DiscoveryObservation,
     DiscoveryTrigger,
 )
+from app.models.endpoint import DetectionExclusion, EndpointActivity, ProcessInstance
 from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.forensics import (
+    EvidencePackage,
+    ForensicArtifact,
+    Investigation,
+    InvestigationNote,
+)
 from app.models.incident import (
     Incident,
     IncidentActivity,
@@ -54,6 +62,7 @@ from app.models.incident import (
     IncidentVulnerability,
 )
 from app.models.inventory import AssetInventory
+from app.models.isolation import IsolationSession
 from app.models.network import (
     NetworkDevice,
     NetworkDevicePoll,
@@ -102,6 +111,7 @@ from app.models.threat_intel import (
     VulnerabilityIntel,
 )
 from app.models.topology import TopologyBuild, TopologyLink
+from app.models.topology_history import NetworkChange, TopologySnapshot
 from app.models.user import User, UserSession
 from app.models.vulnerability import (
     AssetVulnerabilityState,
@@ -140,6 +150,7 @@ __all__ = [
     "AssetContextChange",
     "AssetCriticality",
     "AssetEnvironment",
+    "AssetIdentityHistory",
     "AssetInventory",
     "AssetPort",
     "AssetProcessSnapshot",
@@ -158,6 +169,7 @@ __all__ = [
     "DetectionBaseline",
     "DetectionConfidence",
     "DetectionEvidence",
+    "DetectionExclusion",
     "DetectionRuleMatch",
     "DetectionRuleRecord",
     "DetectionRuleStats",
@@ -165,12 +177,17 @@ __all__ = [
     "DetectionSeverity",
     "DetectionSignal",
     "DetectionStatus",
+    "DhcpLease",
+    "DhcpSource",
     "DiscoveryJob",
     "DiscoveryJobStatus",
     "DiscoveryObservation",
     "DiscoveryTrigger",
+    "EndpointActivity",
     "EnrollmentTokenState",
     "EventLevel",
+    "EvidencePackage",
+    "ForensicArtifact",
     "Incident",
     "IncidentActivity",
     "IncidentAlert",
@@ -180,8 +197,12 @@ __all__ = [
     "IncidentNote",
     "IncidentThreatMatch",
     "IncidentVulnerability",
+    "Investigation",
+    "InvestigationNote",
+    "IsolationSession",
     "LineageEndReason",
     "MonitoringMethod",
+    "NetworkChange",
     "NetworkDevice",
     "NetworkDevicePoll",
     "NetworkInterface",
@@ -195,6 +216,7 @@ __all__ = [
     "PlaybookRun",
     "PlaybookVersion",
     "PortStateValue",
+    "ProcessInstance",
     "RateLimitHit",
     "Report",
     "ReportArtifact",
@@ -223,6 +245,7 @@ __all__ = [
     "ThreatIntelSync",
     "TopologyBuild",
     "TopologyLink",
+    "TopologySnapshot",
     "User",
     "UserSession",
     "Vulnerability",
@@ -240,3 +263,9 @@ __all__ = [
     "WlanConfiguredNetwork",
     "WlanObservation",
 ]
+
+# Fase 6E.2: el historial de identidad se registra con un listener de sesión. Se instala al
+# importar los modelos para que cualquier sesión (API, worker, CLI, tests) lo tenga.
+from app.dhcp.history import install as _install_identity_history
+
+_install_identity_history()

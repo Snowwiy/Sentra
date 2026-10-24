@@ -87,7 +87,12 @@ misma IP que respondió (anti-SSRF, XML ≤ 64 KB, sin DTD).
 
 ### DHCP, router y TP-Link Archer GX90
 
-No hay ninguna fuente DHCP autorizada en Sentra: los nombres DHCP solo llegan indirectamente
+Desde la Fase 6E hay fuentes DHCP de solo lectura (importación de leases y fichero leído por
+un sensor), con nombre `dhcp_lease` solo cuando MAC e IP coinciden: ver
+`docs/dhcp-identity.md`. Lo que sigue describe el comportamiento de 6C, que se mantiene para
+el DNS inverso.
+
+Sin una fuente DHCP configurada, los nombres DHCP solo llegan indirectamente
 por el DNS del router y se marcan como inferidos (`dhcp`). No se ha añadido ninguna
 integración con routers. En concreto **no se asume** que el TP-Link Archer GX90 ofrezca SNMP
 ni una API local documentada: cualquier integración con TP-Link requiere una evaluación de

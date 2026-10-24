@@ -142,6 +142,41 @@ const TOPOLOGY_MESSAGES: Record<string, string> = {
   topology_node_not_found: "El nodo no existe en este site o ya no está disponible.",
 };
 
+// Fase 6E. *_conflict: otro operador cambió el recurso; la UI recarga antes de reintentar
+// (nunca se sobrescribe en silencio). evidence_integrity_mismatch lo trata además la vista
+// de la investigación: pide aceptar el aviso de forma explícita antes de reintentar.
+const PHASE_6E_MESSAGES: Record<string, string> = {
+  topology_snapshot_not_found: "El snapshot de topología no existe o ya no está disponible.",
+  topology_history_not_found: "No hay historial para ese elemento de la topología.",
+  network_change_not_found: "El cambio de red no existe o ya no está disponible.",
+  network_change_conflict: "Otro administrador ha revisado este cambio. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  topology_rebuild_cooldown: "La topología se reconstruyó hace muy poco. Espera un minuto y vuelve a intentarlo.",
+  dhcp_source_not_found: "La fuente DHCP no existe o ya no está disponible.",
+  dhcp_source_conflict: "Otro administrador ha modificado esta fuente DHCP. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  dhcp_source_name_taken: "Ya existe una fuente DHCP con ese nombre en este site.",
+  dhcp_sensor_source_taken: "Ese sensor ya tiene otra fuente con el mismo nombre de fichero.",
+  dhcp_source_disabled: "La fuente DHCP está deshabilitada: habilítala antes de importar o leer.",
+  dhcp_source_kind: "Esa acción no corresponde al tipo de la fuente (importación manual o fichero del sensor).",
+  dhcp_sensor_unavailable: "El sensor no está disponible o su versión no lee ficheros DHCP (requiere 0.6.0 o posterior).",
+  dhcp_read_in_progress: "Ya hay una lectura en curso para esta fuente. Espera a que termine.",
+  dhcp_file_too_large: "El fichero de concesiones supera el tamaño máximo que admite el servidor.",
+  dhcp_format_invalid: "El fichero no se puede leer con el formato de la fuente. Revisa el formato elegido.",
+  exclusion_rule_unknown: "La regla indicada no existe o no admite excepciones.",
+  exclusion_limit: "Se ha alcanzado el máximo de excepciones activas para esa regla.",
+  investigation_not_found: "La investigación no existe o no tienes acceso a ella.",
+  investigation_closed: "La investigación está cerrada: reábrela antes de añadir evidencias o notas.",
+  investigation_version_conflict: "Otro operador ha modificado esta investigación. Se han recargado los datos: revisa y vuelve a intentarlo.",
+  evidence_integrity_mismatch: "Hay evidencias cuyo SHA-256 no coincide con el que calculó el agente.",
+  evidence_package_too_large: "El paquete de evidencias supera el tamaño máximo que admite el servidor.",
+  evidence_empty: "La investigación no tiene evidencias que empaquetar.",
+  isolation_disabled: "El aislamiento está desactivado en este servidor.",
+  isolation_unavailable: "Aislamiento no disponible para este dispositivo",
+  isolation_active: "El equipo ya tiene una sesión de aislamiento en curso.",
+  isolation_confirmation_mismatch: "El nombre escrito no coincide exactamente con el del equipo.",
+  isolation_duration_exceeds_policy: "La duración supera el máximo permitido por la política.",
+  isolation_state_conflict: "El estado del aislamiento ha cambiado. Se han recargado los datos: revisa y vuelve a intentarlo.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -176,6 +211,7 @@ function translate(code: string, message: string): string {
   if (SITE_MESSAGES[code]) return SITE_MESSAGES[code];
   if (NETWORK_MESSAGES[code]) return NETWORK_MESSAGES[code];
   if (TOPOLOGY_MESSAGES[code]) return TOPOLOGY_MESSAGES[code];
+  if (PHASE_6E_MESSAGES[code]) return PHASE_6E_MESSAGES[code];
   // Dirección fuera de las redes del site: el detalle (inglés) dice qué dirección y por qué.
   if (code === "network_address_out_of_scope") return `Dirección fuera de las redes autorizadas del site: ${message}`;
   // CIDR rechazado: el detalle (inglés) dice el motivo (host bits, /0, multicast, tamaño...).
@@ -324,7 +360,14 @@ export function apiDelete<T>(path: string, options: RequestOptions = {}): Promis
 
 /** Fichero descargado de la API (p. ej. el artefacto de un informe, Fase 5E). */
 export interface DownloadedFile {
+  /** Los bytes recibidos como Blob, listo para guardarse con un enlace temporal. */
   blob: Blob;
+  /**
+   * Los mismos bytes, leídos directamente de la respuesta. El SHA-256 se calcula sobre ellos:
+   * releer un Blob depende de que implemente arrayBuffer() (con Node >= 24 y jsdom no siempre)
+   * y antes un fallo ahí acababa en un aviso de error aunque la descarga era correcta.
+   */
+  bytes: Uint8Array<ArrayBuffer>;
   /** Nombre de Content-Disposition, si el servidor lo envía (y es seguro). */
   filename: string | undefined;
   /** Cabecera X-Sentra-SHA256 (hex), si el servidor la envía. */
@@ -345,16 +388,29 @@ function filenameFromDisposition(header: string | null): string | undefined {
   return name.split(/[\\/]/).pop() || undefined;
 }
 
+interface DownloadOptions {
+  signal?: AbortSignal;
+  /** POST cuando la descarga deja registro en el servidor (paquete de evidencias, Fase 6E.6). */
+  method?: "GET" | "POST";
+  body?: unknown;
+}
+
 /**
- * GET binario con la cookie de sesión. Devuelve el contenido como Blob; quien llama decide
- * cómo guardarlo (nunca se interpreta ni se inserta en la página).
+ * Descarga binaria con la cookie de sesión. Devuelve el contenido como bytes y Blob; quien
+ * llama decide cómo guardarlo (nunca se interpreta ni se inserta en la página).
  */
-export async function apiDownload(path: string, { signal }: { signal?: AbortSignal } = {}): Promise<DownloadedFile> {
+export async function apiDownload(path: string, { signal, method = "GET", body }: DownloadOptions = {}): Promise<DownloadedFile> {
+  const headers: Record<string, string> = { Accept: "*/*" };
+  if (method !== "GET") {
+    headers["Content-Type"] = "application/json";
+    if (csrfToken) headers[CSRF_HEADER] = csrfToken;
+  }
   let response: Response;
   try {
     response = await fetch(`${config.apiBaseUrl}/api/v1${path}`, {
-      method: "GET",
-      headers: { Accept: "*/*" },
+      method,
+      headers,
+      body: method === "GET" ? undefined : JSON.stringify(body ?? {}),
       cache: "no-store",
       credentials: "include",
       signal,
@@ -368,11 +424,11 @@ export async function apiDownload(path: string, { signal }: { signal?: AbortSign
     throw error;
   }
   // Fase 6D.6: el cuerpo llega DESPUÉS de las cabeceras. Si la conexión se corta a mitad
-  // (proxy que cierra, servidor que cae, red), blob() rechaza con un TypeError genérico; antes
-  // se propagaba sin traducir. Se distingue de "API no disponible": el servidor sí respondió.
-  let blob: Blob;
+  // (proxy que cierra, servidor que cae, red), la lectura rechaza con un TypeError genérico; se
+  // distingue de "API no disponible": el servidor sí respondió.
+  let bytes: Uint8Array<ArrayBuffer>;
   try {
-    blob = await response.blob();
+    bytes = new Uint8Array(await response.arrayBuffer());
   } catch (error) {
     if (signal?.aborted || (error instanceof DOMException && error.name === "AbortError")) {
       throw new DOMException("Descarga cancelada", "AbortError");
@@ -383,8 +439,10 @@ export async function apiDownload(path: string, { signal }: { signal?: AbortSign
       "La descarga se interrumpió antes de completarse (conexión cortada). El fichero no se ha guardado: vuelve a intentarlo.",
     );
   }
+  const type = response.headers.get("Content-Type") ?? "application/octet-stream";
   return {
-    blob,
+    blob: new Blob([bytes], { type }),
+    bytes,
     filename: filenameFromDisposition(response.headers.get("Content-Disposition")),
     sha256: response.headers.get("X-Sentra-SHA256")?.trim().toLowerCase() || undefined,
   };

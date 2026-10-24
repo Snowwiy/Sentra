@@ -42,6 +42,7 @@ from app.services.background import (
 )
 from app.services.discovery_runner import stop_discovery_runner
 from app.services.local_model_service import LocalAIState
+from app.services.retention_6e import phase_6e_retention_enabled
 from app.services.retention_service import RetentionPolicy
 
 logger = logging.getLogger(__name__)
@@ -163,8 +164,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             jobs.append(
                 PeriodicJob("topology-builder", TOPOLOGY_BUILDER_SECONDS, run_topology_builder)
             )
-        # Only when a retention period is configured: by default nothing is ever deleted.
-        if RetentionPolicy.from_settings(settings).enabled:
+        # Solo con algún plazo de retención configurado. Las de 4M son opt-in; las de 6E
+        # (historial de topología, leases, identidad) vienen con plazo por defecto.
+        if RetentionPolicy.from_settings(settings).enabled or phase_6e_retention_enabled(settings):
             jobs.append(
                 PeriodicJob("retention", settings.retention_sweep_interval_seconds, purge_old_data)
             )
@@ -266,6 +268,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.login_guard = LoginGuard(settings, get_engine)
     app.state.register_limiter = make_limiter(
         backend, "agent_register", settings.agent_register_max_per_minute, 60, get_engine
+    )
+    # Fase 6E.3: lotes de actividad por agente y minuto.
+    app.state.activity_limiter = make_limiter(
+        backend, "agent_activity", settings.telemetry_activity_max_per_minute, 60, get_engine
     )
     app.state.api_limits = ApiLimits(
         mutations=make_limiter(

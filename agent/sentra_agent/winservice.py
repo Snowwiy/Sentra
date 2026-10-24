@@ -201,8 +201,10 @@ if sys.platform == "win32":
     ]
     _advapi32.SetServiceStatus.restype = wintypes.BOOL
 
-    def dispatch(body: Callable[[threading.Event], None]) -> int:
-        """Conecta con el SCM y ejecuta `body` como el ServiceMain de SentraAgent.
+    def dispatch(body: Callable[[threading.Event], None], service_name: str = SERVICE_NAME) -> int:
+        """Conecta con el SCM y ejecuta `body` como el ServiceMain de `service_name`.
+
+        Fase 6E: el helper de aislamiento (SentraIsolation) reutiliza este mismo despachador.
 
         Bloquea hasta que el servicio se detiene. StartServiceCtrlDispatcherW debe llamarse
         desde el hilo principal; el SCM invoca ServiceMain en otro hilo y HandlerEx en este.
@@ -234,7 +236,7 @@ if sys.platform == "win32":
 
         @_SERVICE_MAIN  # type: ignore[untyped-decorator]
         def service_main(_argc: int, _argv: object) -> None:
-            handle = _advapi32.RegisterServiceCtrlHandlerExW(SERVICE_NAME, handler, None)
+            handle = _advapi32.RegisterServiceCtrlHandlerExW(service_name, handler, None)
             if not handle:
                 holder["code"] = ctypes.get_last_error() or 1
                 return
@@ -242,7 +244,7 @@ if sys.platform == "win32":
             holder["code"] = run_service_body(reporter, body)
 
         table = (_ServiceTableEntry * 2)(
-            _ServiceTableEntry(SERVICE_NAME, service_main), _ServiceTableEntry()
+            _ServiceTableEntry(service_name, service_main), _ServiceTableEntry()
         )
         if not _advapi32.StartServiceCtrlDispatcherW(table):
             error = ctypes.get_last_error()
@@ -253,5 +255,5 @@ if sys.platform == "win32":
 
 else:
 
-    def dispatch(body: Callable[[threading.Event], None]) -> int:
+    def dispatch(body: Callable[[threading.Event], None], service_name: str = SERVICE_NAME) -> int:
         raise NotRunningAsServiceError

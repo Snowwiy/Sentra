@@ -29,6 +29,9 @@ export type IconName =
   | "rules"
   | "response"
   | "playbook"
+  | "dhcp"
+  | "forensics"
+  | "isolation"
   | "report"
   | "ai"
   | "users"
@@ -65,6 +68,11 @@ const PATHS: Record<IconName, string> = {
   rules: "M8 6h12M8 12h12M8 18h12M4 6h.01M4 12h.01M4 18h.01",
   response: "M13 2L4 14h7l-1 8 9-12h-7z",
   playbook: "M5 4h11l3 3v13H5zM9 9h6M9 13h6M9 17h3",
+  // Fase 6E: concesiones DHCP (etiqueta con dirección), investigación (lupa sobre documento) y
+  // aislamiento (escudo con barra).
+  dhcp: "M3 12l9-9h7v7l-9 9zM15.5 8.5h.01M7 12l5 5",
+  forensics: "M6 3h8l4 4v6M6 3v18h7M10 17a3 3 0 1 0 6 0 3 3 0 0 0-6 0M18.2 19.2L21 22",
+  isolation: "M12 3l8 4v5c0 4.5-3.4 8.3-8 9-4.6-.7-8-4.5-8-9V7zM7 7l10 10",
   report: "M6 3h9l4 4v14H6zM9 13v4M12 10v7M15 14v3",
   ai: "M12 3l1.8 4.7L18.5 9.5l-4.7 1.8L12 16l-1.8-4.7L5.5 9.5l4.7-1.8zM19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z",
   users: "M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM2 21v-1a6 6 0 0 1 12 0v1M16 3.1a4 4 0 0 1 0 7.8M22 21v-1a6 6 0 0 0-4-5.7",

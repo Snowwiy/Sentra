@@ -1,0 +1,8 @@
+#TYPE Microsoft.Management.Infrastructure.CimInstance#root/Microsoft/Windows/DHCP/DhcpServerv4Lease
+"IPAddress","ScopeId","AddressState","ClientId","ClientType","Description","DnsRegistration","DnsRR","HostName","LeaseExpiryTime","NapCapable","NapStatus","PolicyName","ProbationEnds","ServerIP","PSComputerName"
+"10.0.0.50","10.0.0.0","Active","00-15-5d-01-02-03","Dhcp","","Complete","AandPTR","ws01.corp.example","10/22/2026 6:00:00 PM","False","FullAccess","","","10.0.0.2",""
+"10.0.0.51","10.0.0.0","ActiveReservation","00-15-5d-01-02-04","Both","printer 2F","","","prn-2f.corp.example.","","False","FullAccess","","","10.0.0.2",""
+"10.0.0.52","10.0.0.0","Expired","00-15-5d-01-02-05","Dhcp","","","","old-laptop.corp.example","2026-10-20T10:00:00Z","False","FullAccess","","","10.0.0.2",""
+"10.0.0.53","10.0.0.0","Declined","00-15-5d-01-02-06","Dhcp","","","","","","False","FullAccess","","","10.0.0.2",""
+"10.0.0.54","10.0.0.0","InactiveReservation","00-15-5d-01-02-07","Both","","","","kiosk","22/10/2026 18:00:00","False","FullAccess","","","10.0.0.2",""
+"10.0.0.55","10.0.0.0","Active","01-02-03","Dhcp","","","","odd","","False","FullAccess","","","10.0.0.2",""

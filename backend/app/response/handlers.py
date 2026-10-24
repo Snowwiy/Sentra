@@ -98,6 +98,10 @@ class ActionContext:
     detection: Detection | None = None
     # Fábrica del runner de discovery (inyectable en tests); solo la usa start_discovery.
     discovery_runner: Callable[[], Any] | None = None
+    # Fase 6E.6: investigación de una recogida forense (models.forensics.Investigation).
+    investigation: Any = None
+    # Fase 6E.7: sesión de aislamiento que origina la orden (models.isolation.IsolationSession).
+    isolation: Any = None
 
 
 def _thresholds(settings: Settings) -> AlertThresholds:
@@ -490,3 +494,42 @@ def archive_asset(ctx: ActionContext) -> ActionResult:
         commit=False,
     )
     return ActionResult("Activo archivado", {"archived": True})
+
+
+# --- Fase 6E.6/6E.7: comprobaciones previas -------------------------------------------------------
+
+
+def check_investigation(ctx: ActionContext) -> list[Issue]:
+    """Una recogida forense siempre pertenece a una investigación abierta del mismo activo:
+    así toda evidencia tiene caso, operador y cadena de custodia desde el primer momento."""
+    investigation = ctx.investigation
+    if investigation is None:
+        return [Issue("investigation_required", "Forensic actions run inside an investigation")]
+    if investigation.status != "open":
+        return [Issue("investigation_closed", "The investigation is closed")]
+    if ctx.asset is None or investigation.asset_id != ctx.asset.id:
+        return [Issue("investigation_mismatch", "The investigation belongs to another asset")]
+    return []
+
+
+def check_file_path(ctx: ActionContext) -> list[Issue]:
+    issues = check_investigation(ctx)
+    path = str(getattr(ctx.params, "path", ""))
+    os_name = (ctx.asset.os_name or "").lower() if ctx.asset is not None else ""
+    windows_style = len(path) > 2 and path[1] == ":" and path[2] in "\\/"
+    if os_name.startswith("windows") and not windows_style:
+        issues.append(Issue("path_platform_mismatch", "Use an absolute Windows path (C:\\...)"))
+    elif os_name and not os_name.startswith("windows") and not path.startswith("/"):
+        issues.append(Issue("path_platform_mismatch", "Use an absolute POSIX path (/...)"))
+    return issues
+
+
+def check_isolation_session(ctx: ActionContext) -> list[Issue]:
+    """isolate_host y release_isolation solo salen del flujo de aislamiento (sesión con
+    confirmación, duración y previsualización), nunca de una ejecución suelta de Response."""
+    session = ctx.isolation
+    if session is None:
+        return [Issue("isolation_session_required", "Isolation is managed from its own flow")]
+    if ctx.asset is None or session.asset_id != ctx.asset.id:
+        return [Issue("isolation_mismatch", "The isolation session belongs to another asset")]
+    return []

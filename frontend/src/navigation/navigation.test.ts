@@ -29,6 +29,10 @@ describe("navegación", () => {
     expect(activeItem(groups, "/detections/42")?.label).toBe("Detecciones");
     expect(activeItem(groups, "/detections/rules")?.label).toBe("Reglas");
     expect(activeItem(groups, "/detections/rules/new")?.label).toBe("Reglas");
+    expect(activeItem(groups, "/detections/exclusions")?.label).toBe("Reglas");
+    expect(activeItem(groups, "/investigations/abc")?.label).toBe("Investigaciones");
+    expect(activeItem(groups, "/containment")?.label).toBe("Aislamiento");
+    expect(activeItem(groups, "/dhcp")?.label).toBe("DHCP");
     expect(activeItem(groups, "/settings")?.label).toBe("Configuración");
     expect(activeItem(groups, "/settings/ai")?.label).toBe("Configuración");
     expect(activeItem(groups, "/settings/sites")?.label).toBe("Sites");

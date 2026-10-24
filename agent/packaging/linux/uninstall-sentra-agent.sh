@@ -35,10 +35,19 @@ done
 have_systemd() { [ -n "$ROOT" ] || [ -d /run/systemd/system ]; }
 
 if have_systemd; then
+  # Fase 6E.7: helper de aislamiento opcional instalado a mano. Primero retira sus reglas.
+  if [ -f "$ROOT/etc/systemd/system/sentra-isolation.service" ]; then
+    if [ -x "$ROOT/opt/sentra-agent/bin/sentra-agent" ] && [ -z "$ROOT" ]; then
+      /opt/sentra-agent/bin/sentra-agent isolation-helper revert >/dev/null 2>&1 || true
+    fi
+    systemctl disable --now sentra-isolation >/dev/null 2>&1 || true
+  fi
   systemctl disable --now sentra-agent >/dev/null 2>&1 || true
 fi
-# Only the unit this installer wrote; a .deb removes its own with dpkg.
+# Only the units this installer (or the admin, following the docs) wrote; a .deb removes its
+# own with dpkg.
 rm -f "$ROOT/etc/systemd/system/sentra-agent.service"
+rm -f "$ROOT/etc/systemd/system/sentra-isolation.service"
 if have_systemd; then
   systemctl daemon-reload || true
   systemctl reset-failed sentra-agent >/dev/null 2>&1 || true
@@ -47,7 +56,8 @@ rm -rf "$ROOT/opt/sentra-agent"
 say "service and runtime removed"
 
 if [ "$PURGE" = "1" ]; then
-  rm -rf "$ROOT/etc/sentra-agent" "$ROOT/var/lib/sentra-agent" "$ROOT/var/log/sentra-agent"
+  rm -rf "$ROOT/etc/sentra-agent" "$ROOT/var/lib/sentra-agent" "$ROOT/var/log/sentra-agent" \
+    "$ROOT/var/lib/sentra-isolation" "$ROOT/var/log/sentra-isolation"
   if getent passwd "$SERVICE_USER" >/dev/null 2>&1; then
     userdel "$SERVICE_USER" || say "could not delete user $SERVICE_USER; remove it by hand"
   fi

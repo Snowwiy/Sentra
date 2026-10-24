@@ -20,6 +20,10 @@
     un activo NUEVO en Sentra (el anterior queda con su historial; puedes revocarlo en
     Agentes). También se pierden los logs y el buffer de telemetría pendiente de enviar.
 
+    Fase 6E.7: si está instalado el helper de aislamiento (SentraIsolation), primero le pide
+    que retire sus reglas (grupo "Sentra Isolation") y después elimina su servicio. Su
+    política (C:\ProgramData\Sentra\Isolation) solo se borra con -Purge.
+
     El perfil de Windows de la cuenta virtual (creado por el sistema) no se toca.
 #>
 [CmdletBinding()]
@@ -31,6 +35,7 @@ Set-StrictMode -Version 3.0
 $ErrorActionPreference = 'Stop'
 
 $ServiceName = 'SentraAgent'
+$IsolationServiceName = 'SentraIsolation'
 $EventLogReadersSid = 'S-1-5-32-573'
 
 function Write-Step([string]$Message) { Write-Host "sentra-agent: $Message" }
@@ -112,6 +117,24 @@ function Remove-EventLogAccess {
     }
 }
 
+function Remove-IsolationHelper([string]$InstallDir) {
+    $service = Get-CimInstance -ClassName Win32_Service -Filter "Name='$IsolationServiceName'" -ErrorAction SilentlyContinue
+    if (-not $service) { return }
+    # Antes de quitar el servicio, el propio helper retira sus reglas: nunca queda un equipo
+    # aislado sin nadie que lo revierta.
+    $python = Join-Path $InstallDir 'runtime\python.exe'
+    if (Test-Path -LiteralPath $python -PathType Leaf) {
+        $revert = Invoke-Native -FilePath $python -Arguments @('-I', '-m', 'sentra_agent.isolation_helper', 'revert')
+        if ($revert.ExitCode -ne 0) { Write-Warn "el helper no confirmó la retirada de sus reglas: $($revert.Output)" }
+    }
+    if ($service.State -ne 'Stopped') {
+        Stop-Service -Name $IsolationServiceName -Force -ErrorAction SilentlyContinue
+    }
+    $result = Invoke-Native -FilePath (Join-Path $env:SystemRoot 'System32\sc.exe') -Arguments @('delete', $IsolationServiceName)
+    if ($result.ExitCode -ne 0) { throw "sc.exe delete $IsolationServiceName falló ($($result.ExitCode)): $($result.Output)" }
+    Write-Step 'helper de aislamiento eliminado'
+}
+
 function Invoke-Uninstall {
     $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
@@ -121,6 +144,7 @@ function Invoke-Uninstall {
     # Si la consola está dentro de la carpeta que se va a borrar, Windows no puede eliminarla.
     Set-Location -LiteralPath $env:SystemRoot
 
+    Remove-IsolationHelper $paths.InstallDir
     Remove-AgentService
     Remove-EventLogAccess
     if (Test-Path -LiteralPath $paths.InstallDir) {
@@ -131,6 +155,10 @@ function Invoke-Uninstall {
     if ($Purge) {
         if (Test-Path -LiteralPath $paths.DataDir) {
             Remove-Item -LiteralPath $paths.DataDir -Recurse -Force
+        }
+        $isolationDir = Join-Path $paths.SentraDir 'Isolation'
+        if (Test-Path -LiteralPath $isolationDir) {
+            Remove-Item -LiteralPath $isolationDir -Recurse -Force
         }
         # ProgramData\Sentra solo se borra si queda vacía (podría alojar otros componentes).
         if ((Test-Path -LiteralPath $paths.SentraDir) -and -not (Get-ChildItem -LiteralPath $paths.SentraDir -Force)) {

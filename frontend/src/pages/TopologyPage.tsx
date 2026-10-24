@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { topologyApi } from "../api/sentra";
 import type { TopologyLinkKind, TopologyNode, TopologyStatus } from "../api/types";
@@ -33,7 +33,12 @@ import { usePolling } from "../lib/usePolling";
 import { useSite } from "../site/SiteContext";
 import { SiteScopeChip } from "../site/SiteSelector";
 
-type View = "map" | "list";
+type View = "map" | "list" | "history";
+
+// Fase 6E.1: el historial (snapshots, diferencias y cambios) solo se descarga al abrir su pestaña.
+const TopologyHistoryPanel = lazy(() =>
+  import("../components/topology/TopologyHistoryPanel").then((m) => ({ default: m.TopologyHistoryPanel })),
+);
 // La topología se reconstruye cada 15 min por defecto: refrescar más a menudo no aporta.
 const GRAPH_REFRESH_MS = Math.max(config.refreshIntervalMs * 4, 60_000);
 
@@ -359,6 +364,7 @@ export function TopologyPage() {
               [
                 ["map", "Mapa"],
                 ["list", "Lista accesible"],
+                ["history", "Historial"],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -375,6 +381,13 @@ export function TopologyPage() {
               </button>
             ))}
           </nav>
+          {view === "history" ? (
+            <div role="tabpanel" id="topo-panel-history" aria-labelledby="topo-tab-history">
+              <Suspense fallback={<LoadingState label="Cargando historial…" />}>
+                <TopologyHistoryPanel siteId={data.site.id} canManage={canManage} />
+              </Suspense>
+            </div>
+          ) : (
           <div className="topo-layout">
             <div className="topo-main" role="tabpanel" id={`topo-panel-${view}`} aria-labelledby={`topo-tab-${view}`}>
               {view === "map" ? (
@@ -453,6 +466,7 @@ export function TopologyPage() {
               <TopologyLegend />
             </aside>
           </div>
+          )}
         </>
       )}
     </div>

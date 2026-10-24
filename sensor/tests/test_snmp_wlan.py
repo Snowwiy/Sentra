@@ -56,7 +56,7 @@ def requested_oids(agent: FakeAgent) -> list[Oid]:
 
 
 def test_wlan_capability_and_version() -> None:
-    assert __version__ == "0.5.1"
+    assert __version__ == "0.6.0"
     assert "snmp.wlan" in snmp.capabilities()
     assert "snmp.wlan" in CAPABILITIES
     # Ninguna capacidad de radio: el sensor no escanea Wi-Fi por sí mismo.

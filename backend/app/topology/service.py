@@ -83,6 +83,8 @@ from app.topology.errors import (
     TopologyLinkNotFoundError,
     TopologyNodeNotFoundError,
 )
+from app.topology.history import ssid_of, vlan_of
+from app.topology.history_service import SnapshotContent, record_history
 
 logger = logging.getLogger(__name__)
 
@@ -101,6 +103,9 @@ COUNT_KEYS = (
     "nodes",
     "ambiguous_macs",
     "skipped_cross_site",
+    # Fase 6E.1: cambios de red registrados y si la reconstrucción creó un snapshot nuevo.
+    "changes_detected",
+    "snapshot_created",
 )
 _NODE_ID = re.compile(
     r"^(asset|network_device|wlan_ap):([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
@@ -694,6 +699,119 @@ class _Catalog:
         return ["unassigned"]
 
 
+# Fase 6E.1: diagnósticos SNMP que significan «la última consulta no dio evidencia válida».
+# Con ellos, que falte un enlace de ese equipo no dice nada del enlace.
+DEGRADED_SNMP = frozenset(
+    {
+        "no_response",
+        "timeout",
+        "unreachable",
+        "auth_failed",
+        "unsupported_version",
+        "malformed_response",
+        "collector_error",
+    }
+)
+
+
+def snapshot_content(
+    session: Session, settings: Settings, site_id: int, snapshot: Snapshot, result: DeriveResult
+) -> SnapshotContent:
+    """Estado compacto del grafo del site tras una reconstrucción (ver app/topology/history.py).
+
+    Usa el mismo catálogo de nodos que el grafo (nada de inventario duplicado) y solo los
+    enlaces presentes y no rechazados por un revisor: lo rechazado no forma parte de la red
+    que el analista acepta, y sus idas y venidas no deben llenar el historial.
+    """
+    catalog = _Catalog(session, settings, site_id)
+    rows = session.scalars(
+        select(TopologyLink).where(
+            TopologyLink.site_id == site_id,
+            TopologyLink.present.is_(True),
+            TopologyLink.review_state != "rejected",
+        )
+    ).all()
+    for row in rows:
+        if row.target_node.startswith("external:"):
+            catalog.add_external(row)
+    gateways: dict[str, list[str]] = {}
+    for report in snapshot.gateways:
+        key = catalog.asset_node.get(report.asset_id)
+        if key is not None:
+            gateways[key] = sorted(set(report.gateways))
+    wifi: dict[str, dict[str, Any]] = {}
+    links: dict[str, Any] = {}
+    for row in rows:
+        if row.source_node not in catalog.nodes or row.target_node not in catalog.nodes:
+            continue
+        evidence = list(row.evidence or [])
+        links[row.link_key] = {
+            "s": row.source_node,
+            "t": row.target_node,
+            "k": row.kind,
+            "rel": row.relation,
+            "c": row.confidence,
+            "med": row.medium,
+            "sp": row.source_port,
+            "tp": row.target_port,
+            "vlan": vlan_of(evidence),
+            "id": str(row.public_id),
+        }
+        if row.relation == "wlan_association":
+            wifi[row.target_node] = {"ap": row.source_node, "ssid": ssid_of(evidence)}
+    nodes: dict[str, Any] = {}
+    for key, node in catalog.nodes.items():
+        read = node.read
+        nodes[key] = {
+            "kind": read.kind,
+            "label": read.label,
+            "ip": read.ip,
+            "mac": read.mac,
+            "vendor": read.vendor,
+            "device_type": read.device_type,
+            "role": read.role,
+            "status": read.status,
+            "managed": read.managed,
+            "identity": read.identity_confidence,
+            "gateways": gateways.get(key, []),
+            "wifi": wifi.get(key),
+        }
+    degraded: set[str] = set()
+    for device_id, status, paused in session.execute(
+        select(
+            NetworkDevice.id, NetworkDevice.snmp_status, NetworkDevice.monitoring_paused_at
+        ).where(NetworkDevice.site_id == site_id, NetworkDevice.archived_at.is_(None))
+    ):
+        if status in DEGRADED_SNMP or paused is not None:
+            node_key = catalog.device_node.get(device_id)
+            if node_key is not None:
+                degraded.add(node_key)
+    for key, item in nodes.items():
+        # Un agente sin contacto no informa su gateway: su enlace lógico puede faltar sin que
+        # la red haya cambiado.
+        if item["managed"] and item["status"] != "online":
+            degraded.add(key)
+    reasons: list[str] = []
+    if result.links_dropped:
+        reasons.append("links_truncated")
+    if len(nodes) > settings.topology_max_nodes:
+        reasons.append("nodes_over_limit")
+    if reasons:
+        quality = "partial"
+    elif degraded:
+        quality = "degraded"
+        reasons.append("evidence_source_failed")
+    else:
+        quality = "complete"
+    return SnapshotContent(
+        nodes=nodes,
+        links=links,
+        quality=quality,
+        reasons=reasons,
+        degraded_nodes=frozenset(degraded),
+    )
+
+
 def _matches(node: _Node, q: str) -> bool:
     needle = q.strip().lower()
     if not needle:
@@ -789,6 +907,15 @@ class TopologyService:
             snapshot = load_snapshot(session, site_id)
             result = derive_links(snapshot, self._settings.topology_max_links)
             upserted = self._upsert(site_id, result, started)
+            # Fase 6E.1: snapshot y cambios en la MISMA transacción que los enlaces, para que
+            # el historial nunca describa un estado que no llegó a guardarse.
+            recorded = record_history(
+                session,
+                self._settings,
+                site_id,
+                build,
+                snapshot_content(session, self._settings, site_id, snapshot, result),
+            )
         except Exception:
             # Sin la traza en la respuesta ni en la fila: solo un código. El detalle va al log.
             logger.exception("topology rebuild failed", extra={"site_id": site_id})
@@ -826,6 +953,8 @@ class TopologyService:
             "nodes": result.nodes,
             "ambiguous_macs": result.ambiguous_macs,
             "skipped_cross_site": result.skipped_cross_site,
+            "changes_detected": recorded.changes,
+            "snapshot_created": int(recorded.created),
         }
         build.status = "succeeded"
         build.counts = counts
@@ -877,6 +1006,9 @@ class TopologyService:
                 continue
             before = (*(getattr(row, name) for name in _MATERIAL), row.present)
             _apply(row, derived, now)
+            row.absent_builds = 0
+            row.absent_since = None
+            row.removed_at = None
             after = (*(getattr(row, name) for name in _MATERIAL), row.present)
             if before != after:
                 # Solo un cambio material invalida la versión que tenga abierta un revisor; la
@@ -887,7 +1019,13 @@ class TopologyService:
             if row.present:
                 row.present = False
                 row.version += 1
+                row.absent_since = now
+                row.absent_builds = 1
                 out.absent += 1
+            elif row.removed_at is None:
+                # Solo se cuenta mientras no se haya concluido la eliminación: después el
+                # contador ya no decide nada y no merece una escritura por reconstrucción.
+                row.absent_builds = min((row.absent_builds or 0) + 1, 1_000_000)
         session.flush()
         return out
 

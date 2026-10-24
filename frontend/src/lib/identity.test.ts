@@ -6,6 +6,7 @@ import {
   deviceTypeLabel,
   evidenceLabel,
   isProbable,
+  NAME_SOURCE_LABELS,
   normalizeLabel,
   osLabel,
   typeWithConfidence,
@@ -63,6 +64,9 @@ describe("identificación: textos en español", () => {
   it("describe las evidencias con su fuente", () => {
     expect(evidenceLabel({ source: "mac_vendor", value: "Huawei" })).toBe("Fabricante MAC: Huawei");
     expect(evidenceLabel({ source: "nueva_fuente", value: "x" })).toBe("nueva_fuente: x");
+    // Fase 6E.2: la concesión DHCP como fuente de nombre tiene su etiqueta propia.
+    expect(evidenceLabel({ source: "dhcp_lease", value: "pixel-7" })).toBe("Concesión DHCP: pixel-7");
+    expect(NAME_SOURCE_LABELS.dhcp_lease).toBe("Concesión DHCP");
   });
 });
 

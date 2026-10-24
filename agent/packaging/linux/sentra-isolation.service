@@ -1,0 +1,59 @@
+# Sentra Isolation Helper (Fase 6E.7): servicio OPCIONAL, no se habilita al instalar.
+# Es el único componente de Sentra que toca el firewall: solo su tabla propia de nftables
+# (inet sentra_isolation) y solo si /etc/sentra-agent/isolation.toml tiene enabled = true.
+# Habilitar a mano: docs/safe-isolation-helper.md (systemctl enable --now sentra-isolation).
+[Unit]
+Description=Sentra Isolation Helper (optional; applies only its own nftables table)
+Documentation=https://github.com/Snowwiy/Sentra/blob/main/docs/safe-isolation-helper.md
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+# root porque nftables exige CAP_NET_ADMIN; el conjunto de capacidades se reduce abajo.
+User=root
+ExecStart=/opt/sentra-agent/bin/sentra-agent isolation-helper --policy /etc/sentra-agent/isolation.toml
+# Al pararse NO revierte: la expiración y la reversión al arrancar las aplica el helper, y la
+# tabla nft no sobrevive a un reinicio. Para retirar las reglas a mano:
+#   sudo /opt/sentra-agent/bin/sentra-agent isolation-helper revert
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=10
+UMask=0022
+# Estado privado del helper (lo que permite revertir) y su log, fuera del alcance del agente.
+StateDirectory=sentra-isolation
+StateDirectoryMode=0700
+LogsDirectory=sentra-isolation
+LogsDirectoryMode=0750
+
+NoNewPrivileges=true
+# CAP_NET_ADMIN: nftables. CAP_DAC_OVERRIDE: entrar en /var/lib/sentra-agent (0700 del
+# agente). CAP_CHOWN: dejar el directorio de intercambio como root:sentra-agent 1770.
+CapabilityBoundingSet=CAP_NET_ADMIN CAP_DAC_OVERRIDE CAP_CHOWN
+AmbientCapabilities=
+PrivateTmp=true
+ProtectSystem=strict
+# Solo para el directorio de intercambio (/var/lib/sentra-agent/isolation), que el helper
+# crea y comprueba él mismo sin seguir enlaces simbólicos.
+ReadWritePaths=/var/lib/sentra-agent
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+ProtectClock=true
+ProtectHostname=true
+RestrictSUIDSGID=true
+RestrictRealtime=true
+RestrictNamespaces=true
+LockPersonality=true
+SystemCallArchitectures=native
+# AF_NETLINK: nftables. AF_INET/AF_INET6: resolver el servidor Sentra antes de aislar.
+RestrictAddressFamilies=AF_UNIX AF_NETLINK AF_INET AF_INET6
+# No se fija a propósito:
+#   PrivateNetwork=true       -> las reglas deben aplicarse en la red del equipo, no en otra
+#   ProtectKernelModules=true -> nftables puede necesitar cargar nf_tables bajo demanda
+
+[Install]
+WantedBy=multi-user.target

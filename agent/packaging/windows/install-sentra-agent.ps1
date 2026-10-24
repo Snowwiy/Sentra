@@ -56,6 +56,14 @@
 
 .PARAMETER EnrollTimeoutSeconds
     Cuánto esperar el resultado del enrolamiento (por defecto 120 s).
+
+.PARAMETER InstallIsolationHelper
+    Fase 6E.7 (opcional, desactivado por defecto): registra además el servicio
+    "SentraIsolation" (LocalSystem), el único componente que puede aplicar reglas propias del
+    firewall (grupo "Sentra Isolation") durante un aislamiento. Su política local
+    C:\ProgramData\Sentra\Isolation\isolation.toml se crea con enabled = false: hasta que un
+    administrador de este equipo la active, el helper no aísla nada. Ver
+    docs/safe-isolation-helper.md.
 #>
 [CmdletBinding()]
 param(
@@ -67,7 +75,8 @@ param(
     [string]$ServiceAccount = 'Virtual',
     [switch]$NoImportIdentity,
     [ValidateRange(10, 900)]
-    [int]$EnrollTimeoutSeconds = 120
+    [int]$EnrollTimeoutSeconds = 120,
+    [switch]$InstallIsolationHelper
 )
 
 Set-StrictMode -Version 3.0
@@ -398,6 +407,70 @@ function Resolve-ServiceAccount($Plan, $Existing) {
     return $ServiceAccount
 }
 
+function Set-IsolationAcl($Iso, [string]$Account) {
+    # Política y estado privado del helper: solo SYSTEM y Administradores (sin herencia). El
+    # agente puede LEER la política (para validar duraciones) pero no su estado.
+    # Directorio de intercambio: el agente lee y crea ficheros (WD solo en el directorio, sin
+    # herencia), así puede dejar request.json pero no modificar status.json ni state.json.
+    foreach ($dir in @($Iso.policy_dir, $Iso.state_dir, $Iso.log_dir, $Iso.exchange_dir)) {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+    }
+    $icacls = Join-Path $env:SystemRoot 'System32\icacls.exe'
+    $steps = @()
+    foreach ($dir in @($Iso.policy_dir, $Iso.exchange_dir)) {
+        $steps += , @($dir, '/inheritance:r', '/grant:r', "*${SystemSid}:(OI)(CI)F", "*${AdministratorsSid}:(OI)(CI)F")
+        $steps += , @($dir, '/setowner', "*$AdministratorsSid")
+    }
+    if ($Account -eq 'Virtual') {
+        $sid = $Iso.agent_service_sid
+        $steps += , @($Iso.policy_dir, '/grant', "*${sid}:(RX)")
+        $steps += , @($Iso.policy_file, '/grant', "*${sid}:(R)")
+        $steps += , @($Iso.exchange_dir, '/grant', "*${sid}:(OI)(CI)(RX)")
+        $steps += , @($Iso.exchange_dir, '/grant', "*${sid}:(WD)")
+    }
+    foreach ($arguments in $steps) {
+        $result = Invoke-Native -FilePath $icacls -Arguments ($arguments + '/Q')
+        if ($result.ExitCode -ne 0) { throw "icacls $($arguments -join ' ') falló: $($result.StdOut) $($result.StdErr)" }
+    }
+}
+
+function Install-IsolationHelper($Python, [string]$Account) {
+    # Opcional (-InstallIsolationHelper). El helper corre como LocalSystem porque es el único
+    # que aplica reglas de firewall; nunca lo hace sin su política local habilitada.
+    $programFiles = [Environment]::GetFolderPath('ProgramFiles')
+    $programData = [Environment]::GetFolderPath('CommonApplicationData')
+    $iso = Invoke-Winsetup -Python $Python -Arguments @('isolation-plan', '--program-files', $programFiles, '--program-data', $programData)
+    New-Item -ItemType Directory -Path $iso.policy_dir -Force | Out-Null
+    if (-not (Test-Path -LiteralPath $iso.policy_file -PathType Leaf)) {
+        [IO.File]::WriteAllText($iso.policy_file, $iso.policy_text, (New-Object Text.UTF8Encoding($false)))
+        Write-Step "política de aislamiento creada (desactivada): $($iso.policy_file)"
+    } else {
+        Write-Step "se conserva la política de aislamiento existente: $($iso.policy_file)"
+    }
+    Set-IsolationAcl -Iso $iso -Account $Account
+    $name = $iso.service_name
+    $existing = Get-ServiceInfo $name
+    if ($existing) {
+        Stop-AgentService $name
+        if ($existing.PathName -ne $iso.binary_path) {
+            $result = Invoke-CimMethod -InputObject $existing -MethodName Change -Arguments @{ PathName = $iso.binary_path }
+            if ($result.ReturnValue -ne 0) { throw "no se pudo actualizar la ruta del helper (Win32_Service.Change = $($result.ReturnValue))" }
+        }
+    } else {
+        New-Service -Name $name -BinaryPathName $iso.binary_path -DisplayName $iso.display_name `
+            -Description $iso.description -StartupType Automatic | Out-Null
+        Write-Step "servicio $name creado (LocalSystem)"
+    }
+    Invoke-Sc @('config', $name, 'obj=', 'LocalSystem')
+    Invoke-Sc @('failure', $name, 'reset=', [string]$iso.failure_reset_seconds, 'actions=', $iso.failure_actions)
+    Start-Service -Name $name
+    if (-not (Wait-ServiceState -Name $name -State 'Running' -Seconds 30)) {
+        Write-Warn "el helper de aislamiento no arrancó; revisa $($iso.log_dir)\isolation-helper.log"
+        return
+    }
+    Write-Step "helper de aislamiento en ejecución; política desactivada hasta que la edites ($($iso.policy_file))"
+}
+
 function Invoke-Install {
     Assert-Administrator
     Assert-Platform
@@ -561,6 +634,16 @@ function Invoke-Install {
         Start-Sleep -Seconds 5
         if ((Get-Service -Name $plan.service_name).Status -ne 'Running') {
             Stop-Install "el servicio se detuvo tras arrancar; revisa $($plan.log_dir)\agent.log"
+        }
+    }
+
+    if ($InstallIsolationHelper) {
+        try {
+            Install-IsolationHelper -Python (Join-Path $plan.install_dir 'runtime\python.exe') -Account $account
+        } catch {
+            # El agente ya está instalado y enrolado: un fallo del helper opcional no lo deshace.
+            Write-Warn "no se instaló el helper de aislamiento: $($_.Exception.Message)"
+            if ($exitCode -eq 0) { $exitCode = 2 }
         }
     }
 

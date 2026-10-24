@@ -213,7 +213,10 @@ class FakeServer:
             if not duplicate:
                 self.batches[batch_id] = payload
                 self.batch_jobs[batch_id] = job_id
-            items = "records" if "records" in payload else "observations"
+            kinds = [k for k in ("records", "leases", "observations") if k in payload]
+            # Contrato: un lote lleva un solo tipo de elementos (Fase 6E: `leases`).
+            assert len(kinds) == 1, kinds
+            items = kinds[0]
             total = sum(
                 len(b.get(items, []))
                 for bid, b in self.batches.items()
@@ -253,6 +256,14 @@ class FakeServer:
             for bid, b in self.batches.items()
             if self.batch_jobs[bid] == job_id
             for o in b.get("observations", [])
+        ]
+
+    def leases_for(self, job_id: str) -> list[dict[str, Any]]:
+        return [
+            lease
+            for bid, b in self.batches.items()
+            if self.batch_jobs[bid] == job_id
+            for lease in b.get("leases", [])
         ]
 
     def records_for(self, job_id: str) -> list[dict[str, Any]]:

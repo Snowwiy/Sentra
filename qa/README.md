@@ -228,6 +228,19 @@ sentencias SQL por petición. Borra lo que crea (prefijo `perf-ti-`). Ejecútalo
 parada. Resultados de referencia en
 [docs/threat-intelligence.md](../docs/threat-intelligence.md).
 
+### Rendimiento de la telemetría de endpoint (Fase 6E)
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_endpoint.py   # --batches 20 --children 50 --repeat 20
+```
+
+Con datos sintéticos mide la ingesta de lotes de 1000 eventos de proceso (ruta de servicio de
+`POST /agents/activity`, sin HTTP), el árbol de procesos (raíces, hijos de una raíz, búsqueda)
+y una página de actividad. Borra lo que crea (prefijo `perf-endpoint-`). Resultados de
+referencia en [docs/process-tree.md](../docs/process-tree.md).
+
 ### Fase 4M: producción y dashboard paginado
 
 `qa/e2e_production.py` (solo stdlib) prueba la API en modo producción detrás de un Caddy real

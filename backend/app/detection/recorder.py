@@ -11,12 +11,12 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.detection import text
+from app.detection import behavior, text
 from app.detection.config import DetectionConfig
 from app.detection.custom.runtime import active_event_channels
 from app.detection.signals import (
@@ -33,6 +33,7 @@ from app.detection.signals import (
 )
 from app.models.change import ChangeKind
 from app.models.detection import DetectionBaseline, DetectionSignal
+from app.models.endpoint import EndpointActivity, ProcessInstance
 from app.models.event import SystemEvent
 
 logger = logging.getLogger(__name__)
@@ -41,6 +42,8 @@ PROCESS_BASELINE = "process_exe"
 # Señales de proceso nuevo por snapshot: una actualización grande del sistema no debe llenar
 # la cola; lo que se descarte sigue en la línea base (no se repetirá como "nuevo").
 MAX_PROCESS_SIGNALS = 100
+# Señales por lote de actividad (6E.5): un lote anómalo no inunda la cola del motor.
+MAX_ACTIVITY_SIGNALS = 200
 
 
 class SignalRecorder:
@@ -196,6 +199,100 @@ class SignalRecorder:
             self._insert(asset_id, drafts)
 
         self._guarded("processes", action)
+
+    def record_activity(self, asset_id: int, events: Sequence[Any]) -> None:
+        """Fase 6E.5: eventos de actividad recién insertados (los reenvíos no llegan aquí).
+
+        `events` son ActivityEventIn ya validados. Solo los que encajan en un patrón de
+        behavior.py producen señal; el resto se queda en endpoint_activity como contexto.
+        """
+
+        def action() -> None:
+            not_before = datetime.now(UTC) - self._config.max_event_age
+            recent = [e for e in events if e.occurred_at >= not_before]
+            if not recent:
+                return
+            keys = {
+                key
+                for e in recent
+                for key in (e.instance_key, e.data.get("parent_instance_key"))
+                if isinstance(key, str)
+            }
+            facts: dict[str, behavior.ProcessFacts] = {}
+            if keys:
+                for key, name, exe in self._session.execute(
+                    select(
+                        ProcessInstance.instance_key, ProcessInstance.name, ProcessInstance.exe
+                    ).where(
+                        ProcessInstance.asset_id == asset_id,
+                        ProcessInstance.instance_key.in_(keys),
+                    )
+                ):
+                    facts[key] = behavior.ProcessFacts(name, exe)
+            drafts: list[SignalDraft] = []
+            states: dict[tuple[str, str], Mapping[str, Any] | None] = {}
+            new_uids = [e.event_uid for e in recent]
+            for event in sorted(recent, key=lambda e: (e.occurred_at, e.seq)):
+                draft: SignalDraft | None = None
+                if event.category == "process" and event.action == "start":
+                    parent_key = event.data.get("parent_instance_key")
+                    parent = (
+                        facts.get(parent_key)
+                        if event.data.get("parent_relation") in ("observed", "inferred")
+                        else None
+                    )
+                    draft = behavior.process_start_signal(event, parent, event.occurred_at)
+                elif event.category == "network":
+                    process = facts.get(event.instance_key) if event.instance_key else None
+                    draft = behavior.process_network_signal(event, process, event.occurred_at)
+                elif event.category in ("persistence", "scheduled_task"):
+                    draft = behavior.persistence_signal(event, event.occurred_at)
+                elif event.category in ("protection", "firewall"):
+                    state = (event.category, behavior.state_key(event.category, event.data))
+                    if state not in states:
+                        states[state] = self._previous_state(asset_id, event, new_uids)
+                    build = (
+                        behavior.protection_signal
+                        if event.category == "protection"
+                        else behavior.firewall_signal
+                    )
+                    draft = build(event, states[state], event.occurred_at)
+                    states[state] = event.data
+                if draft is not None:
+                    drafts.append(
+                        SignalDraft(
+                            kind=draft.kind,
+                            occurred_at=draft.occurred_at,
+                            source_type=draft.source_type,
+                            subject=text.clean(draft.subject, 255) if draft.subject else None,
+                            source_id=draft.source_id,
+                            data=text.bounded_data(draft.data),
+                        )
+                    )
+            self._insert(asset_id, drafts[:MAX_ACTIVITY_SIGNALS])
+
+        if events:
+            self._guarded("activity", action)
+
+    def _previous_state(
+        self, asset_id: int, event: Any, exclude: Sequence[Any]
+    ) -> Mapping[str, Any] | None:
+        """Último estado guardado de la misma protección o perfil de firewall."""
+        field = "product" if event.category == "protection" else "profile"
+        value = behavior.state_key(event.category, event.data)
+        row = self._session.scalar(
+            select(EndpointActivity.data)
+            .where(
+                EndpointActivity.asset_id == asset_id,
+                EndpointActivity.category == event.category,
+                EndpointActivity.occurred_at <= event.occurred_at,
+                EndpointActivity.event_uid.not_in(exclude),
+                func.coalesce(EndpointActivity.data[field].astext, "") == value,
+            )
+            .order_by(EndpointActivity.occurred_at.desc(), EndpointActivity.id.desc())
+            .limit(1)
+        )
+        return row if isinstance(row, dict) else None
 
     def record_discovery_change(
         self,

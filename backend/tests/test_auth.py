@@ -188,6 +188,8 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "vulnerabilities:read", "vulnerabilities:manage", "threat_intel:read",
         "threat_intel:triage", "assets:duplicates_read", "response:read", "response:execute",
         "reports:read", "reports:generate", "network:poll",
+        "telemetry:read", "forensics:read", "forensics:acquire", "forensics:download",
+        "containment:preview",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -477,7 +479,20 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.THREAT_INTEL_READ, Permission.THREAT_INTEL_TRIAGE,
         Permission.RESPONSE_READ, Permission.RESPONSE_EXECUTE,
         Permission.REPORTS_READ, Permission.REPORTS_GENERATE, Permission.NETWORK_POLL,
+        Permission.TELEMETRY_READ, Permission.FORENSICS_READ, Permission.FORENSICS_ACQUIRE,
+        Permission.FORENSICS_DOWNLOAD, Permission.CONTAINMENT_PREVIEW,
     }  # fmt: skip
+    # Fase 6E: fuentes DHCP, gestión forense y aislar/liberar un endpoint, solo admin.
+    for admin_only in (
+        Permission.DHCP_MANAGE,
+        Permission.FORENSICS_MANAGE,
+        Permission.CONTAINMENT_ISOLATE,
+        Permission.CONTAINMENT_RELEASE,
+    ):
+        assert admin_only not in ROLE_PERMISSIONS[Role.ANALYST]
+    # Fase 6E: la telemetría de procesos y las evidencias no las ve un viewer.
+    assert Permission.TELEMETRY_READ not in ROLE_PERMISSIONS[Role.VIEWER]
+    assert Permission.FORENSICS_READ not in ROLE_PERMISSIONS[Role.VIEWER]
     # Fase 6B: credenciales SNMP y registro de equipos de red, solo admin.
     assert Permission.SNMP_CREDENTIALS_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     assert Permission.NETWORK_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
@@ -645,6 +660,7 @@ NON_SESSION_ROUTES = {
     ("POST", "/api/v1/events"),
     ("POST", "/api/v1/agents/commands/poll"),  # token de agente (Fase 5D)
     ("POST", "/api/v1/agents/commands/{request_id}/result"),
+    ("POST", "/api/v1/agents/activity"),  # token de agente (Fase 6E.3)
     ("GET", "/api/v1/agent-enrollment-tokens"),  # X-Admin-Key (legacy)
     ("POST", "/api/v1/agent-enrollment-tokens"),
     ("POST", "/api/v1/agent-enrollment-tokens/{token_id}/revoke"),
@@ -680,6 +696,9 @@ def _concrete(path: str) -> str:
         "access_point_id", "bss_id",
         # Fase 6D: topología (un nodo con clave no válida responde 404, igual que uno ajeno).
         "link_id", "node_id",
+        # Fase 6E: historial de topología, DHCP, procesos, forense y aislamiento.
+        "snapshot_id", "change_id", "dhcp_source_id", "instance_id", "investigation_id",
+        "artifact_id", "package_id", "note_id", "isolation_id", "exclusion_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 5C: fuentes de inteligencia por id numérico.

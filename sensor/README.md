@@ -17,8 +17,10 @@ descubre otros equipos de la red del site. Son paquetes independientes y no comp
 - **El servidor es la autoridad del alcance.** Las redes permitidas (`allowed_networks`) llegan
   en la configuración del servidor; no se configuran localmente. Aun así, el sensor vuelve a
   validar cada job (defensa en profundidad).
-- **Catálogo cerrado de jobs**: `discovery_basic`, `discovery_advanced` (Fase 6A) y
-  `snmp_inventory` (Fase 6B, ver más abajo); desde 0.5.0 `discovery_advanced` admite
+- **Catálogo cerrado de jobs**: `discovery_basic`, `discovery_advanced` (Fase 6A),
+  `snmp_inventory` (Fase 6B, ver más abajo) y, desde 0.6.0, `dhcp_leases` (Fase 6E: solo
+  nombra una fuente DHCP local de `[[dhcp_lease_files]]`, nunca una ruta); desde 0.5.0
+  `discovery_advanced` admite
   `schema_version: 2` con sondas de nombre mDNS/NetBIOS/SSDP/UPnP (capacidad
   `network.discovery.names`, sin sockets en escucha); `discovery_basic` con esquema exacto (sin claves extra),
   `sensor_id`/`site_id` propios, sin caducar, target dentro de `allowed_networks`, nunca `/0`,
@@ -86,6 +88,8 @@ Ver [`sensor.example.toml`](sensor.example.toml). Claves:
 | `retry_max_delay_seconds` | Tope del backoff exponencial con jitter. |
 | `log_level`, `log_dir` | Logs JSON rotados (5 × 1 MB). |
 | `allow_system_ping`, `allow_system_arp` | Permiten usar `ping`/`arp` del sistema. |
+| `dhcp_max_file_kb` | Tope de tamaño de cada fichero de leases DHCP (KiB, por defecto 4096). |
+| `[[dhcp_lease_files]]` | Fuentes DHCP locales (`name`, `path` absoluta, `format`). Ver [docs/sensor-upgrade-0.6.md](../docs/sensor-upgrade-0.6.md). |
 
 Las claves desconocidas son un error (una errata no debe ignorarse en silencio).
 
@@ -212,6 +216,15 @@ Inventario SNMP de solo lectura de switches, routers, APs y cortafuegos registra
   varbinds totales, filas por tabla y plazo; cancelable desde el servidor. Un agente que
   devuelve OIDs que no avanzan se corta como respuesta malformada.
 - Solo UDP saliente al puerto SNMP del equipo; no necesita privilegios ni raw sockets.
+
+## Leases DHCP de ficheros locales (Fase 6E, 0.6.0)
+
+Capacidad `dhcp.leases.file`, job `dhcp_leases` con parámetros `{"source_name"}` y nada más.
+El sensor lee solo los ficheros declarados en `[[dhcp_lease_files]]` (formatos `dnsmasq`,
+`isc_dhcpd`, `kea_csv`, `windows_dhcp_csv`, `generic_csv`), acotados por `dhcp_max_file_kb`,
+y envía leases normalizados en lotes de hasta 5000 (`leases`) más el resumen `dhcp` en el
+complete. Parsers puros en `sentra_sensor/dhcp.py`. Configuración, ejemplos por servidor
+DHCP, permisos y límites en [docs/sensor-upgrade-0.6.md](../docs/sensor-upgrade-0.6.md).
 
 ## Pruebas y calidad
 

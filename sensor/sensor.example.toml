@@ -40,3 +40,22 @@ log_level = "INFO"
 # que el servidor: sin ping no hay sondas ICMP; sin arp (Windows) no hay MAC.
 allow_system_ping = true
 allow_system_arp = true
+
+# --- Fase 6E (sensor 0.6.0): leases DHCP de ficheros locales -----------------------------
+# El servidor solo puede pedir una fuente por su NOMBRE (job dhcp_leases); nunca envía rutas.
+# Sin entradas, el sensor no lee ningún fichero DHCP. Ver docs/sensor-upgrade-0.6.md.
+# Tope de tamaño de cada fichero de leases, en KiB (1..65536). Va dentro de [sensor].
+dhcp_max_file_kb = 4096
+
+# Una tabla por fichero. name: ^[a-z0-9_-]{1,64}$ y único; path: absoluto; format: dnsmasq,
+# isc_dhcpd, kea_csv, windows_dhcp_csv o generic_csv. Descomentar y adaptar:
+#
+# [[dhcp_lease_files]]
+# name = "lan-dnsmasq"
+# path = "/var/lib/misc/dnsmasq.leases"
+# format = "dnsmasq"
+#
+# [[dhcp_lease_files]]
+# name = "dc01-dhcp"
+# path = "C:/ProgramData/Sentra/DhcpExport/leases.csv"
+# format = "windows_dhcp_csv"

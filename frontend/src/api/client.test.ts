@@ -281,6 +281,24 @@ describe("apiDownload", () => {
     await expect(apiDownload("/reports/1/artifact")).rejects.toMatchObject({ name: "AbortError" });
   });
 
+  it("POST (Fase 6E.6) envía el cuerpo JSON y el token CSRF, y expone los bytes recibidos", async () => {
+    const fetchMock = vi.fn(
+      async () => new Response("zip", { status: 200, headers: { "X-Sentra-SHA256": "aa" } }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    setCsrfToken("tok-1");
+    try {
+      const file = await apiDownload("/investigations/1/package", { method: "POST", body: { acknowledge_mismatch: false } });
+      expect(Array.from(file.bytes)).toEqual([122, 105, 112]);
+      const [, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+      expect(init.method).toBe("POST");
+      expect(JSON.parse(String(init.body))).toEqual({ acknowledge_mismatch: false });
+      expect((init.headers as Record<string, string>)["X-CSRF-Token"]).toBe("tok-1");
+    } finally {
+      setCsrfToken(undefined);
+    }
+  });
+
   it("un 502 del proxy sin sobre conserva network_error con el estado", async () => {
     respond(502, "", "text/plain");
     const error = await failure(apiDownload("/reports/1/artifact"));

@@ -19,6 +19,7 @@ from typing import Any
 from app.core.config import get_settings
 from app.discovery import oui
 from app.discovery.classify import (
+    DHCP_LEASE,
     MDNS,
     NETBIOS,
     REVERSE_DNS,
@@ -57,6 +58,7 @@ class IdentityChange:
 NAME_STALE_DAYS = 30
 # Clave de identity_observations -> fuente de nombre de classify (para la vigencia).
 _SEEN_KEYS = {
+    "dhcp_lease": DHCP_LEASE,
     "reverse_dns": REVERSE_DNS,
     "mdns_name": MDNS,
     "netbios_name": NETBIOS,
@@ -187,6 +189,7 @@ def identity_input(
         os_name=asset.os_name,
         os_version=asset.os_version,
         reverse_dns=asset.reverse_dns,
+        dhcp_hostname=_dhcp_hostname(seen.get("dhcp_lease")),
         mdns_name=_text(seen.get("mdns_name")),
         netbios_name=_text(seen.get("netbios_name")),
         upnp_friendly_name=_text(upnp.get("friendly_name")),
@@ -244,6 +247,11 @@ def refresh_identity(
     asset.classification_evidence = result.evidence or None
     asset.observed_names = result.names or None
     return IdentityChange(change.previous_type, change.previous_confidence, asset.device_type)
+
+
+def _dhcp_hostname(value: Any) -> str | None:
+    """Hostname del lease guardado por app/dhcp/service.py ({"hostname", "source", ...})."""
+    return _text(value.get("hostname")) if isinstance(value, dict) else None
 
 
 def _text(value: Any) -> str | None:

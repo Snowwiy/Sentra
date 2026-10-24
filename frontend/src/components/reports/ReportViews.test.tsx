@@ -132,6 +132,23 @@ describe("DownloadReportButton: mensajes de error", () => {
     await waitFor(() => expect(screen.getByRole("button", { name: "Descargar" })).toBeEnabled());
   });
 
+  // Fase 6E: la verificación ya no depende de Blob.arrayBuffer() (que falta en el Blob de
+  // jsdom con Node >= 24): se hace sobre los bytes leídos de la respuesta.
+  it("descarga correcta aunque el Blob global no tenga arrayBuffer(): sin aviso falso", async () => {
+    const createObjectURL = vi.fn(() => "blob:x");
+    vi.stubGlobal("URL", Object.assign(URL, { createObjectURL, revokeObjectURL: vi.fn() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => undefined);
+    const NativeBlob = Blob;
+    class BlobWithoutArrayBuffer extends NativeBlob {}
+    Object.defineProperty(BlobWithoutArrayBuffer.prototype, "arrayBuffer", { value: undefined });
+    vi.stubGlobal("Blob", BlobWithoutArrayBuffer);
+    respond = async () => new Response(CONTENT, { status: 200, headers: { "X-Sentra-SHA256": SHA } });
+    render(<DownloadReportButton report={report} />);
+    fireEvent.click(screen.getByRole("button", { name: "Descargar" }));
+    await waitFor(() => expect(click).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
   it("cancelación al desmontar: aborta la petición y no muestra aviso", async () => {
     let signal: AbortSignal | undefined;
     respond = (init) =>

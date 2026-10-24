@@ -35,11 +35,23 @@ const AssetResponseTab = lazy(() =>
   import("../components/response/AssetResponseTab").then((m) => ({ default: m.AssetResponseTab })),
 );
 
+// Fase 6E: identidad y DHCP, telemetría y árbol de procesos, investigaciones y aislamiento,
+// cada uno en su propio chunk: solo se descargan al abrir su pestaña.
+const IdentityTab = lazy(() => import("../components/dhcp/IdentityTab").then((m) => ({ default: m.IdentityTab })));
+const EndpointTelemetryTab = lazy(() =>
+  import("../components/endpoint/EndpointTelemetryTab").then((m) => ({ default: m.EndpointTelemetryTab })),
+);
+const AssetInvestigationsTab = lazy(() =>
+  import("../components/forensics/AssetInvestigationsTab").then((m) => ({ default: m.AssetInvestigationsTab })),
+);
+const IsolationTab = lazy(() => import("../components/isolation/IsolationTab").then((m) => ({ default: m.IsolationTab })));
+
 const TABS = [
   { key: "overview", label: "Overview" },
+  { key: "identity", label: "Identidad" },
   { key: "risk", label: "Riesgo" },
   { key: "context", label: "Contexto" },
-  { key: "processes", label: "Processes" },
+  { key: "processes", label: "Procesos" },
   { key: "services", label: "Services" },
   { key: "software", label: "Software" },
   { key: "network", label: "Network" },
@@ -50,6 +62,8 @@ const TABS = [
   { key: "intel", label: "Inteligencia" },
   { key: "alerts", label: "Alerts" },
   { key: "response", label: "Response" },
+  { key: "investigations", label: "Investigaciones" },
+  { key: "isolation", label: "Aislamiento" },
 ] as const;
 
 type Tab = (typeof TABS)[number]["key"];
@@ -60,7 +74,22 @@ type Tab = (typeof TABS)[number]["key"];
 // Fase 5C: "Inteligencia" (coincidencias de IOCs) también sin agente: la IP o el nombre del
 // activo pueden coincidir con un indicador.
 // Fase 5D: "Response" también sin agente (hay acciones de servidor, como recalcular riesgo).
-const NETWORK_TABS: Tab[] = ["overview", "risk", "context", "exposure", "vulnerabilities", "intel", "alerts", "response"];
+// Fase 6E: "Identidad" (nombres, DHCP) e "Investigaciones" también sin agente; "Aislamiento"
+// también, para explicar que no está disponible y dar las recomendaciones manuales.
+const NETWORK_TABS: Tab[] = [
+  "overview",
+  "identity",
+  "risk",
+  "context",
+  "exposure",
+  "vulnerabilities",
+  "intel",
+  "alerts",
+  "response",
+  "investigations",
+  "isolation",
+];
+const tabFallback = <LoadingState label="Cargando…" />;
 
 // Tabs fed by the inventory snapshot (sent every 15 min): polled only while one is visible.
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
@@ -100,7 +129,9 @@ export function AssetDetailPage() {
     (t) =>
       (t.key !== "vulnerabilities" || canVulns) &&
       (t.key !== "intel" || auth.can("threat_intel:read")) &&
-      (t.key !== "response" || auth.can("response:read")),
+      (t.key !== "response" || auth.can("response:read")) &&
+      (t.key !== "investigations" || auth.can("forensics:read")) &&
+      (t.key !== "isolation" || auth.can("containment:preview")),
   );
   const tab: Tab = tabs.some((t) => t.key === requested) ? requested : "overview";
 
@@ -145,7 +176,17 @@ export function AssetDetailPage() {
   const inventoryContent = () => {
     if (tab === "processes") {
       // Has its own snapshot endpoint; the inventory list is only a fallback for older agents.
-      return <ProcessesTab assetId={asset.asset_id} inventoryProcesses={inv?.processes} />;
+      // Fase 6E.4: con telemetry:read, encima el árbol de procesos con carga diferida.
+      return (
+        <div className="stack">
+          {auth.can("telemetry:read") && (
+            <Suspense fallback={tabFallback}>
+              <EndpointTelemetryTab assetId={asset.asset_id} />
+            </Suspense>
+          )}
+          <ProcessesTab assetId={asset.asset_id} inventoryProcesses={inv?.processes} />
+        </div>
+      );
     }
     if (inventory.loading) return <LoadingState label="Cargando inventario…" />;
     if (!inv && noInventory) {
@@ -308,6 +349,21 @@ export function AssetDetailPage() {
           </div>
         )}
         {tab === "alerts" && <AlertsView assetId={asset.asset_id} />}
+        {tab === "identity" && (
+          <Suspense fallback={tabFallback}>
+            <IdentityTab assetId={asset.asset_id} />
+          </Suspense>
+        )}
+        {tab === "investigations" && (
+          <Suspense fallback={tabFallback}>
+            <AssetInvestigationsTab assetId={asset.asset_id} managed={managed} />
+          </Suspense>
+        )}
+        {tab === "isolation" && (
+          <Suspense fallback={tabFallback}>
+            <IsolationTab assetId={asset.asset_id} />
+          </Suspense>
+        )}
         {tab === "response" && (
           <Suspense fallback={<LoadingState label="Cargando response…" />}>
             <AssetResponseTab assetId={asset.asset_id} assetLabel={assetTitle(asset)} />

@@ -7,6 +7,7 @@ Así un operador del host del sensor no puede ampliar el alcance editando un fic
 
 import ipaddress
 import os
+import re
 import sys
 import tomllib
 from dataclasses import dataclass, field, fields, replace
@@ -18,6 +19,11 @@ from sentra_sensor.fsperm import make_private_dir
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
+# Fase 6E (sensor 0.6.0): ficheros de leases DHCP que el operador del host autoriza a leer.
+# El servidor solo puede pedir uno por su nombre; nunca envía rutas.
+DHCP_FORMATS = ("dnsmasq", "isc_dhcpd", "kea_csv", "windows_dhcp_csv", "generic_csv")
+DHCP_SOURCE_NAME_RE = re.compile(r"^[a-z0-9_-]{1,64}$")
+_DHCP_SOURCE_KEYS = frozenset({"name", "path", "format"})
 
 
 class ConfigError(ValueError):
@@ -90,6 +96,58 @@ def resolve_inside(base: Path, value: str | Path, what: str) -> Path:
 
 
 @dataclass(frozen=True)
+class DhcpLeaseFile:
+    """Una entrada `[[dhcp_lease_files]]`: fichero local de leases que el job puede leer."""
+
+    name: str
+    path: Path
+    format: str
+
+
+def parse_dhcp_lease_files(raw: object) -> tuple[DhcpLeaseFile, ...]:
+    """Valida la lista `[[dhcp_lease_files]]` completa al cargar la configuración.
+
+    Se valida aquí y no al ejecutar el job para que una errata (formato mal escrito, ruta
+    relativa, nombre repetido) impida arrancar el sensor en vez de fallar en silencio horas
+    después, cuando el servidor pida esa fuente. La existencia del fichero NO se exige: el
+    servidor DHCP puede crearlo más tarde y `diagnostics` lo muestra.
+    """
+    if not isinstance(raw, list):
+        raise ConfigError("dhcp_lease_files must be an array of tables ([[dhcp_lease_files]])")
+    sources: list[DhcpLeaseFile] = []
+    seen: set[str] = set()
+    for index, entry in enumerate(raw):
+        where = f"dhcp_lease_files[{index}]"
+        if not isinstance(entry, dict):
+            raise ConfigError(f"{where} must be a table")
+        unknown = set(entry) - _DHCP_SOURCE_KEYS
+        missing = _DHCP_SOURCE_KEYS - set(entry)
+        if unknown:
+            raise ConfigError(f"{where} has unknown keys: {sorted(unknown)}")
+        if missing:
+            raise ConfigError(f"{where} is missing keys: {sorted(missing)}")
+        name, path, fmt = entry["name"], entry["path"], entry["format"]
+        if not isinstance(name, str) or not DHCP_SOURCE_NAME_RE.fullmatch(name):
+            raise ConfigError(f"{where}.name must match ^[a-z0-9_-]{{1,64}}$")
+        if name in seen:
+            raise ConfigError(f"{where}.name {name!r} is duplicated")
+        seen.add(name)
+        if not isinstance(fmt, str) or fmt not in DHCP_FORMATS:
+            raise ConfigError(f"{where}.format must be one of {list(DHCP_FORMATS)}")
+        if not isinstance(path, str) or not path.strip():
+            raise ConfigError(f"{where}.path must be a non-empty string")
+        if "\x00" in path:
+            raise ConfigError(f"{where}.path contains a NUL byte")
+        # Ruta absoluta obligatoria: una relativa dependería del directorio de trabajo del
+        # servicio (distinto en systemd, en el SCM de Windows y en una prueba manual).
+        resolved = Path(path)
+        if not resolved.is_absolute():
+            raise ConfigError(f"{where}.path must be an absolute path")
+        sources.append(DhcpLeaseFile(name=name, path=resolved, format=fmt))
+    return tuple(sources)
+
+
+@dataclass(frozen=True)
 class LocalConfig:
     server_url: str | None = None
     data_dir: Path = field(default_factory=default_data_dir)
@@ -113,6 +171,16 @@ class LocalConfig:
     # pida: el operador del host puede ser más restrictivo que el servidor, nunca menos.
     allow_system_ping: bool = True
     allow_system_arp: bool = True
+    # Fase 6E: fuentes DHCP locales y tope de tamaño de cada fichero (KiB). El tope protege
+    # la memoria del sensor si alguien apunta una fuente a un fichero enorme.
+    dhcp_lease_files: tuple[DhcpLeaseFile, ...] = ()
+    dhcp_max_file_kb: int = 4096
+
+    def dhcp_source(self, name: str) -> DhcpLeaseFile | None:
+        for source in self.dhcp_lease_files:
+            if source.name == name:
+                return source
+        return None
 
     def validate(self) -> "LocalConfig":
         if self.server_url is not None:
@@ -125,6 +193,7 @@ class LocalConfig:
             ("spool_max_items", self.spool_max_items, 10, 1_000_000),
             ("spool_max_age_hours", self.spool_max_age_hours, 1, 24 * 30),
             ("retry_max_delay_seconds", self.retry_max_delay_seconds, 5, 86_400),
+            ("dhcp_max_file_kb", self.dhcp_max_file_kb, 1, 65_536),
         ]
         for name, value, low, high in checks:
             if not low <= value <= high:
@@ -170,6 +239,7 @@ _INT_FIELDS = {
     "spool_max_items",
     "spool_max_age_hours",
     "retry_max_delay_seconds",
+    "dhcp_max_file_kb",
 }
 _BOOL_FIELDS = {"allow_system_ping", "allow_system_arp"}
 
@@ -177,7 +247,8 @@ _BOOL_FIELDS = {"allow_system_ping", "allow_system_arp"}
 def _check_type(key: str, value: Any) -> None:
     # TOML ya tipa los valores; se comprueba para dar un error claro en vez de un TypeError
     # en mitad del arranque (y bool no cuenta como int aunque Python lo permita).
-    if value is None:
+    if value is None or key == "dhcp_lease_files":
+        # dhcp_lease_files tiene su propia validación (parse_dhcp_lease_files).
         return
     if key in _INT_FIELDS:
         ok = isinstance(value, int) and not isinstance(value, bool)
@@ -208,6 +279,15 @@ def load_config(path: Path | None, overrides: dict[str, Any] | None = None) -> L
         if not isinstance(section, dict):
             raise ConfigError("[sensor] must be a table")
         values.update(section)
+        # `[[dhcp_lease_files]]` se escribe normalmente al nivel superior (después de
+        # [sensor]); también se admite `[[sensor.dhcp_lease_files]]`, pero no ambos a la vez
+        # (no habría forma clara de saber cuál manda).
+        if section is not data and "dhcp_lease_files" in data:
+            if "dhcp_lease_files" in section:
+                raise ConfigError(
+                    "dhcp_lease_files is defined both at top level and inside [sensor]"
+                )
+            values["dhcp_lease_files"] = data["dhcp_lease_files"]
     for key, value in (overrides or {}).items():
         if value is not None:
             values[key] = value
@@ -220,6 +300,10 @@ def load_config(path: Path | None, overrides: dict[str, Any] | None = None) -> L
     for key in _PATH_FIELDS & set(values):
         if values[key] is not None:
             values[key] = Path(values[key])
+    if values.get("dhcp_lease_files") is not None and not isinstance(
+        values["dhcp_lease_files"], tuple
+    ):
+        values["dhcp_lease_files"] = parse_dhcp_lease_files(values["dhcp_lease_files"])
     try:
         config = replace(LocalConfig(), **values)
     except TypeError as exc:

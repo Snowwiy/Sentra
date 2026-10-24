@@ -1,23 +1,48 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, type ReactNode } from "react";
 import { BrowserRouter, Route, Routes } from "react-router-dom";
 import { AuthProvider } from "./auth/AuthContext";
 import { LoginPage } from "./auth/LoginPage";
 import { RequireAuth, RequirePermission } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
-import { AIInsightsPage } from "./pages/AIInsightsPage";
-import { AgentsPage } from "./pages/AgentsPage";
-import { AlertsPage } from "./pages/AlertsPage";
-import { AssetDetailPage } from "./pages/AssetDetailPage";
 import { DashboardPage } from "./pages/DashboardPage";
-import { DetectionDetailPage } from "./pages/DetectionDetailPage";
-import { DetectionsPage } from "./pages/DetectionsPage";
-import { LocalAIPage } from "./pages/LocalAIPage";
-import { NetworkPage } from "./pages/NetworkPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
-import { RiskPage } from "./pages/RiskPage";
-import { SettingsPage } from "./pages/SettingsPage";
-import { UsersPage } from "./pages/UsersPage";
 import { LoadingState } from "./components/StateViews";
+
+// Fase 6E: el bundle principal solo lleva la sesión, el layout y el dashboard (la página de
+// entrada). El resto de páginas, que antes se importaban siempre, va en su propio chunk y se
+// descarga al abrirlas por primera vez.
+const AIInsightsPage = lazy(() => import("./pages/AIInsightsPage").then((m) => ({ default: m.AIInsightsPage })));
+const AgentsPage = lazy(() => import("./pages/AgentsPage").then((m) => ({ default: m.AgentsPage })));
+const AlertsPage = lazy(() => import("./pages/AlertsPage").then((m) => ({ default: m.AlertsPage })));
+const AssetDetailPage = lazy(() => import("./pages/AssetDetailPage").then((m) => ({ default: m.AssetDetailPage })));
+const DetectionDetailPage = lazy(() =>
+  import("./pages/DetectionDetailPage").then((m) => ({ default: m.DetectionDetailPage })),
+);
+const DetectionsPage = lazy(() => import("./pages/DetectionsPage").then((m) => ({ default: m.DetectionsPage })));
+const LocalAIPage = lazy(() => import("./pages/LocalAIPage").then((m) => ({ default: m.LocalAIPage })));
+const NetworkPage = lazy(() => import("./pages/NetworkPage").then((m) => ({ default: m.NetworkPage })));
+const RiskPage = lazy(() => import("./pages/RiskPage").then((m) => ({ default: m.RiskPage })));
+const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
+const UsersPage = lazy(() => import("./pages/UsersPage").then((m) => ({ default: m.UsersPage })));
+// Fase 6E: DHCP, excepciones de reglas, investigaciones forenses y aislamiento.
+const DhcpPage = lazy(() => import("./pages/DhcpPage").then((m) => ({ default: m.DhcpPage })));
+const DetectionExclusionsPage = lazy(() =>
+  import("./pages/DetectionExclusionsPage").then((m) => ({ default: m.DetectionExclusionsPage })),
+);
+const InvestigationsPage = lazy(() =>
+  import("./pages/InvestigationsPage").then((m) => ({ default: m.InvestigationsPage })),
+);
+const InvestigationDetailPage = lazy(() =>
+  import("./pages/InvestigationDetailPage").then((m) => ({ default: m.InvestigationDetailPage })),
+);
+const ContainmentPage = lazy(() => import("./pages/ContainmentPage").then((m) => ({ default: m.ContainmentPage })));
+
+const pageFallback = <LoadingState label="Cargando…" />;
+
+/** Página cargada con React.lazy dentro de su Suspense. */
+function page(node: ReactNode, fallback: ReactNode = pageFallback) {
+  return <Suspense fallback={fallback}>{node}</Suspense>;
+}
 
 // Incidentes (Fase 4K) en su propio chunk: el bundle principal no crece para quien no los usa.
 const IncidentsPage = lazy(() => import("./pages/IncidentsPage").then((m) => ({ default: m.IncidentsPage })));
@@ -91,12 +116,12 @@ export function AppRoutes() {
           }
         >
           <Route index element={<DashboardPage />} />
-          <Route path="assets/:assetId" element={<AssetDetailPage />} />
-          <Route path="agents" element={<AgentsPage />} />
-          <Route path="network" element={<NetworkPage />} />
-          <Route path="risk" element={<RiskPage />} />
-          <Route path="alerts" element={<AlertsPage />} />
-          <Route path="detections" element={<DetectionsPage />} />
+          <Route path="assets/:assetId" element={page(<AssetDetailPage />)} />
+          <Route path="agents" element={page(<AgentsPage />)} />
+          <Route path="network" element={page(<NetworkPage />)} />
+          <Route path="risk" element={page(<RiskPage />)} />
+          <Route path="alerts" element={page(<AlertsPage />)} />
+          <Route path="detections" element={page(<DetectionsPage />)} />
           <Route
             path="detections/rules"
             element={
@@ -137,7 +162,11 @@ export function AppRoutes() {
               </RequirePermission>
             }
           />
-          <Route path="detections/:detectionId" element={<DetectionDetailPage />} />
+          <Route
+            path="detections/exclusions"
+            element={<RequirePermission permission="rules:read">{page(<DetectionExclusionsPage />, rulesFallback)}</RequirePermission>}
+          />
+          <Route path="detections/:detectionId" element={page(<DetectionDetailPage />)} />
           <Route
             path="vulnerabilities"
             element={
@@ -284,16 +313,16 @@ export function AppRoutes() {
             path="ai"
             element={
               <RequirePermission permission="ai:use">
-                <AIInsightsPage />
+                {page(<AIInsightsPage />)}
               </RequirePermission>
             }
           />
-          <Route path="settings" element={<SettingsPage />} />
+          <Route path="settings" element={page(<SettingsPage />)} />
           <Route
             path="settings/ai"
             element={
               <RequirePermission permission="ai:use">
-                <LocalAIPage />
+                {page(<LocalAIPage />)}
               </RequirePermission>
             }
           />
@@ -358,10 +387,26 @@ export function AppRoutes() {
             }
           />
           <Route
+            path="dhcp"
+            element={<RequirePermission permission="monitoring:read">{page(<DhcpPage />, infrastructureFallback)}</RequirePermission>}
+          />
+          <Route
+            path="investigations"
+            element={<RequirePermission permission="forensics:read">{page(<InvestigationsPage />)}</RequirePermission>}
+          />
+          <Route
+            path="investigations/:investigationId"
+            element={<RequirePermission permission="forensics:read">{page(<InvestigationDetailPage />)}</RequirePermission>}
+          />
+          <Route
+            path="containment"
+            element={<RequirePermission permission="containment:preview">{page(<ContainmentPage />)}</RequirePermission>}
+          />
+          <Route
             path="admin/users"
             element={
               <RequirePermission permission="users:manage">
-                <UsersPage />
+                {page(<UsersPage />)}
               </RequirePermission>
             }
           />

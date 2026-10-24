@@ -5,7 +5,8 @@
 // 502/504 del proxy de Vite, un cuerpo cortado a mitad). Aquí cada causa tiene su texto para
 // que quien lo lee sepa qué hacer. Ningún fallo se oculta salvo la cancelación, que la pide la
 // propia interfaz (desmontar la página, pulsar de nuevo) y no es un error.
-import { ApiError } from "../api/client";
+import { ApiError, type DownloadedFile } from "../api/client";
+import { ChecksumUnavailableError, sha256Hex } from "./reports";
 
 const GATEWAY_STATUSES = new Set([502, 503, 504]);
 
@@ -59,4 +60,27 @@ export function describeDownloadError(error: unknown, what = "el fichero"): stri
 
 function capitalize(text: string): string {
   return text ? text.charAt(0).toUpperCase() + text.slice(1) : text;
+}
+
+/**
+ * Comprobación OBLIGATORIA del SHA-256 de una descarga antes de guardarla (falla cerrado).
+ * Devuelve el motivo del rechazo, o undefined si los bytes coinciden con el hash esperado
+ * (la cabecera X-Sentra-SHA256 o, si falta, el valor conocido por el JSON del recurso).
+ * El hash se calcula sobre los bytes leídos de la respuesta, nunca releyendo el Blob.
+ */
+export async function verifyDownload(file: DownloadedFile, knownSha256?: string | null): Promise<string | undefined> {
+  const expected = (file.sha256 || knownSha256 || "").trim().toLowerCase();
+  if (!expected) return "El servidor no indicó el SHA-256 del fichero: no se ha guardado.";
+  let actual: string;
+  try {
+    actual = await sha256Hex(file.bytes);
+  } catch (err) {
+    return err instanceof ChecksumUnavailableError
+      ? "Este navegador no puede verificar el SHA-256: no se ha guardado."
+      : "No se pudo verificar el SHA-256 del fichero descargado: no se ha guardado.";
+  }
+  if (actual !== expected) {
+    return "El fichero descargado no coincide con su SHA-256: no se ha guardado. Vuelve a intentarlo.";
+  }
+  return undefined;
 }
