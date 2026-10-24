@@ -218,10 +218,20 @@ def test_not_implemented_actions_are_listed_but_never_run(client: TestClient) ->
     agent = _agent(client)
     listing = _ok(client.get(f"{R}/actions"))["items"]
     future = {a["id"]: a for a in listing if a["availability"] == "not_implemented"}
-    assert {"isolate_host", "kill_process", "block_network_address"} <= set(future)
+    assert {"kill_process", "block_network_address"} <= set(future)
     assert all(ACTIONS[a].handler is None for a in future)
-    response = _execute(client, "isolate_host", agent["asset_id"], confirm=True)
+    response = _execute(client, "kill_process", agent["asset_id"], confirm=True)
     _error(response, 409, "response_blocked")
+    # Fase 6E.7: aislar existe, pero nunca como ejecución suelta de Response.
+    isolate = _execute(
+        client,
+        "isolate_host",
+        agent["asset_id"],
+        confirm=True,
+        parameters={"session_id": str(uuid4()), "expires_at": "2099-01-01T00:00:00Z"},
+    )
+    error = _error(isolate, 409, "response_blocked")
+    assert "isolation_session_required" in {d.get("code") for d in error["details"]}
 
 
 # --- F. Agente offline ---------------------------------------------------------------------
@@ -298,6 +308,10 @@ def test_i_there_is_no_field_for_arbitrary_commands(client: TestClient) -> None:
     forbidden = {"command", "cmd", "script", "shell", "powershell", "bash", "exec", "path", "url"}
     for action in ACTIONS.values():
         properties = set(action.params_model.model_json_schema().get("properties", {}))
+        if action.id == "forensic_file_metadata":
+            # Fase 6E.6: la única ruta del catálogo; solo metadatos, validada dos veces.
+            assert properties == {"path", "hash"}
+            continue
         assert not properties & forbidden, action.id
     # El servidor y el agente comparten la misma allowlist cerrada.
     assert agent_service.AGENT_COMMAND_TYPES == catalog.AGENT_COMMAND_TYPES

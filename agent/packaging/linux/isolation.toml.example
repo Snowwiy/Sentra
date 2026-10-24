@@ -1,0 +1,13 @@
+# Sentra: política local del helper de aislamiento (Fase 6E.7).
+# Copiar a /etc/sentra-agent/isolation.toml (root:root 0644) y reiniciar sentra-isolation.
+# Desactivado por defecto: solo un administrador de ESTE equipo puede activarlo.
+enabled = false
+# Duración máxima de un aislamiento en minutos (1-1440). El helper revierte solo al vencer.
+max_minutes = 240
+# Permitir los servidores DNS configurados en el equipo durante el aislamiento.
+allow_dns = true
+# Direcciones o redes extra que siguen accesibles (p. ej. "192.0.2.10" o "198.51.100.0/24").
+# Nunca más anchas que /8 (IPv4) o /16 (IPv6).
+extra_allow = []
+# agent.toml del agente: de su api_url sale el servidor Sentra que sigue accesible.
+agent_config = '/etc/sentra-agent/agent.toml'

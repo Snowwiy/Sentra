@@ -3,18 +3,23 @@
 Es una allowlist en código: una acción existe solo si está en ACTIONS, con su modelo de
 parámetros (extra=forbid) y su handler ya implementado. No hay forma de registrar acciones
 desde la API ni de pasar un comando, script, ruta de ejecutable o plantilla: ningún modelo
-de parámetros tiene un campo así (test_response.py lo comprueba sobre todo el catálogo).
+de parámetros tiene un campo así (test_response.py lo comprueba sobre todo el catálogo). La
+única ruta que existe es la de `forensic_file_metadata` (Fase 6E.6): lee metadatos de un
+fichero, nunca lo ejecuta ni lo devuelve, y el agente la valida contra su lista local.
 
-Las acciones futuras de mayor riesgo (aislar, matar procesos, bloquear direcciones) están
-listadas como `not_implemented`, sin handler: se ven en el catálogo para que el modelo sea
-extensible, pero el motor las rechaza siempre (nunca hay un stub que pueda ejecutarse).
+Fase 6E: acciones forenses de solo lectura (siempre dentro de una investigación) y
+`isolate_host`/`release_isolation`, que solo salen del flujo de aislamiento con su sesión
+(services/isolation_service.py). Las de mayor riesgo que siguen sin existir (matar procesos,
+bloquear direcciones) están listadas como `not_implemented`, sin handler: el motor las rechaza
+siempre (nunca hay un stub que pueda ejecutarse).
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Literal
+from uuid import UUID
 
-from pydantic import Field
+from pydantic import AwareDatetime, Field, field_validator
 
 from app.core.permissions import ROLE_PERMISSIONS, Permission, Role
 from app.core.platforms import is_macos
@@ -38,8 +43,22 @@ AGENT_COMMAND_TYPES = frozenset(
         "collect_events",
         "collect_telemetry",
         "collect_diagnostics",
+        # Fase 6E.6: recogida forense de solo lectura.
+        "forensic_processes",
+        "forensic_connections",
+        "forensic_services",
+        "forensic_scheduled_tasks",
+        "forensic_persistence",
+        "forensic_sessions",
+        "forensic_network_config",
+        "forensic_firewall_state",
+        "forensic_file_metadata",
+        # Fase 6E.7: aislamiento (solo si el helper local está instalado, habilitado y sano).
+        "isolate_host",
+        "release_isolation",
     }
 )
+FORENSIC_ACTIONS = frozenset(t for t in AGENT_COMMAND_TYPES if t.startswith("forensic_"))
 
 
 class NoParams(RequestModel):
@@ -64,6 +83,41 @@ class IncidentNoteParams(RequestModel):
 
 class ArchiveParams(RequestModel):
     reason: str = Field(min_length=3, max_length=500)
+
+
+class FileMetadataParams(RequestModel):
+    """Ruta absoluta local de UN fichero. Solo forma: el agente la valida otra vez contra
+    `forensics.allowed_roots` de su configuración local, que el servidor no puede ampliar."""
+
+    path: str = Field(min_length=2, max_length=1024)
+    hash: bool = False
+
+    @field_validator("path")
+    @classmethod
+    def _local_absolute(cls, value: str) -> str:
+        if any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+            raise ValueError("path contains control characters")
+        if value.startswith(("\\\\", "//")):
+            raise ValueError("network paths are not allowed")
+        windows = len(value) > 2 and value[0].isalpha() and value[1] == ":" and value[2] in "\\/"
+        if not windows and not value.startswith("/"):
+            raise ValueError("path must be absolute")
+        if ":" in value[2:]:
+            raise ValueError("alternate data streams are not allowed")
+        if ".." in value.replace("\\", "/").split("/"):
+            raise ValueError("path must not contain '..'")
+        return value
+
+
+class IsolateParams(RequestModel):
+    # Los fija el servicio de aislamiento, nunca el operador: el helper local calcula qué se
+    # permite y nunca usa direcciones que vengan del servidor.
+    session_id: UUID
+    expires_at: AwareDatetime
+
+
+class ReleaseParams(RequestModel):
+    session_id: UUID
 
 
 @dataclass(frozen=True)
@@ -152,6 +206,51 @@ def _agent_action(
     )
 
 
+def _forensic_action(
+    action_id: str, name: str, description: str, effect: str, *, platforms: frozenset[str]
+) -> ActionDefinition:
+    # Solo lectura y sin parámetros: se puede reentregar una vez. La evidencia se guarda
+    # como artefacto de la investigación (services/forensics_service.py), no en el resultado.
+    return ActionDefinition(
+        id=action_id,
+        name=name,
+        description=description,
+        category="forensic",
+        scope="agent",
+        target_type="asset",
+        risk_level="low",
+        permissions=(_READ, Permission.FORENSICS_ACQUIRE),
+        expected_effect=effect,
+        agent_command=action_id,
+        supported_platforms=platforms,
+        timeout_seconds=300,
+        max_deliveries=2,
+        allow_archived=False,
+        handler=handlers.agent_dispatch,
+        precheck=handlers.check_investigation,
+    )
+
+
+_POSIX_WINDOWS = frozenset({"windows", "linux"})
+_FORENSIC = (
+    ("forensic_processes", "Procesos (forense)", "Lista completa de procesos con padre,"
+     " usuario, ruta, línea de comando redactada y hash si está disponible.", _AGENT_PLATFORMS),
+    ("forensic_connections", "Conexiones (forense)", "Conexiones TCP/UDP y puertos en escucha"
+     " con el proceso propietario.", _AGENT_PLATFORMS),
+    ("forensic_services", "Servicios (forense)", "Servicios del sistema con tipo de inicio,"
+     " estado, cuenta y ejecutable.", _AGENT_PLATFORMS),
+    ("forensic_scheduled_tasks", "Tareas programadas (forense)", "Tareas programadas y"
+     " entradas de cron/timers con su acción.", _POSIX_WINDOWS),
+    ("forensic_persistence", "Persistencia (forense)", "Claves Run, carpetas de inicio,"
+     " unidades systemd, cron y LaunchAgents/LaunchDaemons.", _AGENT_PLATFORMS),
+    ("forensic_sessions", "Sesiones (forense)", "Sesiones de usuario abiertas en el equipo.",
+     _AGENT_PLATFORMS),
+    ("forensic_network_config", "Configuración de red (forense)", "Interfaces, direcciones,"
+     " rutas, DNS y estadísticas de red.", _AGENT_PLATFORMS),
+    ("forensic_firewall_state", "Estado del firewall (forense)", "Perfiles y estado del"
+     " firewall local (sin cambiar nada).", _AGENT_PLATFORMS),
+)  # fmt: skip
+
 ACTIONS: dict[str, ActionDefinition] = {
     action.id: action
     for action in (
@@ -189,6 +288,40 @@ ACTIONS: dict[str, ActionDefinition] = {
             " eventos. Nunca incluye tokens, claves ni rutas de credenciales.",
             "El agente devuelve un diagnóstico estructurado; no cambia nada en el equipo.",
             timeout=120,
+        ),
+        # --- Agente: recogida forense (Fase 6E.6) ----------------------------------------------
+        *(
+            _forensic_action(
+                action_id,
+                name,
+                description,
+                "Solo lectura: el agente devuelve un artefacto con SHA-256 que se guarda en la"
+                " investigación.",
+                platforms=platforms,
+            )
+            for action_id, name, description, platforms in _FORENSIC
+        ),
+        ActionDefinition(
+            id="forensic_file_metadata",
+            name="Metadatos de fichero (forense)",
+            description="Tamaño, fechas, propietario, firma y (opcional) SHA-256 de UN fichero"
+            " dentro de las rutas permitidas en la configuración local del agente. Nunca"
+            " devuelve el contenido del fichero.",
+            category="forensic",
+            scope="agent",
+            target_type="asset",
+            risk_level="medium",
+            permissions=(_READ, Permission.FORENSICS_ACQUIRE),
+            params_model=FileMetadataParams,
+            requires_confirmation=True,
+            expected_effect="Solo lectura de metadatos; el agente rechaza rutas fuera de su"
+            " lista local de rutas permitidas.",
+            agent_command="forensic_file_metadata",
+            supported_platforms=_AGENT_PLATFORMS,
+            timeout_seconds=300,
+            max_deliveries=2,
+            handler=handlers.agent_dispatch,
+            precheck=handlers.check_file_path,
         ),
         # --- Servidor: reevaluaciones y lecturas ------------------------------------------------
         ActionDefinition(
@@ -347,21 +480,50 @@ ACTIONS: dict[str, ActionDefinition] = {
             handler=handlers.archive_asset,
         ),
         # --- Futuras: visibles, nunca ejecutables en 5D -----------------------------------------
+        # --- Aislamiento (Fase 6E.7): solo desde el flujo de aislamiento ------------------------
         ActionDefinition(
             id="isolate_host",
             name="Aislar equipo de la red",
-            description="Reservada. Necesita una arquitectura propia de aislamiento reversible"
-            " y aprobación separada; no existe en 5D.",
+            description="Bloquea el tráfico del equipo salvo el servidor Sentra y lo esencial"
+            " (calculado por el helper local), con caducidad y reversión local. Solo desde el"
+            " flujo de aislamiento: confirmación con el nombre del equipo y duración máxima.",
             category="containment",
             scope="agent",
             target_type="asset",
             risk_level="critical",
-            permissions=(Permission.RESPONSE_MANAGE,),
-            expected_effect="No disponible.",
+            permissions=(Permission.CONTAINMENT_ISOLATE,),
+            params_model=IsolateParams,
+            expected_effect="El helper de aislamiento aplica reglas propias de firewall y las"
+            " verifica; se revierten solas al caducar aunque el servidor no responda.",
+            agent_command="isolate_host",
+            supported_platforms=_POSIX_WINDOWS,
             destructive=True,
             requires_confirmation=True,
+            timeout_seconds=120,
             idempotent=False,
-            availability="not_implemented",
+            handler=handlers.agent_dispatch,
+            precheck=handlers.check_isolation_session,
+        ),
+        ActionDefinition(
+            id="release_isolation",
+            name="Levantar aislamiento",
+            description="Pide al helper local que borre sus reglas de aislamiento y lo"
+            " verifique. Solo desde el flujo de aislamiento.",
+            category="containment",
+            scope="agent",
+            target_type="asset",
+            risk_level="high",
+            permissions=(Permission.CONTAINMENT_RELEASE,),
+            params_model=ReleaseParams,
+            expected_effect="El equipo recupera la red; las reglas del usuario no se tocan.",
+            agent_command="release_isolation",
+            supported_platforms=_POSIX_WINDOWS,
+            requires_confirmation=True,
+            timeout_seconds=120,
+            # Repetir una liberación es inocuo: el helper responde restored si no hay reglas.
+            max_deliveries=2,
+            handler=handlers.agent_dispatch,
+            precheck=handlers.check_isolation_session,
         ),
         ActionDefinition(
             id="kill_process",

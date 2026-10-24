@@ -926,3 +926,76 @@ pre {
 .risk-trace__chain {
   overflow-wrap: anywhere;
 }
+
+/* Fase 6E: árbol de procesos, evidencia forense e interpretaciones */
+
+.proc-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 420px);
+  gap: var(--space-4);
+  align-items: start;
+}
+
+@media (max-width: 1199px) {
+  .proc-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+.proc-tree,
+.proc-tree__group {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.proc-tree {
+  padding: 0 var(--space-3) var(--space-3);
+  max-height: 560px;
+  overflow: auto;
+}
+
+.proc-tree__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-1);
+  min-height: 28px;
+}
+
+/* Hueco fijo para el botón de desplegar: los nombres quedan alineados en cada nivel. */
+.proc-tree__toggle {
+  display: inline-flex;
+  justify-content: center;
+  width: 24px;
+  min-width: 24px;
+  height: 24px;
+  padding: 0;
+}
+
+.proc-tree__status {
+  padding: var(--space-1) 0;
+}
+
+.proc-detail__value {
+  overflow-wrap: anywhere;
+}
+
+.row--crit {
+  background: var(--crit-soft);
+}
+
+.artifact-content {
+  max-height: 480px;
+}
+
+/* Las interpretaciones se distinguen de la evidencia a simple vista: borde lateral propio. */
+.interpretations {
+  border-left: 3px solid var(--info);
+}
+
+.note__body {
+  margin: var(--space-1) 0 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}

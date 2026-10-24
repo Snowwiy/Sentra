@@ -1178,6 +1178,303 @@ def _kernel(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     )
 
 
+# --- Comportamiento de endpoint (Fase 6E.5, agente 0.5.0) -----------------------------------
+# Señales de app/detection/behavior.py. Ninguna regla actúa sobre el equipo: abren una
+# detección (y alerta según severidad) para que una persona decida.
+
+_BEH_REQUIRED = ("Agente 0.5.0 con telemetría de actividad (POST /agents/activity)",)
+
+
+def _document_child(ctx: RuleContext, s: DetectionSignal) -> RuleResult | None:
+    if not _get(s, "document_child"):
+        return None
+    parent = str(_get(s, "parent_name") or "aplicación")
+    child = str(_get(s, "name") or s.subject or "proceso")
+    findings = _get(s, "cmdline_findings") or []
+    summary = f"{parent} inició {child}" + (
+        f" con una línea de comando sospechosa ({', '.join(findings)})." if findings else "."
+    )
+    return _single(
+        s,
+        _key(f"{parent}|{child}|{_get(s, 'instance_key') or ''}", "*"),
+        summary,
+        severity=Sev.HIGH if findings else Sev.MEDIUM,
+        confidence=Conf.HIGH if findings else Conf.MEDIUM,
+        details={
+            "parent": parent,
+            "process": child,
+            "exe": _get(s, "exe"),
+            "cmdline": _get(s, "cmdline"),
+            "username": _get(s, "username"),
+            "instance_key": _get(s, "instance_key"),
+        },
+    )
+
+
+def _suspicious_cmdline(ctx: RuleContext, s: DetectionSignal) -> RuleResult | None:
+    findings = [str(f) for f in (_get(s, "cmdline_findings") or [])]
+    if not findings:
+        return None
+    from app.detection.behavior import CMDLINE_TEXT
+
+    name = str(_get(s, "name") or s.subject or "proceso")
+    described = "; ".join(CMDLINE_TEXT.get(f, f) for f in findings)
+    # Dos patrones a la vez (p. ej. codificada + descarga) es mucho menos ambiguo.
+    confidence = Conf.HIGH if len(findings) > 1 else Conf.MEDIUM
+    return _single(
+        s,
+        _key(f"{name}|{'|'.join(sorted(findings))}|{_get(s, 'instance_key') or ''}", "*"),
+        f"{name}: {described}.",
+        confidence=confidence,
+        details={
+            "process": name,
+            "findings": findings,
+            "cmdline": _get(s, "cmdline"),
+            "parent": _get(s, "parent_name"),
+            "username": _get(s, "username"),
+            "instance_key": _get(s, "instance_key"),
+        },
+    )
+
+
+def _unusual_network(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    exe = str(_get(s, "exe") or s.subject)
+    remote = f"{_get(s, 'remote_address')}:{_get(s, 'remote_port')}"
+    return _single(
+        s,
+        _key(f"{exe.lower()}|{_get(s, 'remote_address')}", "*"),
+        f"{_get(s, 'name') or exe} ({_get(s, 'unusual_location')}) se conectó a {remote}.",
+        details={
+            "exe": exe,
+            "remote_address": _get(s, "remote_address"),
+            "remote_port": _get(s, "remote_port"),
+            "reason": _get(s, "unusual_location"),
+        },
+    )
+
+
+_PERSISTENCE_MITRE = {
+    "run_key": Mitre("TA0003", "T1547", "T1547.001"),
+    "startup_folder": Mitre("TA0003", "T1547", "T1547.001"),
+    "systemd_unit": Mitre("TA0003", "T1543", "T1543.002"),
+    "cron": Mitre("TA0003", "T1053", "T1053.003"),
+    "scheduled_task": Mitre("TA0003", "T1053", "T1053.005"),
+    "launch_agent": Mitre("TA0003", "T1543", "T1543.001"),
+    "launch_daemon": Mitre("TA0003", "T1543", "T1543.004"),
+}
+
+
+def _persistence(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    mechanism = str(_get(s, "mechanism") or "persistence")
+    name = _get(s, "name") or _get(s, "location") or "?"
+    target = _get(s, "target")
+    unusual = _get(s, "unusual_location")
+    suspicious = _get(s, "suspicious_target") or []
+    summary = f"Persistencia {_get(s, 'action')}: {mechanism} {name}" + (
+        f" -> {target}" if target else ""
+    )
+    severity, confidence = Sev.LOW, Conf.MEDIUM
+    if unusual or suspicious:
+        severity, confidence = Sev.HIGH, Conf.MEDIUM
+        summary += f". Destino inusual o sospechoso ({unusual or ', '.join(suspicious)})"
+    return _single(
+        s,
+        _key(s.subject, mechanism),
+        summary + ".",
+        severity=severity,
+        confidence=confidence,
+        details={
+            "mechanism": mechanism,
+            "name": name,
+            "target": target,
+            "location": _get(s, "location"),
+            "unusual_location": unusual,
+        },
+        mitre=_PERSISTENCE_MITRE.get(mechanism),
+    )
+
+
+def _protection_off(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    product = str(_get(s, "product") or "protección")
+    disabled = [str(d) for d in (_get(s, "disabled") or [])]
+    return _single(
+        s,
+        _key(product.lower(), "*"),
+        f"{product}: se desactivó {', '.join(disabled)}.",
+        details={"product": product, "disabled": disabled},
+    )
+
+
+def _firewall_off(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    profile = str(_get(s, "profile") or "default")
+    return _single(
+        s,
+        _key(profile.lower(), "*"),
+        f"El firewall del host se desactivó en el perfil {profile}.",
+        details={"profile": profile},
+    )
+
+
+BEHAVIOR_RULES: tuple[DetectionRule, ...] = (
+    SimpleRule(
+        _meta(
+            id="BEH-001",
+            category="behavior",
+            title="Aplicación de documentos inicia un intérprete",
+            description=(
+                "Una aplicación de ofimática, correo o PDF inició un intérprete o binario del"
+                " sistema que se abusa para ejecutar código (cmd, PowerShell, wscript, mshta,"
+                " rundll32...)."
+            ),
+            why=(
+                "Es la cadena típica de un documento malicioso con macros o un exploit del"
+                " lector. Algunas macros legítimas lo hacen: confirmar con el usuario."
+            ),
+            severity=Sev.MEDIUM,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.PROCESS_START}),
+            required_data=_BEH_REQUIRED,
+            recommendations=(
+                "Abrir el árbol de procesos del activo y revisar el documento de origen.",
+                "Preguntar al usuario si esperaba esa acción del documento.",
+                "Si no es legítimo, abrir una investigación y recoger evidencias.",
+            ),
+            mitre=Mitre("TA0002", "T1204", "T1204.002"),
+            cooldown=timedelta(hours=1),
+        ),
+        _document_child,
+    ),
+    SimpleRule(
+        _meta(
+            id="BEH-002",
+            category="behavior",
+            title="Línea de comando sospechosa",
+            description=(
+                "Un proceso se inició con una línea de comando que encaja en un patrón conocido"
+                " de abuso: PowerShell codificado o que descarga y ejecuta, certutil/bitsadmin"
+                " como descargador, mshta o regsvr32 remotos, curl|sh, base64|sh."
+            ),
+            why=(
+                "Son técnicas habituales para ejecutar código descargado evitando controles."
+                " Herramientas de administración legítimas pueden usarlas: revisar el contexto."
+            ),
+            severity=Sev.HIGH,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.PROCESS_START}),
+            required_data=(*_BEH_REQUIRED, "Política de línea de comando redacted o full"),
+            recommendations=(
+                "Revisar la línea de comando (redactada) y el proceso padre.",
+                "Comprobar si un software de gestión conocido lanza esa orden.",
+                "Si no es legítimo, abrir una investigación y recoger evidencias.",
+            ),
+            mitre=Mitre("TA0002", "T1059"),
+            cooldown=timedelta(hours=1),
+        ),
+        _suspicious_cmdline,
+    ),
+    SimpleRule(
+        _meta(
+            id="BEH-003",
+            category="behavior",
+            title="Proceso en ubicación inusual con conexión a Internet",
+            description=(
+                "Un proceso que se ejecuta desde una carpeta temporal o pública abrió una"
+                " conexión saliente a una dirección pública."
+            ),
+            why=(
+                "El malware suele ejecutarse desde carpetas temporales y contactar con su"
+                " servidor. Instaladores y actualizadores también lo hacen: confianza baja."
+            ),
+            severity=Sev.MEDIUM,
+            confidence=Conf.LOW,
+            triggers=frozenset({SignalKind.PROCESS_NETWORK}),
+            required_data=(*_BEH_REQUIRED, "Capacidad telemetry_process_network"),
+            recommendations=(
+                "Identificar el ejecutable (ruta, firma, hash) y el destino de la conexión.",
+                "Comprobar el destino en inteligencia de amenazas.",
+            ),
+            mitre=Mitre("TA0011", "T1071"),
+            cooldown=timedelta(hours=6),
+        ),
+        _unusual_network,
+    ),
+    SimpleRule(
+        _meta(
+            id="BEH-004",
+            category="behavior",
+            title="Mecanismo de persistencia creado o modificado",
+            description=(
+                "Se creó o modificó una entrada de arranque automático: clave Run, carpeta de"
+                " inicio, tarea programada, unidad systemd, cron o LaunchAgent/Daemon."
+            ),
+            why=(
+                "Es como un programa se asegura de volver a ejecutarse tras reiniciar. La"
+                " mayoría son instalaciones legítimas; un destino en carpeta temporal no."
+            ),
+            severity=Sev.LOW,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.PERSISTENCE_CHANGE}),
+            required_data=_BEH_REQUIRED,
+            recommendations=(
+                "Revisar qué programa se registra y si corresponde a una instalación conocida.",
+                "Si el destino está en una carpeta temporal o pública, investigar el origen.",
+            ),
+            cooldown=timedelta(hours=24),
+        ),
+        _persistence,
+    ),
+    SimpleRule(
+        _meta(
+            id="BEH-005",
+            category="behavior",
+            title="Protección del endpoint desactivada",
+            description=(
+                "El antivirus informó que la protección en tiempo real, el antivirus o la"
+                " protección contra manipulaciones pasó de activa a inactiva."
+            ),
+            why=(
+                "Desactivar la protección es un paso habitual antes de ejecutar malware. Puede"
+                " ser una acción de soporte o la instalación de otro antivirus."
+            ),
+            severity=Sev.HIGH,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.PROTECTION_CHANGE}),
+            required_data=(*_BEH_REQUIRED, "Estado del antivirus legible por el agente"),
+            recommendations=(
+                "Confirmar con soporte si hubo un cambio planificado.",
+                "Reactivar la protección y revisar la actividad del equipo en ese intervalo.",
+            ),
+            mitre=Mitre("TA0005", "T1562", "T1562.001"),
+            cooldown=timedelta(hours=6),
+        ),
+        _protection_off,
+    ),
+    SimpleRule(
+        _meta(
+            id="BEH-006",
+            category="behavior",
+            title="Firewall del host desactivado",
+            description="Un perfil del firewall del host pasó de activado a desactivado.",
+            why=(
+                "Abre el equipo a conexiones entrantes. Suele ser una acción de soporte, pero"
+                " también un paso de un atacante con privilegios."
+            ),
+            severity=Sev.MEDIUM,
+            confidence=Conf.MEDIUM,
+            triggers=frozenset({SignalKind.FIREWALL_CHANGE}),
+            required_data=_BEH_REQUIRED,
+            recommendations=(
+                "Confirmar si el cambio fue planificado.",
+                "Volver a activar el perfil y revisar conexiones entrantes del intervalo.",
+            ),
+            mitre=Mitre("TA0005", "T1562", "T1562.004"),
+            cooldown=timedelta(hours=6),
+        ),
+        _firewall_off,
+    ),
+)
+
+
 RULES: tuple[DetectionRule, ...] = (
     FailedLogonBurst(),
     FailedLogonBurst(LIN_AUTH_001, "linux"),
@@ -1679,5 +1976,6 @@ RULES: tuple[DetectionRule, ...] = (
     ),
 )
 
+RULES = (*RULES, *BEHAVIOR_RULES)
 RULE_IDS = frozenset(rule.meta.id for rule in RULES)
 RULES_BY_ID = {rule.meta.id: rule for rule in RULES}

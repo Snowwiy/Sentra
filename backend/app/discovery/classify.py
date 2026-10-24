@@ -44,6 +44,10 @@ MAX_VALUE = 128
 AGENT_HOSTNAME = "agent_hostname"
 AGENT_OS = "agent_os"
 REVERSE_DNS = "reverse_dns"
+# Fase 6E.2: hostname de un lease DHCP de una fuente autorizada, asociado al activo con
+# coincidencia alta (misma MAC e IP; ver app/dhcp/matching.py). Es lo que el equipo pidió
+# llamarse al servidor DHCP, así que va justo detrás del agente.
+DHCP_LEASE = "dhcp_lease"
 MDNS = "mdns"
 NETBIOS = "netbios"
 UPNP = "upnp"
@@ -60,7 +64,7 @@ CONFLICT = "conflict"
 # llamarse; después, lo que la red publica sobre él, de más a menos fiable. La etiqueta
 # personalizada (assets.custom_label) NO es una fuente de este motor: la escribe una persona,
 # va en otra columna y ninguna identificación automática la toca.
-NAME_SOURCES = (AGENT_HOSTNAME, REVERSE_DNS, MDNS, NETBIOS, UPNP, "vendor_model")
+NAME_SOURCES = (AGENT_HOSTNAME, DHCP_LEASE, REVERSE_DNS, MDNS, NETBIOS, UPNP, "vendor_model")
 
 # Clase de cada nombre observado (Corrección 6C). Sirve para que la UI distinga lo que el
 # equipo dice de sí mismo de lo que dice la infraestructura, y para no presentar como nombre
@@ -88,6 +92,8 @@ class IdentityInput:
     os_name: str | None = None
     os_version: str | None = None
     reverse_dns: str | None = None
+    # Fase 6E.2: solo llega si el lease se asoció con coincidencia alta.
+    dhcp_hostname: str | None = None
     mdns_name: str | None = None
     netbios_name: str | None = None
     upnp_friendly_name: str | None = None
@@ -494,6 +500,8 @@ def is_default_name(value: str | None) -> bool:
 def _name_kind(source: str, raw: str, value: str) -> str:
     if _DEFAULT_OS_NAMES.match(value):
         return NAME_KIND_GENERIC
+    if source == DHCP_LEASE:
+        return NAME_KIND_DHCP
     if source != REVERSE_DNS:
         return NAME_KIND_DEVICE
     lowered = raw.strip().rstrip(".").lower()
@@ -508,6 +516,7 @@ def _name_kind(source: str, raw: str, value: str) -> str:
 
 def _name_candidates(data: IdentityInput) -> list[_Name]:
     raw_names = (
+        (DHCP_LEASE, data.dhcp_hostname, _short_name(data.dhcp_hostname)),
         (REVERSE_DNS, data.reverse_dns, _short_name(data.reverse_dns)),
         (MDNS, data.mdns_name, _short_name(data.mdns_name)),
         (NETBIOS, data.netbios_name, _clean_name(data.netbios_name)),

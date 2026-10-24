@@ -27,6 +27,12 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "reports:read",
     "reports:generate",
     "network:poll",
+    // Fase 6E: telemetría, forense (leer, adquirir, descargar) y vista previa de aislamiento.
+    "telemetry:read",
+    "forensics:read",
+    "forensics:acquire",
+    "forensics:download",
+    "containment:preview",
   ],
   admin: [
     "monitoring:read",
@@ -66,6 +72,16 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "network:manage",
     "snmp_credentials:manage",
     "topology:manage",
+    // Fase 6E: admin tiene todos los permisos nuevos.
+    "dhcp:manage",
+    "telemetry:read",
+    "forensics:read",
+    "forensics:acquire",
+    "forensics:download",
+    "forensics:manage",
+    "containment:preview",
+    "containment:isolate",
+    "containment:release",
   ],
 };
 

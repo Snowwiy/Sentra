@@ -19,6 +19,8 @@ con TTL si RESPONSE_OFFLINE_AGENT_POLICY=queue); un comando sin respuesta acaba 
 timed_out. Toda transición queda en audit_events sin secretos.
 """
 
+import hashlib
+import json
 import logging
 import uuid
 from collections.abc import Callable, Sequence
@@ -40,8 +42,10 @@ from app.core.exceptions import (
     SentraError,
 )
 from app.core.permissions import Permission, permissions_for
+from app.isolation.state import ISOLATION_COMMANDS, apply_isolation_result
 from app.models.asset import Asset
 from app.models.detection import Detection
+from app.models.forensics import Investigation
 from app.models.incident import Incident, IncidentActivity
 from app.models.response import (
     ACTIVE_EXECUTION_STATUSES,
@@ -55,6 +59,7 @@ from app.models.user import User
 from app.repositories.asset_repository import AssetRepository
 from app.response.catalog import (
     ACTIONS,
+    FORENSIC_ACTIONS,
     RISK_RANK,
     ActionDefinition,
     get_action,
@@ -95,6 +100,7 @@ from app.schemas.response import (
 from app.services import audit_service
 from app.services.agent_service import authenticate_agent, record_contact
 from app.services.audit_service import Actor
+from app.services.forensics_service import ArtifactRejectedError, store_artifact
 from app.services.site_service import in_site
 
 logger = logging.getLogger(__name__)
@@ -159,6 +165,9 @@ class Target:
     detection: Detection | None = None
     # Incidente de contexto (ejecución lanzada desde un caso), distinto del objetivo.
     context_incident: Incident | None = None
+    # Fase 6E: investigación de una recogida forense y sesión de aislamiento.
+    investigation: Any = None
+    isolation: Any = None
 
     @property
     def label(self) -> str:
@@ -305,6 +314,8 @@ class ResponseService:
             incident=target.incident,
             detection=target.detection,
             discovery_runner=self._discovery_runner,
+            investigation=target.investigation,
+            isolation=target.isolation,
         )
 
     def _action(self, action_id: str) -> ActionDefinition:
@@ -314,7 +325,7 @@ class ResponseService:
         return action
 
     def _prepare(
-        self, op: Operator, request: ExecutionRequest
+        self, op: Operator, request: ExecutionRequest, isolation: Any = None
     ) -> tuple[ActionDefinition, Target, Any, ActionContext, Decision]:
         action = self._action(request.action_id)
         # 403 antes de mirar el objetivo: sin permiso no se revela nada de él.
@@ -326,6 +337,17 @@ class ResponseService:
         target = self._resolve(
             op, request.target_type, request.target_id, request.incident_id, request.detection_id
         )
+        if request.investigation_id is not None:
+            if action.category != "forensic":
+                raise ResponseValidationError(
+                    "investigation_not_applicable", "Only forensic actions use an investigation"
+                )
+            target.investigation = self._session.scalar(
+                select(Investigation).where(Investigation.public_id == request.investigation_id)
+            )
+            if target.investigation is None:
+                raise NotFoundError("Investigation not found")
+        target.isolation = isolation
         params = self._params(action, request.parameters)
         ctx = self._context(op, target, params, _now())
         return action, target, params, ctx, evaluate(action, ctx)
@@ -416,9 +438,12 @@ class ResponseService:
 
     # --- Ejecución manual --------------------------------------------------------------------
 
-    def execute(self, op: Operator, request: ExecutionRequest) -> ExecutionOut:
+    def execute(
+        self, op: Operator, request: ExecutionRequest, isolation: Any = None
+    ) -> ExecutionOut:
+        """`isolation` solo lo pasa services/isolation_service.py (isolate_host/release)."""
         self._require_enabled()
-        action, target, params, ctx, decision = self._prepare(op, request)
+        action, target, params, ctx, decision = self._prepare(op, request, isolation)
         existing = self._by_idempotency(op, request.idempotency_key, action.id, request.target_id)
         if existing is not None:
             return self.execution_out(existing, deduplicated=True)
@@ -427,6 +452,16 @@ class ResponseService:
                 "confirmation_required", "This action changes data: confirm it explicitly"
             )
         dedupe = f"{action.id}:{action.target_type}:{request.target_id}"
+        if action.category in ("forensic", "containment"):
+            # Dos recogidas con distinto alcance o de distintas investigaciones (o dos sesiones
+            # de aislamiento) no son la misma petición: el anti-duplicado incluye ambos.
+            scope = {
+                "params": params.model_dump(mode="json"),
+                "investigation": str(request.investigation_id),
+            }
+            dedupe += (
+                ":" + hashlib.sha256(json.dumps(scope, sort_keys=True).encode()).hexdigest()[:32]
+            )
         if decision.allowed:
             active = self._session.scalar(
                 select(ResponseExecution).where(
@@ -517,6 +552,7 @@ class ResponseService:
             incident_id=context_incident.id if context_incident is not None else None,
             detection_public_id=target.detection.public_id if target.detection else None,
             agent_id=asset.agent_id if asset is not None and action.requires_agent else None,
+            investigation_id=target.investigation.id if target.investigation is not None else None,
             parameters=params.model_dump(mode="json"),
             blockers=[b.as_dict() for b in decision.blockers] or None,
             actor=op.actor.name[:64],
@@ -586,7 +622,9 @@ class ResponseService:
                 asset_id=asset.id,
                 agent_id=asset.agent_id,
                 command_type=action.agent_command,
-                params={},
+                # Parámetros ya validados por el modelo cerrado de la acción (vacío en las de
+                # 5D). El agente los vuelve a validar con su propia allowlist.
+                params=dict(execution.parameters or {}),
                 status="queued",
                 created_at=now,
                 expires_at=now + ttl,
@@ -1074,8 +1112,29 @@ class ResponseService:
         command.completed_at = now
         execution = self._reload(command.execution_id)
         agent_actor = Actor(f"agent:{str(body.agent_id)[:8]}")
+        summary, data = body.summary, body.data
+        if succeeded and command.command_type in FORENSIC_ACTIONS:
+            # La evidencia se guarda aparte (JSON canónico y SHA-256); el resultado de la
+            # ejecución solo lleva la referencia.
+            try:
+                summary, data = store_artifact(
+                    self._session, self._settings, execution, command, body.data, now
+                )
+            except ArtifactRejectedError as exc:
+                command.status = "failed"
+                self._finish(
+                    execution,
+                    "failed",
+                    agent_actor,
+                    error_code=exc.code,
+                    error_message=exc.message,
+                )
+                self._session.commit()
+                return CommandResultResponse(accepted=True, duplicate=False, status=command.status)
+        if command.command_type in ISOLATION_COMMANDS:
+            apply_isolation_result(self._session, execution, command, body, now)
         if succeeded:
-            self._finish(execution, "succeeded", agent_actor, summary=body.summary, data=body.data)
+            self._finish(execution, "succeeded", agent_actor, summary=summary, data=data)
         else:
             self._finish(
                 execution,

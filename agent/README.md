@@ -105,7 +105,7 @@ salvo con `--credential-store file` explícito.
 
 ```bash
 (umask 077; printf 'Token de instalación: '; read -rs t && printf '%s\n' "$t" > enrollment.token); echo
-sudo installer -pkg ./sentra-agent-0.4.0-macos-arm64-unsigned.pkg -target /
+sudo installer -pkg ./sentra-agent-0.5.0-macos-arm64-unsigned.pkg -target /
 sudo /Library/Sentra/Agent/bin/sentra-agent-setup --server https://SERVER --token-file ./enrollment.token
 ```
 
@@ -113,6 +113,23 @@ Eventos: subconjunto fijo del Unified Logging (sshd, sudo, su, Compartir pantall
 Wi-Fi pasivo en Windows, Linux y macOS (campo `wireless` del inventario, sin escaneo activo ni
 contraseñas). Guía completa, decisiones de seguridad y lo que falta validar en un Mac físico:
 [docs/agent-macos-installation.md](../docs/agent-macos-installation.md).
+
+## Agente 0.5.0 (Fase 6E): actividad del endpoint, forense y aislamiento opcional
+
+- Actividad: inicio y fin de procesos con su padre (`instance_key` estable aunque el PID se
+  reutilice), conexiones por proceso, servicios, tareas programadas, persistencia, estado del
+  antivirus y del firewall, y Sysmon evento 1 en Windows si está instalado. Se envía por lotes
+  (gzip) a `POST /agents/activity` desde una cola en disco; un servidor anterior (404) solo
+  desactiva esta parte. Sección `[telemetry]` en `agent.example.toml`.
+- Acciones forenses de solo lectura (`forensic_*`) con artefacto `sentra-forensic/1`, SHA-256
+  y recorte por tamaño; las rutas se limitan con `[forensics] allowed_roots` local.
+- Aislamiento de red: solo a través de un helper separado y opcional (`SentraIsolation` /
+  `sentra-isolation`), desactivado por defecto y nunca en macOS. El agente no gana
+  privilegios.
+
+Guías: [docs/agent-upgrade-0.5.md](../docs/agent-upgrade-0.5.md),
+[docs/endpoint-telemetry-agent.md](../docs/endpoint-telemetry-agent.md) y
+[docs/safe-isolation-helper.md](../docs/safe-isolation-helper.md).
 
 ## Not yet
 

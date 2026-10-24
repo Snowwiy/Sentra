@@ -91,6 +91,13 @@ def _run_service(config: AgentConfig) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    args_list = sys.argv[1:] if argv is None else argv
+    if args_list[:1] == ["isolation-helper"]:
+        # Fase 6E.7: el lanzador de Linux (/opt/sentra-agent/bin/sentra-agent) sirve también
+        # para la unidad sentra-isolation, sin un segundo lanzador con otro intérprete.
+        from sentra_agent.isolation_helper import main as helper_main
+
+        return helper_main(args_list[1:])
     parser = argparse.ArgumentParser(prog="sentra-agent", description="Sentra endpoint agent")
     parser.add_argument("--version", action="version", version=__version__)
     parser.add_argument("--config", type=Path, help="TOML config file (see agent.example.toml)")
@@ -122,7 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         help="enroll if not enrolled yet, then exit (exit code tells the result; used by"
         " installers)",
     )
-    args = parser.parse_args(argv)
+    args = parser.parse_args(args_list)
 
     try:
         config = load_config(

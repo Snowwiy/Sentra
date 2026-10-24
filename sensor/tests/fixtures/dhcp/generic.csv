@@ -1,0 +1,6 @@
+ip,mac,hostname,expires
+192.168.1.10,AA-BB-CC-DD-EE-10,kitchen-tablet,
+192.168.1.11,aabb.ccdd.ee11,camera-garage,2026-10-23T00:00:00Z
+192.168.1.12,aabbccddee12,*,1700000000
+192.168.1.13,aa:bb:cc:dd:ee:13,old,not-a-date
+999.1.1.1,aa:bb:cc:dd:ee:14,bad-ip,

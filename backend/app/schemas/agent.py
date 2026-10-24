@@ -1,11 +1,12 @@
 from datetime import datetime
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
-from pydantic import Field, IPvAnyAddress
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, IPvAnyAddress
 
 from app.models.asset import AssetStatus
 from app.schemas.common import RequestModel, ResponseModel
+from app.schemas.endpoint import ActivityStats
 
 
 class HostInfo(RequestModel):
@@ -46,11 +47,30 @@ class AgentRegisterResponse(ResponseModel):
     agent_token: str
 
 
+class IsolationReport(BaseModel):
+    """Fase 6E.7: estado del helper de aislamiento visto por el agente 0.5.0. Ignora claves
+    nuevas para que un agente más moderno no pierda el heartbeat."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    helper: Literal["absent", "disabled", "ready", "error"]
+    state: Literal["none", "applying", "isolated", "reverting", "failed"]
+    session_id: UUID | None = None
+    applied_at: AwareDatetime | None = None
+    expires_at: AwareDatetime | None = None
+    method: Literal["windows_firewall", "nftables"] | None = None
+    verified: bool = False
+    error_code: str | None = Field(default=None, max_length=64)
+
+
 class HeartbeatRequest(RequestModel):
     agent_id: UUID
     # Optional so older agents keep working. When present, the asset's inventory is refreshed
     # (IP changes with DHCP/VPN, OS and agent versions change with updates).
     host: HostInfo | None = None
+    # Fase 6E (agente 0.5.0, opcionales): estado de la cola de actividad y del aislamiento.
+    telemetry: ActivityStats | None = None
+    isolation: IsolationReport | None = None
 
 
 class HeartbeatResponse(ResponseModel):

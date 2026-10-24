@@ -382,6 +382,10 @@ def test_build_is_reproducible_and_ships_only_the_agent(tmp_path: Path) -> None:
     assert f"{top}/install-sentra-agent.sh" in names
     assert f"{top}/payload/lib/sentra_agent/runner.py" in names
     assert f"{top}/payload/lib/psutil/__init__.py" in names
+    # Fase 6E.7: el helper de aislamiento viaja en el paquete pero no se habilita solo.
+    assert f"{top}/sentra-isolation.service" in names
+    assert f"{top}/isolation.toml.example" in names
+    assert f"{top}/payload/lib/sentra_agent/isolation_helper.py" in names
     for forbidden in ("backend", "frontend", "alembic", ".env", "tests", "__pycache__", ".git"):
         assert not any(f"/{forbidden}" in name for name in names), forbidden
     debs = list(outputs[0].glob("*.deb"))
@@ -393,6 +397,8 @@ def test_build_is_reproducible_and_ships_only_the_agent(tmp_path: Path) -> None:
         ).stdout
         assert "./lib/systemd/system/sentra-agent.service" in listing
         assert "./usr/sbin/sentra-agent-setup" in listing
+        assert "./lib/systemd/system/sentra-isolation.service" in listing
+        assert "./opt/sentra-agent/share/isolation.toml.example" in listing
 
 
 # --- `sentra-agent --enroll` (used by the installer) ------------------------------------

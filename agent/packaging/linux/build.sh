@@ -85,6 +85,9 @@ find "$STAGE/payload/lib" -name '*.pyc' -delete
 install_lf 0755 "$HERE/install-sentra-agent.sh" "$STAGE/install-sentra-agent.sh"
 install_lf 0755 "$HERE/uninstall-sentra-agent.sh" "$STAGE/uninstall-sentra-agent.sh"
 install_lf 0644 "$HERE/sentra-agent.service" "$STAGE/sentra-agent.service"
+# Fase 6E.7: helper de aislamiento opcional (no se habilita al instalar).
+install_lf 0644 "$HERE/sentra-isolation.service" "$STAGE/sentra-isolation.service"
+install_lf 0644 "$HERE/isolation.toml.example" "$STAGE/isolation.toml.example"
 install -m 0644 "$REPO_DIR/docs/agent-linux-installation.md" "$STAGE/README.md"
 printf 'version=%s\narch=%s\npsutil=%s\n' "$VERSION" "$ARCH" "$(basename "$PSUTIL_WHEEL")" \
   > "$STAGE/VERSION"
@@ -117,6 +120,9 @@ if [ "$BUILD_DEB" = "1" ] && command -v dpkg-deb >/dev/null 2>&1; then
     "$DEB/opt/sentra-agent/share/uninstall-sentra-agent.sh"
   install -m 0644 "$STAGE/VERSION" "$DEB/opt/sentra-agent/VERSION"
   install_lf 0644 "$HERE/sentra-agent.service" "$DEB/lib/systemd/system/sentra-agent.service"
+  install_lf 0644 "$HERE/sentra-isolation.service" \
+    "$DEB/lib/systemd/system/sentra-isolation.service"
+  install_lf 0644 "$HERE/isolation.toml.example" "$DEB/opt/sentra-agent/share/isolation.toml.example"
   install -m 0644 "$STAGE/README.md" "$DEB/usr/share/doc/sentra-agent/README.md"
   install_lf 0755 "$HERE/debian/sentra-agent-setup" "$DEB/usr/sbin/sentra-agent-setup"
   for script in postinst prerm postrm; do

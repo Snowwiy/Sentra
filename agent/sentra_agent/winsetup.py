@@ -27,6 +27,7 @@ from urllib.parse import urlsplit
 
 from sentra_agent.enrollment import STATUS_FILE
 from sentra_agent.identity import FORMAT_VERSION, IDENTITY_FILE, write_atomic
+from sentra_agent.isolation.policy import PolicyError, render_default_policy
 from sentra_agent.winservice import DISPLAY_NAME, SERVICE_NAME
 
 INSTALLATION_METHOD = "windows_service"
@@ -318,6 +319,54 @@ def plan(
     }
 
 
+# --- Fase 6E.7: helper de aislamiento opcional ----------------------------------------------
+
+ISOLATION_SERVICE_NAME = "SentraIsolation"
+ISOLATION_DISPLAY_NAME = "Sentra Isolation Helper"
+ISOLATION_DESCRIPTION = (
+    "Sentra: helper opcional de aislamiento de red. Solo aplica reglas propias del firewall"
+    " (grupo Sentra Isolation) si su política local isolation.toml lo permite."
+)
+
+
+def isolation_plan(program_files: str, program_data: str) -> dict[str, Any]:
+    r"""Rutas, servicio y política inicial del helper (-InstallIsolationHelper).
+
+    El helper corre como LocalSystem (es el único componente que toca el firewall); su
+    política y su estado privado viven en %ProgramData%\Sentra\Isolation, fuera del alcance
+    del agente. El directorio de intercambio cuelga de %ProgramData%\Sentra\Agent.
+    """
+    layout = make_layout(program_files, program_data)
+    base = layout.program_data / "Sentra" / "Isolation"
+    policy_file = base / "isolation.toml"
+    exchange_dir = layout.data_dir / "isolation"
+    try:
+        policy_text = render_default_policy(str(layout.config_file))
+    except PolicyError as exc:
+        raise SetupError(str(exc)) from exc
+    binary_path = (
+        f'"{layout.runtime_python}" -I -m sentra_agent.isolation_helper --service'
+        f' --policy "{policy_file}" --exchange-dir "{exchange_dir}"'
+        f' --state-dir "{base / "state"}" --log-dir "{base / "logs"}"'
+    )
+    return {
+        "service_name": ISOLATION_SERVICE_NAME,
+        "display_name": ISOLATION_DISPLAY_NAME,
+        "description": ISOLATION_DESCRIPTION,
+        "binary_path": binary_path,
+        "policy_dir": str(base),
+        "policy_file": str(policy_file),
+        "policy_text": policy_text,
+        "state_dir": str(base / "state"),
+        "log_dir": str(base / "logs"),
+        "exchange_dir": str(exchange_dir),
+        "agent_service_sid": service_sid(SERVICE_NAME),
+        "runtime_python": str(layout.runtime_python),
+        "failure_reset_seconds": FAILURE_RESET_SECONDS,
+        "failure_actions": FAILURE_ACTIONS,
+    }
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sentra_agent.winsetup")
     commands = parser.add_subparsers(dest="command", required=True)
@@ -334,13 +383,16 @@ def main(argv: list[str] | None = None) -> int:
     import_cmd = commands.add_parser("import-identity", help="reuse a manual agent_id")
     import_cmd.add_argument("--source", type=Path, required=True)
     import_cmd.add_argument("--dest", type=Path, required=True)
+    iso_cmd = commands.add_parser("isolation-plan", help="isolation helper plan as JSON")
+    iso_cmd.add_argument("--program-files", required=True)
+    iso_cmd.add_argument("--program-data", required=True)
     args = parser.parse_args(argv)
 
     try:
-        if args.command == "plan":
-            result: Any = plan(
-                args.program_files, args.program_data, args.server, args.existing_config
-            )
+        if args.command == "isolation-plan":
+            result: Any = isolation_plan(args.program_files, args.program_data)
+        elif args.command == "plan":
+            result = plan(args.program_files, args.program_data, args.server, args.existing_config)
         elif args.command == "check-token":
             read_enrollment_token(args.file)
             result = {"valid": True}

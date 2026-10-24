@@ -1,4 +1,47 @@
-# Matriz de compatibilidad (Fase 6D, Sentra 0.2.0)
+# Matriz de compatibilidad (Fase 6E, Sentra 0.3.0)
+
+`0.3.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y todos los
+cambios de 6E son aditivos: endpoints nuevos, campos opcionales nuevos en el heartbeat y en los
+resultados de jobs de sensor, valores nuevos en enumeraciones de respuesta.
+
+## Componentes
+
+| Componente | Versión 6E | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.3.0 | Sí | Migraciones 0039-0043 |
+| Frontend | 0.3.0 | Sí | Requiere servidor 0.3.0 para las vistas nuevas |
+| Agente | 0.5.0 | Sí | Actividad, árbol de procesos, forense, cliente del helper de aislamiento |
+| Helper de aislamiento | 0.5.0 (mismo paquete del agente) | Nuevo, opcional | Desactivado por defecto; Windows y Linux |
+| Sensor | 0.6.0 | Sí | Job `dhcp_leases` (capacidad `dhcp.leases.file`) |
+
+## Cruces
+
+| Cliente | Servidor 0.2.0 | Servidor 0.3.0 |
+| --- | --- | --- |
+| Agentes 0.1.x-0.4.0 | Compatibles | Compatibles sin cambios: sin actividad, sin forense, sin aislamiento (la UI lo explica) |
+| Agente 0.5.0 | Compatible: `/agents/activity` da 404 y el agente deja de enviar actividad; los campos nuevos del heartbeat se descartan solos | Completo |
+| Sensores 0.1.x-0.5.x | Compatibles | Compatibles; sin lecturas DHCP (`dhcp_sensor_unavailable`) |
+| Sensor 0.6.0 | Compatible (el servidor ignora `dhcp.leases.file`) | Completo |
+
+## Clientes de la API
+
+- Endpoints nuevos: `/topology/snapshots`, `/topology/diff`, `/topology/changes`,
+  `/topology/history/*`, `/dhcp/*`, `/assets/{id}/identity*`, `/assets/{id}/process-tree`,
+  `/assets/{id}/process-instances/{instance_id}`, `/assets/{id}/activity`,
+  `/assets/{id}/telemetry-status`, `/endpoint/metrics`, `/detection-exclusions`,
+  `/investigations/*`, `/assets/{id}/isolation*`, `/isolation/sessions`,
+  `POST /agents/activity`.
+- `ExecutionRequest` admite `investigation_id` (opcional).
+- Catálogo de Response: acciones `forensic_*`; `isolate_host` y `release_isolation` pasan de
+  `not_implemented` a disponibles, pero solo desde el flujo de aislamiento.
+- Enumeraciones ampliadas: fuente de nombre `dhcp_lease`; regla de alerta `isolation_state`;
+  reglas de detección `BEH-001`..`BEH-006`.
+- Permisos nuevos: `dhcp:manage`, `telemetry:read`, `forensics:read|acquire|download|manage`,
+  `containment:preview|isolate|release`.
+
+---
+
+## Histórico: Fase 6D (Sentra 0.2.0)
 
 `0.2.0` es la versión del software del servidor (backend). La API sigue siendo `/api/v1`: no hay
 `/api/v2` ni migración automática de contratos. Los cambios de 0.2.0 son aditivos (endpoints de

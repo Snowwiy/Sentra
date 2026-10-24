@@ -57,7 +57,11 @@ class JsonFormatter(logging.Formatter):
 
 
 def configure_logging(
-    state_dir: Path, level: str, log_dir: Path | None = None, console: bool = True
+    state_dir: Path,
+    level: str,
+    log_dir: Path | None = None,
+    console: bool = True,
+    file_name: str = "agent.log",
 ) -> Path:
     """Log to the console and to a size-capped local file.
 
@@ -67,7 +71,8 @@ def configure_logging(
     """
     log_dir = log_dir or state_dir / "logs"
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_file = log_dir / "agent.log"
+    # Fase 6E: el helper de aislamiento usa su propio fichero (isolation-helper.log).
+    log_file = log_dir / file_name
 
     formatter = JsonFormatter()
     file_handler = RotatingFileHandler(

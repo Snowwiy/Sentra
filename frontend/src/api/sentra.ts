@@ -1302,6 +1302,8 @@ export interface ExecutionInput {
   parameters?: Record<string, unknown>;
   incident_id?: string | null;
   detection_id?: string | null;
+  /** Fase 6E.6: la evidencia de una acción forense se guarda en esa investigación. */
+  investigation_id?: string | null;
   confirm?: boolean;
   reason?: string | null;
   /** Una por diálogo: repetir el envío devuelve la misma ejecución en vez de duplicarla. */

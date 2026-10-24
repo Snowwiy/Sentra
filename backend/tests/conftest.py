@@ -124,6 +124,29 @@ os.environ["VULN_BUILTIN_PRODUCT_MAP"] = "true"
 os.environ["TOPOLOGY_REBUILD_INTERVAL_MINUTES"] = "15"
 os.environ["TOPOLOGY_MAX_NODES"] = "1500"
 os.environ["TOPOLOGY_MAX_LINKS"] = "5000"
+# Fase 6E.1: historial de topología con sus valores por defecto, salvo el enfriamiento de la
+# reconstrucción manual, que los tests de 6D desactivan (reconstruyen varias veces seguidas);
+# los tests del enfriamiento construyen sus propios ajustes.
+os.environ["TOPOLOGY_LINK_REMOVAL_CONFIRMATIONS"] = "3"
+os.environ["TOPOLOGY_BUILD_RETENTION_DAYS"] = "30"
+os.environ["TOPOLOGY_SNAPSHOT_RETENTION_DAYS"] = "180"
+os.environ["NETWORK_CHANGE_RETENTION_DAYS"] = "365"
+os.environ["TOPOLOGY_ABSENT_LINK_RETENTION_DAYS"] = "90"
+os.environ["TOPOLOGY_MANUAL_REBUILD_COOLDOWN_SECONDS"] = "0"
+# Fase 6E.2: identidad y DHCP.
+os.environ["DHCP_IMPORT_MAX_KB"] = "2048"
+os.environ["DHCP_LEASE_RETENTION_DAYS"] = "90"
+os.environ["ASSET_IDENTITY_HISTORY_RETENTION_DAYS"] = "365"
+# Fase 6E.3/6E.4: telemetría avanzada de endpoint.
+os.environ["TELEMETRY_CMDLINE_POLICY"] = "redacted"
+os.environ["TELEMETRY_ACTIVITY_MAX_PER_MINUTE"] = "1000"
+os.environ["TELEMETRY_ACTIVITY_RETENTION_DAYS"] = "14"
+os.environ["PROCESS_INSTANCE_RETENTION_DAYS"] = "30"
+os.environ["FORENSICS_ARTIFACT_MAX_KB"] = "2048"
+os.environ["FORENSICS_PACKAGE_MAX_MB"] = "64"
+os.environ["ISOLATION_ENABLED"] = "false"
+os.environ["ISOLATION_MAX_MINUTES"] = "240"
+os.environ["ISOLATION_DEFAULT_MINUTES"] = "60"
 # test_viewer_cannot_mutate_anything recorre todas las rutas mutables con un mismo usuario y
 # desde 6B son más de 120 (el límite por defecto por minuto): sin esto respondería 429.
 os.environ["API_MUTATIONS_PER_USER_PER_MINUTE"] = "1000"
@@ -284,7 +307,11 @@ def client(engine: Engine) -> Iterator[TestClient]:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE topology_links, topology_builds, system_events, asset_inventories,"
+                "TRUNCATE evidence_packages, investigation_notes, forensic_artifacts,"
+                " investigations, detection_exclusions, endpoint_activity, process_instances,"
+                " asset_identity_history, dhcp_leases, dhcp_sources,"
+                " network_changes, topology_snapshots, topology_links, topology_builds,"
+                " system_events, asset_inventories,"
                 " alerts, telemetry_samples, assets,"
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"

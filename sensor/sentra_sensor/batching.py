@@ -41,7 +41,8 @@ class BatchBuilder:
         self._max_observations = max_observations
         self._max_bytes = max_bytes
         self._on_enqueue = on_enqueue
-        # Fase 6B: los jobs SNMP envían "records" en lugar de "observations".
+        # Fase 6B: los jobs SNMP envían "records" en lugar de "observations"; Fase 6E: los
+        # jobs dhcp_leases envían "leases" (nunca mezclados en el mismo lote).
         self._items_key = items_key
         self._current: list[dict[str, Any]] = []
         self._current_bytes = 0
@@ -104,6 +105,7 @@ def enqueue_complete(
     errors: list[str] | None = None,
     batches_sent: int = 0,
     snmp: dict[str, Any] | None = None,
+    dhcp: dict[str, Any] | None = None,
 ) -> int | None:
     # Límites del contrato: unprobed ≤ 4096 y errors ≤ 50 (cada error, corto).
     payload = {
@@ -118,4 +120,6 @@ def enqueue_complete(
     }
     if snmp is not None:
         payload["snmp"] = snmp
+    if dhcp is not None:
+        payload["dhcp"] = dhcp
     return spool.enqueue(job_id, KIND_COMPLETE, payload)

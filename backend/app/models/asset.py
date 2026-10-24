@@ -231,6 +231,14 @@ class Asset(Base):
     # 5D, que no recibe acciones de agente (la UI no muestra botones que no podría ejecutar).
     agent_capabilities: Mapped[list[str] | None] = mapped_column(JSONB)
     agent_capabilities_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 6E.3: estado de la telemetría avanzada del agente 0.5.0 (cola, descartes, estado
+    # de cada colector) y cuándo llegó. Null: agente que no envía actividad.
+    telemetry_status: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    telemetry_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 6E.7: estado del helper de aislamiento según el último heartbeat del agente 0.5.0
+    # ({"helper", "state", "session_id", "expires_at", "method", "verified", "error_code"}).
+    isolation_status: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    isolation_status_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Last status set by agent activity. Staleness (offline) is resolved at read time.
     status: Mapped[AssetStatus] = mapped_column(

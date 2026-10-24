@@ -1,6 +1,6 @@
 [project]
 name = "sentra-backend"
-version = "0.2.0"
+version = "0.3.0"
 description = "Sentra API: asset and security event monitoring platform"
 requires-python = ">=3.12"
 

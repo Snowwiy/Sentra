@@ -54,6 +54,8 @@ def test_heartbeat_payload_is_safe(config: LocalConfig, server: FakeServer) -> N
         "network.tcp",
         "network.icmp",
         "network.arp",
+        # Fase 6E: job dhcp_leases (solo ficheros declarados en el sensor.toml).
+        "dhcp.leases.file",
         # Fase 6B: solo si el extra snmp está instalado en esta máquina.
         *snmp.capabilities(),
     ]

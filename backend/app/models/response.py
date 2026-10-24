@@ -71,6 +71,12 @@ class ResponseExecution(Base):
             "incident_id",
             postgresql_where=text("incident_id IS NOT NULL"),
         ),
+        # Fase 6E.6: recogidas forenses de una investigación.
+        Index(
+            "ix_response_executions_investigation",
+            "investigation_id",
+            postgresql_where=text("investigation_id IS NOT NULL"),
+        ),
         Index(
             "ix_response_executions_actor",
             "actor_user_id",
@@ -130,6 +136,10 @@ class ResponseExecution(Base):
     asset_id: Mapped[int | None] = mapped_column(ForeignKey("assets.id", ondelete="SET NULL"))
     # Incidente objetivo o de contexto (ejecución lanzada desde un caso): trazabilidad.
     incident_id: Mapped[int | None] = mapped_column(ForeignKey("incidents.id", ondelete="SET NULL"))
+    # Fase 6E.6: investigación forense a la que pertenece la recogida (acciones forensic_*).
+    investigation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("investigations.id", ondelete="SET NULL")
+    )
     # Detección de contexto (botón Investigar). Solo el id público: es una referencia.
     detection_public_id: Mapped[uuid.UUID | None] = mapped_column(Uuid)
     # Agente al que va dirigido el comando (el actual del activo al crear la ejecución).

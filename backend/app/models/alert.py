@@ -61,6 +61,9 @@ class AlertRule(enum.StrEnum):
     # alta confirmada con el servicio expuesto, o una resuelta que reaparece). Una alerta
     # activa por activo que acumula ocurrencias; los findings potenciales nunca alertan.
     VULNERABILITY = "vulnerability"
+    # Fase 6E.7: el estado de aislamiento que informa el equipo no coincide con la sesión del
+    # servidor (aislado sin sesión, sesión aislada sin reglas, liberación no confirmada...).
+    ISOLATION_STATE = "isolation_state"
 
 
 class AlertSeverity(enum.StrEnum):

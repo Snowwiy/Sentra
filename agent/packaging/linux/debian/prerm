@@ -1,6 +1,13 @@
 #!/bin/sh
 set -e
 if [ "$1" = "remove" ] && [ -d /run/systemd/system ]; then
+  # Fase 6E.7: si el helper de aislamiento opcional se habilitó, retira sus reglas antes de
+  # pararlo; nunca queda un equipo aislado sin nadie que lo revierta.
+  if systemctl is-enabled --quiet sentra-isolation 2>/dev/null \
+     || systemctl is-active --quiet sentra-isolation 2>/dev/null; then
+    /opt/sentra-agent/bin/sentra-agent isolation-helper revert >/dev/null 2>&1 || true
+    systemctl disable --now sentra-isolation >/dev/null 2>&1 || true
+  fi
   systemctl disable --now sentra-agent >/dev/null 2>&1 || true
 fi
 exit 0

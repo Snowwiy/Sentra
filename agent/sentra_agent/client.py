@@ -1,5 +1,6 @@
 """Minimal JSON client for the Sentra API using only the standard library."""
 
+import gzip
 import json
 import os
 import ssl
@@ -19,6 +20,9 @@ from sentra_agent import __version__
 _RETRYABLE_4XX = {408, 409, 425, 429}
 # Upper bound for Retry-After so a misbehaving proxy cannot park the agent for days.
 _MAX_RETRY_AFTER = 3600.0
+# Fase 6E: los lotes de actividad se comprimen a partir de este tamaño. Por debajo, gzip
+# apenas ahorra y cuesta CPU en el equipo.
+GZIP_THRESHOLD = 8 * 1024
 
 
 class TransportError(Exception):
@@ -66,7 +70,11 @@ class SentraClient:
         self._tls = tls_context()
 
     def _post(
-        self, path: str, payload: dict[str, Any], extra_headers: dict[str, str] | None = None
+        self,
+        path: str,
+        payload: dict[str, Any],
+        extra_headers: dict[str, str] | None = None,
+        compress_over: int | None = None,
     ) -> dict[str, Any]:
         headers = {
             "Content-Type": "application/json",
@@ -74,9 +82,14 @@ class SentraClient:
             "User-Agent": f"sentra-agent/{__version__}",
         }
         headers.update(extra_headers or {})
+        data = json.dumps(payload).encode()
+        if compress_over is not None and len(data) > compress_over:
+            # mtime=0: el mismo lote produce los mismos bytes (reintentos reproducibles).
+            data = gzip.compress(data, compresslevel=6, mtime=0)
+            headers["Content-Encoding"] = "gzip"
         request = urllib.request.Request(  # noqa: S310  (scheme validated in AgentConfig)
             self._base + path,
-            data=json.dumps(payload).encode(),
+            data=data,
             headers=headers,
             method="POST",
         )
@@ -117,12 +130,25 @@ class SentraClient:
         return self._post("/agents/register", {"agent_id": str(agent_id), **host}, headers)
 
     def heartbeat(
-        self, agent_id: UUID, token: str, host: dict[str, Any] | None = None
+        self,
+        agent_id: UUID,
+        token: str,
+        host: dict[str, Any] | None = None,
+        extra: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         body: dict[str, Any] = {"agent_id": str(agent_id)}
         if host is not None:
             body["host"] = host
+        # Fase 6E: campos opcionales `telemetry` e `isolation`. Un servidor anterior los
+        # rechaza como desconocidos y el runner los quita (mecanismo _unknown_fields).
+        for key, value in (extra or {}).items():
+            if value is not None:
+                body[key] = value
         return self._post("/agents/heartbeat", body, _bearer(token))
+
+    def send_activity(self, token: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Fase 6E: lote de actividad del endpoint (gzip si pasa de GZIP_THRESHOLD)."""
+        return self._post("/agents/activity", body, _bearer(token), compress_over=GZIP_THRESHOLD)
 
     def send_inventory(
         self, agent_id: UUID, token: str, snapshot: dict[str, Any]

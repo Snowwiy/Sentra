@@ -4,9 +4,11 @@ El sensor está dentro de una red ajena y ejecuta lo que le pide un servidor rem
 servidor (o alguien con acceso a él) pudiera mandar cualquier cosa, el sensor sería una
 puerta de entrada al site. Por eso:
 
-* Solo existen `discovery_basic`, (Fase 6A) `discovery_advanced` y (Fase 6B) `snmp_inventory`
-  de solo lectura. No hay tipos genéricos, ni comandos, ni scripts, ni binarios enviados por
-  el servidor, ni OIDs: un job SNMP solo nombra módulos del catálogo del propio sensor.
+* Solo existen `discovery_basic`, (Fase 6A) `discovery_advanced`, (Fase 6B) `snmp_inventory`
+  de solo lectura y (Fase 6E) `dhcp_leases`, que solo nombra una fuente DHCP local declarada
+  en el sensor.toml del host: el servidor nunca envía rutas. No hay tipos genéricos, ni
+  comandos, ni scripts, ni binarios enviados por el servidor, ni OIDs: un job SNMP solo
+  nombra módulos del catálogo del propio sensor.
 * El esquema es exacto: claves desconocidas = rechazo (un campo nuevo no se ignora en
   silencio, porque podría cambiar el significado del job).
 * El target se vuelve a comprobar contra las redes permitidas que mandó el servidor
@@ -24,9 +26,17 @@ from sentra_sensor.protocol import IPNetwork, ServerConfig
 JOB_TYPE_DISCOVERY_BASIC = "discovery_basic"
 JOB_TYPE_DISCOVERY_ADVANCED = "discovery_advanced"
 JOB_TYPE_SNMP_INVENTORY = "snmp_inventory"
+JOB_TYPE_DHCP_LEASES = "dhcp_leases"
 KNOWN_JOB_TYPES = frozenset(
-    {JOB_TYPE_DISCOVERY_BASIC, JOB_TYPE_DISCOVERY_ADVANCED, JOB_TYPE_SNMP_INVENTORY}
+    {
+        JOB_TYPE_DISCOVERY_BASIC,
+        JOB_TYPE_DISCOVERY_ADVANCED,
+        JOB_TYPE_SNMP_INVENTORY,
+        JOB_TYPE_DHCP_LEASES,
+    }
 )
+DHCP_PARAMETER_KEYS = frozenset({"source_name"})
+DHCP_SOURCE_NAME_MAX = 64
 SNMP_SCHEMA_VERSION = 1
 # Fase 6C.3: "wlan" al final (los módulos se consultan en este orden).
 SNMP_MODULES = ("system", "entity", "interfaces", "lldp", "cdp", "bridge", "vlan", "wlan")
@@ -176,6 +186,13 @@ class SnmpParameters:
 
 
 @dataclass(frozen=True)
+class DhcpParameters:
+    """dhcp_leases: solo el nombre de una fuente local; la ruta y el formato son del host."""
+
+    source_name: str
+
+
+@dataclass(frozen=True)
 class DiscoveryJob:
     job_id: str
     site_id: str
@@ -186,7 +203,7 @@ class DiscoveryJob:
     expires_at: datetime
     lease_expires_at: datetime | None
     idempotency_key: str
-    parameters: DiscoveryParameters | SnmpParameters
+    parameters: DiscoveryParameters | SnmpParameters | DhcpParameters
 
 
 def host_count(network: IPNetwork) -> int:
@@ -310,8 +327,10 @@ def _validate(
         raise JobRejectedError("invalid_schema", "idempotency_key invalid")
     params = raw["parameters"]
     job_type = str(raw["job_type"])
-    parameters: DiscoveryParameters | SnmpParameters
-    if job_type == JOB_TYPE_SNMP_INVENTORY:
+    parameters: DiscoveryParameters | SnmpParameters | DhcpParameters
+    if job_type == JOB_TYPE_DHCP_LEASES:
+        parameters = _dhcp(params)
+    elif job_type == JOB_TYPE_SNMP_INVENTORY:
         parameters = _snmp(params, config)
     elif job_type == JOB_TYPE_DISCOVERY_ADVANCED:
         parameters = _advanced(params, config)
@@ -451,6 +470,21 @@ def _basic(params: object, config: ServerConfig) -> DiscoveryParameters:
     if not (parameters.ports or parameters.icmp or parameters.arp):
         raise JobRejectedError("invalid_schema", "job has no probe method")
     return parameters
+
+
+def _dhcp(params: object) -> DhcpParameters:
+    """dhcp_leases: esquema exacto `{"source_name": str <= 64}`.
+
+    Que el nombre exista en la configuración local se comprueba al ejecutar (tras el start),
+    para que el servidor reciba el código del contrato `dhcp_source_unknown` en el resumen
+    `dhcp` y pueda marcar la fuente como mal configurada en ese sensor.
+    """
+    if not isinstance(params, dict) or set(params) != DHCP_PARAMETER_KEYS:
+        raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
+    name = params["source_name"]
+    if not isinstance(name, str) or not 1 <= len(name) <= DHCP_SOURCE_NAME_MAX:
+        raise JobRejectedError("invalid_schema", "source_name must be a string of 1-64 chars")
+    return DhcpParameters(source_name=name)
 
 
 def _snmp(params: object, config: ServerConfig) -> SnmpParameters:

@@ -117,6 +117,7 @@ from app.schemas.site import (
     SensorJobRead,
     SensorJobStart,
     SensorJobStarted,
+    SensorLeaseIn,
     SensorList,
     SensorPollRequest,
     SensorPollResponse,
@@ -128,6 +129,7 @@ from app.schemas.site import (
     SensorSummary,
 )
 from app.sensors.catalog import (
+    DHCP_LEASES,
     DISCOVERY_ADVANCED,
     DISCOVERY_BASIC,
     JOB_TYPES,
@@ -188,6 +190,14 @@ def _inside_site(network: IPNetwork, allowed: Sequence[str]) -> bool:
         if network.version == candidate.version and network.subnet_of(candidate):  # type: ignore[arg-type]
             return True
     return False
+
+
+def _job_authorized(job: SensorJob, allowed: Sequence[str]) -> bool:
+    """El job sigue autorizado en el site. Un dhcp_leases no tiene red objetivo (lee un
+    fichero local del sensor, no sondea): basta con que el site esté activo."""
+    if job.job_type == DHCP_LEASES:
+        return True
+    return _inside_site(_target_network(job), allowed)
 
 
 def inside_site_networks(address: str, allowed: Sequence[str]) -> bool:
@@ -1204,7 +1214,7 @@ class SensorProtocol:
                     # Se queda en cola (caducará si el sensor no la adquiere): no se entrega
                     # trabajo a quien no declara poder hacerlo.
                     continue
-                if not _inside_site(_target_network(job), config.allowed_networks):
+                if not _job_authorized(job, config.allowed_networks):
                     # La red se deshabilitó o quitó después de crear el job.
                     self._fail(job, "network_not_authorized", now)
                     continue
@@ -1290,7 +1300,7 @@ class SensorProtocol:
         if job.lease_expires_at is None or job.lease_expires_at <= now:
             raise SiteConflictError("sensor_job_expired", "The lease expired before the start")
         allowed = enabled_networks(session, sensor.site_id)
-        if self._site(sensor).status != "active" or not _inside_site(_target_network(job), allowed):
+        if self._site(sensor).status != "active" or not _job_authorized(job, allowed):
             self._fail(job, "network_not_authorized", now)
             session.commit()
             raise SiteConflictError("sensor_job_finished", "Sensor job is no longer authorized")
@@ -1349,13 +1359,23 @@ class SensorProtocol:
         now = datetime.now(UTC)
         job = self._job(sensor, public_id)
         snmp = job.job_type == SNMP_JOB_TYPE
+        dhcp = job.job_type == DHCP_LEASES
         # Cada tipo de job entrega su lista y solo esa: unos registros SNMP colados en un
         # discovery (o al revés) indican un sensor defectuoso o manipulado.
-        if (snmp and body.observations) or (not snmp and body.records):
+        if (
+            (body.observations and (snmp or dhcp))
+            or (body.records and not snmp)
+            or (body.leases and not dhcp)
+        ):
             raise SiteValidationError(
                 "sensor_batch_invalid", "This job type does not accept that kind of result"
             )
-        digest = _records_sha256(body.records) if snmp else _payload_sha256(body.observations)
+        if snmp:
+            digest = _records_sha256(body.records)
+        elif dhcp:
+            digest = _leases_sha256(body.leases)
+        else:
+            digest = _payload_sha256(body.observations)
         existing = session.scalar(
             select(SensorJobBatch).where(
                 SensorJobBatch.job_id == job.id, SensorJobBatch.batch_id == body.batch_id
@@ -1378,6 +1398,8 @@ class SensorProtocol:
         self._check_open(job, body.attempt, ("running",))
         if snmp:
             return self._snmp_results(sensor, job, body, digest, now)
+        if dhcp:
+            return self._dhcp_results(sensor, job, body, digest, now)
         if len(body.observations) > settings.sensor_max_observations_per_batch:
             raise SiteValidationError(
                 "sensor_batch_too_large",
@@ -1530,6 +1552,52 @@ class SensorProtocol:
             cancel_requested=job.cancel_requested_at is not None,
         )
 
+    def _dhcp_results(
+        self,
+        sensor: Sensor,
+        job: SensorJob,
+        body: SensorResultsRequest,
+        digest: str,
+        now: datetime,
+    ) -> SensorResultsResponse:
+        """Lote de un job dhcp_leases: se aplica al llegar (los leases se guardan por
+        (fuente, IP, MAC) y son idempotentes; no hay conclusión negativa que esperar)."""
+        from app.dhcp.service import apply_sensor_batch
+
+        session = self._session
+        settings = self._settings
+        if len(body.leases) > settings.sensor_max_observations_per_batch:
+            raise SiteValidationError(
+                "sensor_batch_too_large",
+                f"At most {settings.sensor_max_observations_per_batch} leases per batch",
+            )
+        if job.batches_received >= settings.sensor_max_batches_per_job:
+            raise SiteConflictError("sensor_batch_limit", "Too many batches for this job")
+        accepted = apply_sensor_batch(session, job, body.leases, now)
+        session.add(
+            SensorJobBatch(
+                job_id=job.id,
+                batch_id=body.batch_id,
+                payload_sha256=digest,
+                observation_count=len(body.leases),
+                attempt=body.attempt,
+                received_at=now,
+            )
+        )
+        session.flush()
+        job.batches_received += 1
+        job.observations_received += len(body.leases)
+        sensor.last_seen_at = now
+        session.commit()
+        return SensorResultsResponse(
+            job_id=job.public_id,
+            batch_id=body.batch_id,
+            accepted=accepted,
+            duplicate=False,
+            observations_total=job.observations_received,
+            cancel_requested=job.cancel_requested_at is not None,
+        )
+
     def complete(
         self,
         sensor: Sensor,
@@ -1573,6 +1641,8 @@ class SensorProtocol:
         hosts_alive = hosts_new = open_ports = 0
         if job.job_type == SNMP_JOB_TYPE:
             self._complete_snmp(job, body, missing, now)
+        elif job.job_type == DHCP_LEASES:
+            self._complete_dhcp(job, body, missing, now)
         elif body.outcome == "failed":
             job.status = "failed"
             job.error_code = "sensor_failed"
@@ -1598,7 +1668,7 @@ class SensorProtocol:
             job.status = "cancelled" if body.outcome == "cancelled" else "succeeded"
         job.finished_at = now
         job.lease_expires_at = None
-        if job.job_type == SNMP_JOB_TYPE:
+        if job.job_type in (SNMP_JOB_TYPE, DHCP_LEASES):
             session.commit()
             return SensorJobCompleted(
                 job_id=job.public_id,
@@ -1661,6 +1731,27 @@ class SensorProtocol:
             "poll_status": poll.status if poll is not None else None,
             "records": job.observations_received,
             "error_code": body.snmp.error_code if body.snmp is not None else None,
+        }
+
+    def _complete_dhcp(
+        self, job: SensorJob, body: SensorJobComplete, missing: int, now: datetime
+    ) -> None:
+        """Cierre de un job dhcp_leases: estado de la fuente y resumen del job."""
+        from app.dhcp.service import complete_sensor_job
+
+        complete_sensor_job(self._session, job, body.outcome, body.dhcp, body.errors, missing, now)
+        error_code = body.dhcp.error_code if body.dhcp is not None else None
+        if body.outcome == "failed":
+            job.status = "failed"
+            job.error_code = error_code or "sensor_failed"
+            job.error_message = (body.errors[0] if body.errors else job.error_code)[:300]
+        else:
+            job.status = "cancelled" if body.outcome == "cancelled" else "succeeded"
+        job.result_summary = {
+            "attempt": body.attempt,
+            "outcome": body.outcome,
+            "leases": job.observations_received,
+            "error_code": error_code,
         }
 
     def _apply(
@@ -1749,6 +1840,13 @@ class SensorProtocol:
 def _records_sha256(records: Sequence[SnmpRecord]) -> str:
     """Huella canónica de un lote SNMP (sin campos nulos, claves ordenadas)."""
     data = [record.model_dump(mode="json", exclude_none=True) for record in records]
+    raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _leases_sha256(leases: Sequence[SensorLeaseIn]) -> str:
+    """Huella canónica de un lote de leases DHCP (sin campos nulos, claves ordenadas)."""
+    data = [lease.model_dump(mode="json", exclude_none=True) for lease in leases]
     raw = json.dumps(data, sort_keys=True, separators=(",", ":")).encode()
     return hashlib.sha256(raw).hexdigest()
 

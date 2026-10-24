@@ -43,7 +43,12 @@ def db(engine: Engine, client: TestClient) -> Iterator[Session]:
     # Las reconstrucciones referencian sites (RESTRICT): se vacían antes de que la limpieza
     # general de conftest borre los sites creados por la prueba.
     with engine.begin() as connection:
-        connection.execute(text("TRUNCATE topology_links, topology_builds RESTART IDENTITY"))
+        connection.execute(
+            text(
+                "TRUNCATE network_changes, topology_snapshots, topology_links, topology_builds"
+                " RESTART IDENTITY"
+            )
+        )
 
 
 def _ok(response: Any, status: int = 200) -> Any:
@@ -885,7 +890,17 @@ def test_openapi_documents_the_topology_api(client: TestClient) -> None:
             "503",
         },
         ("get", "/api/v1/topology/nodes/{node_id}"): {"200", "401", "403", "404", "422", "503"},
-        ("post", "/api/v1/topology/rebuild"): {"200", "401", "403", "404", "409", "422", "503"},
+        # Fase 6E.1: 429 topology_rebuild_cooldown.
+        ("post", "/api/v1/topology/rebuild"): {
+            "200",
+            "401",
+            "403",
+            "404",
+            "409",
+            "422",
+            "429",
+            "503",
+        },
         ("get", "/api/v1/topology/status"): {"200", "401", "403", "404", "422", "503"},
     }
     for (method, path), statuses in expected.items():

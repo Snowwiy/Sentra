@@ -14,6 +14,7 @@ from typing import Any, Protocol
 from uuid import UUID, uuid4
 
 from sentra_agent import wifi
+from sentra_agent.activity import read_boot_id
 from sentra_agent.buffer import BUFFER_FILE, SampleBuffer
 from sentra_agent.client import ApiError, SentraClient, TransportError
 from sentra_agent.collectors import HostInfo, collect_host_info, collect_metrics
@@ -23,20 +24,26 @@ from sentra_agent.commands import (
     COLLECT_INVENTORY,
     COLLECT_PROCESSES,
     COLLECT_TELEMETRY,
+    ISOLATE_HOST,
+    RELEASE_ISOLATION,
     CommandMemory,
     CommandRejectedError,
+    ParsedCommand,
     capabilities,
-    parse_command,
+    parse_command_full,
     result_body,
 )
 from sentra_agent.config import AgentConfig
 from sentra_agent.credentials import resolve_store
 from sentra_agent.events import EventCollector
+from sentra_agent.forensics import FORENSIC_TYPES, ForensicCollector, PathRejectedError
 from sentra_agent.identity import Identity, IdentityStore
 from sentra_agent.inventory import collect_inventory
+from sentra_agent.isolation.client import IsolationClient
 from sentra_agent.linux_events import COVERAGE_REFRESH_SECONDS
 from sentra_agent.logs import register_secret
 from sentra_agent.processes import ProcessSampler
+from sentra_agent.telemetry import TelemetryService
 
 logger = logging.getLogger("sentra_agent")
 
@@ -54,6 +61,10 @@ AGENT_REVOKED_CODE = "agent_revoked"
 # Máximo de eventos por petición que acepta el servidor (EventBatch).
 EVENTS_PER_REQUEST = 500
 ASSET_ARCHIVED_CODE = "asset_archived"
+# Fase 6E: lotes de POST /agents/activity (máximo del contrato) y cuántos por ciclo, para que
+# vaciar una cola larga tras un corte no retrase el heartbeat del ciclo siguiente.
+ACTIVITY_MAX_BATCH = 1000
+ACTIVITY_BATCHES_PER_CYCLE = 5
 
 
 class EventSource(Protocol):
@@ -87,6 +98,16 @@ def default_wireless(config: AgentConfig) -> Callable[[bool], dict[str, Any] | N
         config.wireless_interval_seconds, collect=lambda: wifi.collect_wireless()
     )
     return lambda force: collector.snapshot(force=force)
+
+
+def default_telemetry(config: AgentConfig) -> TelemetryService | None:
+    """Telemetría avanzada según la configuración (Fase 6E); desactivada = None.
+
+    Función de módulo para que los tests puedan sustituirla sin leer los procesos reales.
+    """
+    if not config.telemetry.enabled:
+        return None
+    return TelemetryService(config.telemetry, config.state_dir)
 
 
 class EnrollmentKeyMissingError(Exception):
@@ -130,6 +151,9 @@ class Agent:
         stop_event: threading.Event | None = None,
         processes: Callable[[], dict[str, Any]] | None = None,
         wireless: Callable[[bool], dict[str, Any] | None] | None = None,
+        telemetry: TelemetryService | None = None,
+        forensics: ForensicCollector | None = None,
+        isolation: IsolationClient | None = None,
     ) -> None:
         self.config = config
         self.client = client
@@ -177,6 +201,21 @@ class Agent:
         self._commands_supported = True
         self._commands = CommandMemory()
         self._started_at = time.monotonic()
+        # Fase 6E: telemetría avanzada (cola persistente propia), forense y aislamiento.
+        self.telemetry: TelemetryService | None = telemetry or default_telemetry(config)
+        boot_id = self.telemetry.boot_id if self.telemetry is not None else read_boot_id()
+        self.forensics = forensics or ForensicCollector(
+            boot_id,
+            cmdline_policy=config.telemetry.cmdline,
+            allowed_roots=config.forensics.allowed_roots,
+            max_artifact_kb=config.forensics.max_artifact_kb,
+            hash_max_mb=config.forensics.hash_max_mb,
+            extra_denied=(str(config.state_dir),),
+        )
+        self.isolation = isolation or IsolationClient(config.isolation)
+        # False tras un 404 de /agents/activity (servidor anterior a 6E): hasta reiniciar.
+        self._activity_supported = True
+        self._activity_batch = ACTIVITY_MAX_BATCH
 
     def run(self, once: bool = False) -> None:
         logger.info(
@@ -184,6 +223,12 @@ class Agent:
             extra={"agent_id": str(self.identity.agent_id), "api_url": self.config.api_url},
         )
         failures = 0
+        if self.telemetry is not None:
+            if once:
+                # Una sola pasada síncrona: --once también informa actividad.
+                self.telemetry.tick()
+            else:
+                self.telemetry.start(self.stop_event)
         while not self.stop_event.is_set():
             delay: float = self.config.interval_seconds
             try:
@@ -247,6 +292,8 @@ class Agent:
                     raise
             finally:
                 self.buffer.persist()
+                if self.telemetry is not None:
+                    self.telemetry.queue.persist()
             if once:
                 return
             self.stop_event.wait(delay)
@@ -266,6 +313,7 @@ class Agent:
         self._authenticated(self._maybe_send_inventory)
         self._authenticated(self._maybe_send_processes)
         self._authenticated(self._maybe_send_events)
+        self._authenticated(self._maybe_send_activity)
         # Fase 5D: al final, para que un comando lento nunca retrase heartbeat ni telemetría.
         self._authenticated(self._run_commands)
 
@@ -505,10 +553,21 @@ class Agent:
     def _heartbeat(self, token: str) -> None:
         # Host info rides along on every heartbeat so IP/OS/agent version changes reach the
         # server without a separate inventory call.
+        # Fase 6E: `telemetry` e `isolation` opcionales; un servidor anterior los rechaza como
+        # desconocidos y _send_adapting los quita para el resto de la ejecución.
+        payload: dict[str, Any] = {"host": self._host_payload()}
+        if self.telemetry is not None:
+            payload["telemetry"] = self.telemetry.heartbeat()
+        payload["isolation"] = self.isolation.status()
         response = self._send_adapting(
             "heartbeat",
-            lambda body: self.client.heartbeat(self.identity.agent_id, token, body["host"]),
-            {"host": self._host_payload()},
+            lambda body: self.client.heartbeat(
+                self.identity.agent_id,
+                token,
+                body["host"],
+                {key: body.get(key) for key in ("telemetry", "isolation")},
+            ),
+            payload,
         )
         self._remember_asset(response["asset_id"])
         # Fase 5D: un servidor anterior no lo envía (0). Solo se acepta un entero.
@@ -523,8 +582,71 @@ class Agent:
             payload["installation_method"] = self.config.installation_method
         # Fase 5D: tipos de comando que sabe ejecutar. Un servidor anterior lo rechaza como
         # campo desconocido y _send_adapting lo quita para el resto de la ejecución.
-        payload["capabilities"] = capabilities()
+        payload["capabilities"] = self._capabilities()
         return payload
+
+    def _capabilities(self) -> list[str]:
+        """Capacidades según lo que funciona AHORA (colectores activos, helper sano)."""
+        telemetry = self.telemetry is not None and self._activity_supported
+        flags = self.telemetry.capability_flags() if self.telemetry is not None else {}
+        return capabilities(
+            telemetry_activity=telemetry,
+            process_tree=flags.get("process_tree", False),
+            process_network=flags.get("process_network", False),
+            sysmon=flags.get("sysmon", False),
+            isolation=self.isolation.ready(),
+        )
+
+    # --- Fase 6E: actividad del endpoint ----------------------------------------------------
+
+    def _maybe_send_activity(self, token: str) -> None:
+        """Vacía la cola de actividad en lotes de hasta 1000 (gzip si el cuerpo es grande).
+
+        Un 404 significa servidor anterior a 6E: se deja de enviar (y de recolectar) hasta el
+        próximo arranque, sin afectar al resto. Un error de transporte deja la cola intacta y
+        el ciclo aplica el backoff de siempre.
+        """
+        telemetry = self.telemetry
+        if telemetry is None or not self._activity_supported:
+            return
+        queue = telemetry.queue
+        for _ in range(ACTIVITY_BATCHES_PER_CYCLE):
+            batch = queue.peek(self._activity_batch)
+            if not batch:
+                break
+            body = {
+                "agent_id": str(self.identity.agent_id),
+                "batch_id": str(uuid4()),
+                "boot_id": telemetry.boot_id,
+                "events": batch,
+                "stats": telemetry.stats(),
+            }
+            try:
+                response = self._send_adapting(
+                    "activity", lambda payload: self.client.send_activity(token, payload), body
+                )
+            except ApiError as exc:
+                if exc.status == HTTP_NOT_FOUND:
+                    logger.info("server does not accept endpoint activity; disabled for this run")
+                    self._activity_supported = False
+                    telemetry.paused = True
+                    return
+                if exc.status == HTTP_PAYLOAD_TOO_LARGE and self._activity_batch > 1:
+                    # Lote demasiado grande para este servidor: se parte a la mitad.
+                    self._activity_batch = max(1, self._activity_batch // 2)
+                    continue
+                if exc.status not in PERMANENT_REJECTIONS:
+                    raise
+                # Un lote que el servidor nunca aceptará no bloquea a los siguientes.
+                logger.warning("activity batch rejected", extra={"status": exc.status})
+                queue.ack(len(batch))
+                continue
+            rejected = response.get("rejected")
+            if isinstance(rejected, list) and rejected:
+                logger.warning("activity events rejected", extra={"count": len(rejected)})
+            queue.ack(len(batch))
+            queue.reset_dropped_since_last()
+        queue.persist()
 
     def _flush_buffer(self, token: str) -> None:
         while self.buffer:
@@ -645,14 +767,27 @@ class Agent:
 
     def _execute_command(self, raw: dict[str, Any], token: str) -> dict[str, Any]:
         try:
-            _, kind = parse_command(raw)
+            parsed = parse_command_full(
+                raw,
+                self.config.forensics.allowed_roots,
+                extra_denied=(str(self.config.state_dir),),
+            )
         except CommandRejectedError as exc:
             # Nunca se ejecuta nada fuera de la allowlist: se informa y ya.
             logger.warning("rejected response command", extra={"reason": exc.code})
             return result_body("rejected", "Command rejected by the agent", error_code=exc.code)
+        kind = parsed.kind
         logger.info("running response command", extra={"command": kind})
+        if kind in (ISOLATE_HOST, RELEASE_ISOLATION):
+            return self._command_isolation(parsed)
         try:
-            summary, data = self._handlers()[kind](token)
+            if kind in FORENSIC_TYPES:
+                summary, data = self.forensics.collect(kind, parsed.params)
+            else:
+                summary, data = self._handlers()[kind](token)
+        except PathRejectedError as exc:
+            # La ruta escapaba de las raíces por un enlace: se comprobó antes de leer nada.
+            return result_body("rejected", "Command rejected by the agent", error_code=exc.code)
         except TransportError:
             # Sin red: el servidor lo reentregará (o caducará); no se inventa un resultado.
             raise
@@ -709,6 +844,14 @@ class Agent:
         keys = ("cpu_percent", "ram_percent", "disk_percent", "uptime_seconds")
         return "Telemetry sample sent", {key: sample.get(key) for key in keys}
 
+    def _command_isolation(self, parsed: ParsedCommand) -> dict[str, Any]:
+        """Fase 6E.7: pasa la petición al helper local y espera su resultado (acotado)."""
+        action = "isolate" if parsed.kind == ISOLATE_HOST else "release"
+        status, summary, data, code = self.isolation.request(
+            action, parsed.params["session_id"], parsed.params.get("expires_at")
+        )
+        return result_body(status, summary, data, error_code=code)
+
     def _command_diagnostics(self, token: str) -> tuple[str, dict[str, Any]]:
         # Solo estado operativo: nunca tokens, claves, rutas de credenciales ni la config
         # completa (que puede llevar la clave de enrollment legacy).
@@ -740,7 +883,11 @@ class Agent:
                 for endpoint, paths in self._unsupported.items()
                 if paths
             },
-            "capabilities": capabilities(),
+            "capabilities": self._capabilities(),
+            # Fase 6E: estado de los colectores, coste medido del tracker y del helper.
+            "telemetry": self.telemetry.diagnostics() if self.telemetry is not None else None,
+            "activity_supported_by_server": self._activity_supported,
+            "isolation": self.isolation.status(),
         }
 
     def _send_result(self, token: str, request_id: UUID, body: dict[str, Any]) -> None:

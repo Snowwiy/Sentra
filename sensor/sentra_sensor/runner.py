@@ -25,7 +25,9 @@ from sentra_sensor.batching import BatchBuilder, enqueue_complete
 from sentra_sensor.client import ApiError, SensorClient, Transport, TransportError
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.credentials import CredentialError, CredentialStore, SensorIdentity
+from sentra_sensor.dhcp import MAX_LEASES_PER_BATCH, DhcpCollector, DhcpReport
 from sentra_sensor.jobs import (
+    DhcpParameters,
     DiscoveryJob,
     DiscoveryParameters,
     JobRejectedError,
@@ -126,10 +128,10 @@ def parse_credentials(raw: object, params: SnmpParameters) -> SnmpCredentials | 
 @dataclass
 class ActiveJob:
     job: DiscoveryJob
-    scanner: Scanner | SnmpCollector
+    scanner: Scanner | SnmpCollector | DhcpCollector
     builder: BatchBuilder
     thread: threading.Thread | None = None
-    report: ScanReport | SnmpReport | None = None
+    report: ScanReport | SnmpReport | DhcpReport | None = None
     crash: str | None = None
     done: threading.Event = field(default_factory=threading.Event)
 
@@ -605,7 +607,54 @@ class SensorRunner:
                 register_secret(secret)
             self._launch_snmp(job, job.parameters, credentials, config)
             return
+        if isinstance(job.parameters, DhcpParameters):
+            self._launch_dhcp(job, job.parameters, config)
+            return
         self._launch(job, config)
+
+    def _launch_dhcp(self, job: DiscoveryJob, params: DhcpParameters, config: ServerConfig) -> None:
+        # Lotes de como mucho 5000 leases (contrato) y nunca más de lo que el servidor admite
+        # por lote; el BatchBuilder además parte por bytes (max_batch_bytes).
+        builder = BatchBuilder(
+            self.spool,
+            job.job_id,
+            job.attempt,
+            min(MAX_LEASES_PER_BATCH, config.max_observations_per_batch),
+            config.max_batch_bytes,
+            on_enqueue=self.wake,
+            items_key="leases",
+        )
+
+        def emit(leases: list[dict[str, Any]]) -> None:
+            builder.add(leases)
+            builder.flush()
+
+        collector = DhcpCollector(params.source_name, self.config, emit, clock=self._clock)
+        active = ActiveJob(job=job, scanner=collector, builder=builder)
+        self.active = active
+        source = self.config.dhcp_source(params.source_name)
+        # Ni la ruta ni el contenido van al log: solo el nombre (si existe) y el formato.
+        logger.info(
+            "job started",
+            extra={
+                "job_id": job.job_id,
+                "job_type": job.job_type,
+                "dhcp_source": source.name if source else None,
+                "dhcp_format": source.format if source else None,
+            },
+        )
+
+        def body() -> None:
+            try:
+                active.report = collector.run()
+            except Exception as exc:
+                logger.exception("dhcp lease import crashed", extra={"job_id": job.job_id})
+                active.crash = f"dhcp error: {type(exc).__name__}"
+            finally:
+                active.done.set()
+                self.wake()
+
+        self._start_body(active, body)
 
     def _launch_snmp(
         self,
@@ -753,6 +802,48 @@ class SensorRunner:
             self.state.last_successful_job_at = utc_iso(self._clock())
             self._persist_state()
 
+    def _reap_dhcp(self, active: ActiveJob, report: DhcpReport | None) -> None:
+        errors = list(active.builder.errors)
+        if report is None:
+            outcome = "failed"
+            errors.insert(0, active.crash or "dhcp error")
+            source = self.config.dhcp_source(getattr(active.job.parameters, "source_name", ""))
+            summary: dict[str, Any] = {
+                "format": source.format if source else None,
+                "lines": 0,
+                "parsed": 0,
+                "skipped": 0,
+                "truncated": False,
+                "file_mtime": None,
+                "error_code": None,
+            }
+        else:
+            outcome = report.outcome
+            errors = report.errors + errors
+            summary = report.summary
+        enqueue_complete(
+            self.spool,
+            active.job.job_id,
+            active.job.attempt,
+            outcome,
+            errors=errors,
+            batches_sent=active.builder.batches_enqueued,
+            dhcp=summary,
+        )
+        logger.info(
+            "job finished",
+            extra={
+                "job_id": active.job.job_id,
+                "outcome": outcome,
+                "leases": report.leases if report is not None else 0,
+                "error_code": summary.get("error_code"),
+                "batches": active.builder.batches_enqueued,
+            },
+        )
+        if outcome == "completed":
+            self.state.last_successful_job_at = utc_iso(self._clock())
+            self._persist_state()
+
     def _reap_job(self) -> None:
         active = self.active
         if active is None or not active.done.is_set():
@@ -763,7 +854,10 @@ class SensorRunner:
         if isinstance(active.scanner, SnmpCollector):
             self._reap_snmp(active, report if isinstance(report, SnmpReport) else None)
             return
-        assert not isinstance(report, SnmpReport)  # noqa: S101
+        if isinstance(active.scanner, DhcpCollector):
+            self._reap_dhcp(active, report if isinstance(report, DhcpReport) else None)
+            return
+        assert not isinstance(report, SnmpReport | DhcpReport)  # noqa: S101
         errors = list(active.builder.errors)
         if report is None:
             outcome = "failed"

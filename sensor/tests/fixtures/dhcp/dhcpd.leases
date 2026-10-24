@@ -1,0 +1,75 @@
+# The format of this file is documented in the dhcpd.leases(5) manual page.
+# This lease file was written by isc-dhcp-4.4.3
+
+# authoring-byte-order entry is generated, DO NOT DELETE
+authoring-byte-order little-endian;
+
+server-duid "\000\001\000\001-\2161\252\000\014)\331\221\253";
+
+failover peer "dhcp-failover" state {
+  my state normal at 4 2026/10/22 07:00:00;
+  partner state normal at 4 2026/10/22 07:00:00;
+}
+
+lease 192.168.50.100 {
+  starts 3 2026/10/21 08:00:00;
+  ends 3 2026/10/21 20:00:00;
+  cltt 3 2026/10/21 08:00:00;
+  binding state active;
+  next binding state free;
+  rewind binding state free;
+  hardware ethernet 00:1a:2b:3c:4d:5e;
+  uid "\001\000\032+<M^";
+  client-hostname "old-name";
+}
+lease 192.168.50.101 {
+  starts 1 2026/10/19 08:00:00;
+  ends 1 2026/10/19 20:00:00;
+  tstp 1 2026/10/19 20:00:00;
+  cltt 1 2026/10/19 08:00:00;
+  binding state free;
+  hardware ethernet 3c:22:fb:01:02:03;
+  uid "\377\003\004\005\006\000\001\000\001";
+}
+lease 192.168.50.100 {
+  starts 4 2026/10/22 08:00:00;
+  ends 4 2026/10/22 20:00:00;
+  cltt 4 2026/10/22 08:00:00;
+  binding state active;
+  next binding state free;
+  rewind binding state free;
+  hardware ethernet 00:1a:2b:3c:4d:5e;
+  uid "\001\000\032+<M^";
+  set vendor-class-identifier = "MSFT 5.0";
+  client-hostname "DESKTOP-7Q2K1";
+}
+lease 192.168.50.102 {
+  starts 4 2026/10/22 09:00:00;
+  ends 4 2026/10/22 10:00:00;
+  binding state released;
+  hardware ethernet 3c:22:fb:01:02:04;
+  client-hostname "printer \"lab\"";
+}
+lease 192.168.50.103 {
+  starts epoch 1792656000; # Thu Oct 22 08:00:00 2026
+  ends never;
+  binding state active;
+  hardware ethernet 3c:22:fb:01:02:05;
+  uid 1:3c:22:fb:1:2:5;
+}
+host reserved-printer {
+  dynamic;
+  hardware ethernet 3c:22:fb:01:02:99;
+  fixed-address 192.168.50.5;
+}
+lease 192.168.50.104 {
+  starts 4 2026/10/22 09:00:00;
+  binding state abandoned;
+}
+lease 192.168.50.105 {
+  starts 4 2026/13/22 09:00:00;
+  hardware ethernet 3c:22:fb:01:02:06;
+}
+lease 192.168.50.106 {
+  starts 4 2026/10/22 09:00:00;
+  hardware ethernet 3c:22:fb:01:02:07;

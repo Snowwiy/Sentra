@@ -424,6 +424,54 @@ class ObservationIn(RequestModel):
         return normalized
 
 
+class SensorLeaseIn(RequestModel):
+    """Fase 6E.2: un lease DHCP leído por el sensor 0.6.0 (job dhcp_leases)."""
+
+    ip: str = Field(max_length=45)
+    mac: str = Field(max_length=17)
+    hostname: str | None = Field(default=None, max_length=255)
+    client_id: str | None = Field(default=None, max_length=80)
+    starts_at: AwareDatetime | None = None
+    ends_at: AwareDatetime | None = None
+    state: Literal["active", "expired", "released", "unknown"]
+
+    @field_validator("ip")
+    @classmethod
+    def _ip(cls, value: str) -> str:
+        return str(ipaddress.ip_address(value))
+
+    @field_validator("mac")
+    @classmethod
+    def _mac(cls, value: str) -> str:
+        normalized = normalize_mac(value)
+        if normalized is None:
+            raise ValueError("invalid or non-unicast MAC address")
+        return normalized
+
+
+class SensorDhcpSummary(RequestModel):
+    """Fase 6E.2: resumen de la lectura de un fichero de leases (sin rutas ni contenido)."""
+
+    # Null solo con dhcp_source_unknown: el sensor no conoce el formato de una fuente que
+    # no tiene configurada.
+    format: Literal["dnsmasq", "isc_dhcpd", "kea_csv", "windows_dhcp_csv", "generic_csv"] | None
+    lines: int = Field(default=0, ge=0, le=10_000_000)
+    parsed: int = Field(default=0, ge=0, le=10_000_000)
+    skipped: int = Field(default=0, ge=0, le=10_000_000)
+    truncated: bool = False
+    file_mtime: AwareDatetime | None = None
+    error_code: (
+        Literal[
+            "dhcp_source_unknown",
+            "dhcp_file_missing",
+            "dhcp_file_unreadable",
+            "dhcp_file_too_large",
+            "dhcp_format_invalid",
+        ]
+        | None
+    ) = None
+
+
 class SensorResultsRequest(RequestModel):
     batch_id: UUID
     attempt: int = Field(ge=1, le=100)
@@ -433,6 +481,8 @@ class SensorResultsRequest(RequestModel):
     # Fase 6B: registros SNMP normalizados de un job snmp_inventory (nunca junto con
     # observaciones de discovery: el servicio exige la lista que corresponde al tipo de job).
     records: list[SnmpRecord] = Field(default_factory=list, max_length=5000)
+    # Fase 6E.2: leases de un job dhcp_leases (nunca junto con las otras dos listas).
+    leases: list[SensorLeaseIn] = Field(default_factory=list, max_length=5000)
 
 
 class SensorResultsResponse(ResponseModel):
@@ -455,6 +505,8 @@ class SensorJobComplete(RequestModel):
     batches_sent: int = Field(default=0, ge=0, le=100_000)
     # Fase 6B: resumen de módulos y error de un job snmp_inventory.
     snmp: SnmpJobSummary | None = None
+    # Fase 6E.2: resumen de un job dhcp_leases.
+    dhcp: SensorDhcpSummary | None = None
 
     @field_validator("unprobed")
     @classmethod

@@ -93,6 +93,10 @@ export function RulesPage() {
           <h1>Reglas de detección</h1>
         </div>
         <div className="actions">
+          {/* Fase 6E.5: excepciones de las reglas integradas (ver con rules:read). */}
+          <Link to="/detections/exclusions" className="button">
+            Excepciones
+          </Link>
           {auth.can("rules:test") && (
             <button type="button" className="button" onClick={() => setImporting(true)}>
               Importar Sigma

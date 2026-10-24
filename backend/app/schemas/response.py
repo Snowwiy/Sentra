@@ -67,6 +67,8 @@ class ExecutionRequest(RequestModel):
     # Contexto opcional: ejecución lanzada desde un incidente o desde una detección.
     incident_id: UUID | None = None
     detection_id: UUID | None = None
+    # Fase 6E.6: investigación de una recogida forense (obligatoria en las acciones forensic_*).
+    investigation_id: UUID | None = None
     # Confirmación explícita (acciones con requires_confirmation).
     confirm: bool = False
     reason: str | None = Reason
