@@ -26,7 +26,17 @@ export const DEVICE_TYPE_LABELS: Record<string, string> = {
   smart_tv: "Smart TV",
   nas: "NAS",
   virtual_machine: "Máquina virtual",
+  // Fase 7A.4: cámaras y grabadores salen de IoT porque su exposición es otra (vídeo,
+  // credenciales por defecto); "equipo de red" cuando no se puede afirmar si es router o switch.
+  ip_camera: "Cámara IP",
+  dvr_nvr: "Grabador (DVR/NVR)",
+  network_device: "Equipo de red",
 };
+
+/** Tipos que un admin puede fijar a mano (los mismos del servidor), ordenados por su nombre. */
+export const DEVICE_TYPE_OPTIONS: { value: string; label: string }[] = Object.entries(DEVICE_TYPE_LABELS)
+  .map(([value, label]) => ({ value, label }))
+  .sort((a, b) => a.label.localeCompare(b.label, "es"));
 
 export const UNKNOWN_DEVICE = "Dispositivo desconocido";
 
@@ -51,6 +61,10 @@ export const EVIDENCE_LABELS: Record<string, string> = {
   conflict: "Evidencia contradictoria",
   // Fase 6E.2: hostname de una concesión DHCP con coincidencia alta (MAC e IP).
   dhcp_lease: "Concesión DHCP",
+  // Fase 7A.4: huellas de servicio que publica el propio equipo y el tipo fijado por un admin.
+  mdns_service: "Servicios mDNS",
+  web: "Huella web/TLS",
+  manual: "Asignado manualmente",
 };
 
 /** Corrección 6C: clase de cada nombre observado, tal y como la decide el servidor. */
@@ -72,27 +86,38 @@ export const NAME_SOURCE_LABELS: Record<string, string> = {
   dhcp_lease: "Concesión DHCP",
 };
 
+/** Fase 7A.4: ¿el tipo lo fijó un admin? Entonces no es una deducción y no lleva confianza. */
+export function isManualType(asset: Pick<Asset, "manual_device_type">): boolean {
+  return Boolean(asset.manual_device_type);
+}
+
 /** Tipo en español; "Desconocido" si no se pudo determinar. */
 export function deviceTypeLabel(type: string | null | undefined): string {
   if (!type) return "Desconocido";
   return DEVICE_TYPE_LABELS[type] ?? type;
 }
 
+type TypeFields = Pick<Asset, "device_type" | "classification_confidence"> & {
+  manual_device_type?: string | null;
+};
+
 /**
  * ¿Se presenta como hipótesis? Todo lo que no es confianza alta lleva "probable": una
  * pista media sigue siendo una deducción, no un hecho comprobado.
  */
-export function isProbable(asset: Pick<Asset, "device_type" | "classification_confidence">): boolean {
+export function isProbable(asset: TypeFields): boolean {
+  // Un tipo fijado a mano es un hecho declarado, no una hipótesis.
+  if (asset.manual_device_type) return false;
   return asset.device_type !== null && asset.classification_confidence !== "high";
 }
 
 /** "Consola" o "Consola probable" según la confianza; "Desconocido" sin tipo. */
-export function typeWithConfidence(asset: Pick<Asset, "device_type" | "classification_confidence">): string {
+export function typeWithConfidence(asset: TypeFields): string {
   const label = deviceTypeLabel(asset.device_type);
   return isProbable(asset) ? `${label} probable` : label;
 }
 
-type TitleFields = Pick<Asset, "device_name" | "hostname" | "device_type" | "classification_confidence">;
+type TitleFields = Pick<Asset, "device_name" | "hostname"> & TypeFields;
 
 /**
  * Título principal del activo: nunca vacío y nunca la IP (que se muestra aparte).
@@ -169,4 +194,47 @@ export function normalizeLabel(value: string): { label: string } | { error: stri
   if (!label) return { error: "Escribe una etiqueta o usa «Quitar etiqueta»." };
   if ([...label].length > LABEL_MAX) return { error: `Máximo ${LABEL_MAX} caracteres.` };
   return { label };
+}
+
+// --- Fase 7A.4: huellas de servicio ----------------------------------------------------------
+
+/** Fuentes de evidencia que son huellas de servicio (se muestran juntas, no como evidencias sueltas). */
+export const FINGERPRINT_SOURCES: ReadonlySet<string> = new Set(["mdns_service", "web"]);
+
+export type FingerprintKind = "services" | "model" | "web";
+
+export interface Fingerprint {
+  kind: FingerprintKind;
+  /** Texto tal cual lo describe el servidor, sin la marca de antigüedad. */
+  value: string;
+  /** Ninguna observación reciente la repite: se conserva como evidencia, pero ya no decide. */
+  stale: boolean;
+}
+
+export const FINGERPRINT_LABELS: Record<FingerprintKind, string> = {
+  services: "Servicios mDNS",
+  model: "Modelo (mDNS)",
+  web: "Web/TLS",
+};
+
+// El servidor describe las huellas en texto (app/discovery/classify.py): «modelo X» para el
+// modelo de _device-info y « (antiguo)» al final cuando la observación caducó. La API no expone
+// las observaciones en bruto, así que se reconocen esos dos marcadores y el resto se muestra
+// tal cual: si el texto cambia, solo se pierde la clasificación, nunca el dato.
+const STALE_SUFFIX = " (antiguo)";
+const MODEL_PREFIX = "modelo ";
+
+/** Huellas mDNS y web/TLS de la evidencia de clasificación, en el orden en que llegan. */
+export function fingerprints(evidence: ClassificationEvidence[]): Fingerprint[] {
+  const found: Fingerprint[] = [];
+  for (const item of evidence) {
+    if (!FINGERPRINT_SOURCES.has(item.source)) continue;
+    const stale = item.value.endsWith(STALE_SUFFIX);
+    const value = stale ? item.value.slice(0, -STALE_SUFFIX.length) : item.value;
+    if (!value) continue;
+    if (item.source === "web") found.push({ kind: "web", value, stale });
+    else if (value.startsWith(MODEL_PREFIX)) found.push({ kind: "model", value: value.slice(MODEL_PREFIX.length), stale });
+    else found.push({ kind: "services", value, stale });
+  }
+  return found;
 }

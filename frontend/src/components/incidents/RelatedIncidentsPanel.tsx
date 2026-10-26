@@ -8,6 +8,7 @@ import type { RelatedIncidentList } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { errorMessage } from "../../lib/format";
 import { LEVEL_LABELS, linkedIncident, REASON_LABELS, STATUS_LABELS } from "../../lib/incidents";
+import { OwnerSelect } from "./OwnerSelect";
 
 export function RelatedIncidentsPanel({ source, id }: { source: "detection" | "alert"; id: string }) {
   const auth = useAuth();
@@ -16,6 +17,8 @@ export function RelatedIncidentsPanel({ source, id }: { source: "detection" | "a
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [linked, setLinked] = useState<{ incidentId: string; key: string }>();
+  // Fase 7A.6: responsable desde la creación (vacío = sin asignar).
+  const [owner, setOwner] = useState("");
   const allowed = auth.can("incidents:read");
   const canManage = auth.can("incidents:manage");
 
@@ -106,13 +109,17 @@ export function RelatedIncidentsPanel({ source, id }: { source: "detection" | "a
       {data && items.length === 0 && <p className="muted small">No hay incidentes abiertos relacionados.</p>}
       {canManage && data && !already && (
         <div className="actions">
+          <OwnerSelect value={owner} onChange={setOwner} disabled={busy} />
           <button
             type="button"
             className="button button--primary"
             disabled={busy}
-            onClick={() =>
-              void act(() => (source === "detection" ? incidentsApi.fromDetection(id) : incidentsApi.fromAlert(id)))
-            }
+            onClick={() => {
+              const input = { owner_user_id: owner || null };
+              void act(() =>
+                source === "detection" ? incidentsApi.fromDetection(id, input) : incidentsApi.fromAlert(id, input),
+              );
+            }}
           >
             Crear incidente
           </button>

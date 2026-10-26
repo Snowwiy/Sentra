@@ -26,6 +26,12 @@ class DeviceType(StrEnum):
     SMART_TV = "smart_tv"
     NAS = "nas"
     VIRTUAL_MACHINE = "virtual_machine"
+    # Fase 7A.4: cámaras IP y grabadores (DVR/NVR) se separan de IoT porque su exposición y
+    # su respuesta son otras (vídeo, credenciales por defecto, acceso remoto del fabricante).
+    IP_CAMERA = "ip_camera"
+    DVR_NVR = "dvr_nvr"
+    # Equipo de red cuyo papel concreto (router, switch, AP) no se puede afirmar todavía.
+    NETWORK_DEVICE = "network_device"
 
 
 class ClassificationConfidence(StrEnum):
@@ -47,8 +53,18 @@ class ClassificationConfidence(StrEnum):
 FAMILIES: tuple[frozenset[DeviceType], ...] = (
     frozenset({DeviceType.PC, DeviceType.LAPTOP, DeviceType.SERVER, DeviceType.VIRTUAL_MACHINE}),
     frozenset({DeviceType.MOBILE, DeviceType.TABLET}),
-    frozenset({DeviceType.ROUTER, DeviceType.NETWORK_SWITCH, DeviceType.ACCESS_POINT}),
+    frozenset(
+        {
+            DeviceType.ROUTER,
+            DeviceType.NETWORK_SWITCH,
+            DeviceType.ACCESS_POINT,
+            DeviceType.NETWORK_DEVICE,
+        }
+    ),
     frozenset({DeviceType.IOT, DeviceType.VOICE_ASSISTANT, DeviceType.SMART_TV}),
+    # Una cámara es un IoT concreto; una pista "IoT" (RTSP, MQTT) no la contradice. Una
+    # cámara y una TV sí son familias distintas.
+    frozenset({DeviceType.IOT, DeviceType.IP_CAMERA, DeviceType.DVR_NVR}),
 )
 
 

@@ -97,6 +97,9 @@ function detail(overrides: Partial<IncidentDetail> = {}): IncidentDetail {
     alerts: [],
     alerts_total: 0,
     notes_total: 1,
+    tasks_total: 0,
+    tasks_open: 0,
+    network_controls_open: 0,
     metrics: { age_seconds: 3600, time_to_triage_seconds: null, time_to_resolve_seconds: null },
     allowed_transitions: ["triage", "investigating"],
     ...overrides,
@@ -289,6 +292,8 @@ describe("IncidentsPage", () => {
       severity: "critical",
       priority: "medium",
       asset_ids: [ASSET],
+      // Fase 7A.6: sin elegir responsable el caso nace sin asignar.
+      owner_user_id: null,
     });
   });
 });

@@ -1,18 +1,23 @@
 // @vitest-environment jsdom
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import type { ReactNode } from "react";
 import "@testing-library/jest-dom/vitest";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, Route, Routes, useLocation } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { WithRole } from "../test/auth";
+import { AuthContext } from "../auth/AuthContext";
+import { authValue, WithRole } from "../test/auth";
 import type {
   Asset,
   DashboardSummary,
   DiscoveryJobDetail,
   DiscoverySchedule,
   DiscoveryScope,
+  Permission,
   Role,
 } from "../api/types";
 import { NetworkPage } from "./NetworkPage";
+import { networkTabRoutes } from "./network/NetworkRoutes";
+import { NETWORK_TABS, visibleNetworkTabs } from "./network/tabs";
 
 const NET = "192.168.50.0/24";
 const NOW = Date.now();
@@ -155,6 +160,7 @@ function asset(ip: string, network: string | null = NET): Asset {
     custom_label_version: 0,
     custom_label_updated_at: null,
     custom_label_updated_by: null,
+    manual_device_type: null,
     observed_names: [],
     managed_history: false,
     event_coverage: null,
@@ -206,6 +212,8 @@ beforeEach(() => {
     "GET /discovery/scope": () => ({ body: SCOPE }),
     "GET /discovery/schedule": () => ({ body: SCHEDULE }),
     "GET /discovery/jobs": () => ({ body: { items: [] } }),
+    "GET /discovery/observations": () => ({ body: { items: [], total: 0, limit: 50, offset: 0 } }),
+    "GET /topology/changes": () => ({ body: { items: [], total: 0 } }),
     "GET /console": () => ({
       body: { enrollment_token_ttl_minutes: 15, suggested_server_urls: [], server_url_configured: false },
     }),
@@ -231,14 +239,38 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function renderPage(role: Role = "admin") {
+/** Ruta y query actuales, para comprobar a dónde lleva cada pestaña o filtro. */
+function LocationProbe() {
+  const location = useLocation();
+  return <output data-testid="location">{`${location.pathname}${location.search}`}</output>;
+}
+
+const currentPath = () => screen.getByTestId("location").textContent ?? "";
+const currentQuery = () => new URLSearchParams(currentPath().split("?")[1] ?? "");
+
+/** El hub Red con sus rutas hijas reales (las de App), abierto en `path`. */
+function renderHub(path: string, auth: ReactNode = null, role: Role = "admin") {
+  const routes = (
+    <>
+      <Routes>
+        <Route path="/network" element={<NetworkPage />}>
+          {networkTabRoutes()}
+        </Route>
+        <Route path="/assets/:assetId" element={<p>Ficha del activo</p>} />
+      </Routes>
+      <LocationProbe />
+    </>
+  );
   return render(
-    <MemoryRouter>
-      <WithRole role={role}>
-        <NetworkPage />
-      </WithRole>
+    <MemoryRouter initialEntries={[path]}>
+      {auth ?? <WithRole role={role}>{routes}</WithRole>}
     </MemoryRouter>,
   );
+}
+
+// La mayoría de pruebas de descubrimiento usan su pestaña (historial, scheduler y alcance).
+function renderPage(role: Role = "admin", path = "/network/discovery") {
+  return renderHub(path, null, role);
 }
 
 async function startButton() {
@@ -256,15 +288,15 @@ async function openModal() {
 
 describe("NetworkPage: descubrimiento desde el dashboard", () => {
   it("muestra el estado de carga antes de la primera respuesta", () => {
-    renderPage();
-    expect(screen.getByText("Cargando red…")).toBeInTheDocument();
+    renderPage("admin", "/network/devices");
+    expect(screen.getAllByText(/^Cargando/).length).toBeGreaterThan(0);
   });
 
   it("habilita Iniciar descubrimiento con redes autorizadas y consola local", async () => {
     renderPage();
     const button = await startButton();
     await waitFor(() => expect(button).toBeEnabled());
-    const scope = screen.getByRole("region", { name: "Redes autorizadas" });
+    const scope = await screen.findByRole("region", { name: "Redes autorizadas" });
     expect(within(scope).getByText(NET)).toBeInTheDocument();
     expect(within(scope).getByText("(254 direcciones)")).toBeInTheDocument();
     const auto = screen.getByRole("region", { name: "Descubrimiento automático" });
@@ -417,9 +449,14 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
 
     fireEvent.click(within(dialog).getByRole("button", { name: "Ver dispositivos" }));
     expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
-    const table = screen.getByRole("region", { name: "Activos de red" });
-    await waitFor(() => expect(within(table).queryByText("10.9.9.9")).not.toBeInTheDocument());
-    expect(within(table).getByText("192.168.50.77")).toBeInTheDocument();
+    // Fase 7A.5: lleva a Red › Dispositivos con la subred y los más recientes primero en la URL.
+    expect(currentPath().startsWith("/network/devices?")).toBe(true);
+    expect(currentQuery().get("subnet")).toBe(COMPLETED.target);
+    expect(currentQuery().get("sort")).toBe("first");
+    expect(currentQuery().get("dir")).toBe("desc");
+    const table = await screen.findByRole("region", { name: "Dispositivos" });
+    await waitFor(() => expect(within(table).getByText("192.168.50.77")).toBeInTheDocument());
+    expect(within(table).queryByText("10.9.9.9")).not.toBeInTheDocument();
     expect(lastQuery?.get("subnet")).toBe(COMPLETED.target);
     expect(lastQuery?.get("sort")).toBe("first_seen");
     expect(lastQuery?.get("order")).toBe("desc");
@@ -463,7 +500,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     routes["GET /assets"] = () => ({ body: { items: found, total: found.length } });
     routes["GET /discovery/jobs"] = () => ({ body: { items: [state] } });
     routes["GET /discovery/jobs/11111111-1111-1111-1111-111111111111"] = () => ({ body: state });
-    renderPage();
+    renderPage("admin", "/network/devices");
     fireEvent.click(await screen.findByRole("button", { name: "Ver progreso" }));
     await screen.findByText("Descubrimiento en curso");
 
@@ -471,7 +508,7 @@ describe("NetworkPage: descubrimiento desde el dashboard", () => {
     state = COMPLETED;
     await screen.findByText("Descubrimiento completado", undefined, POLL);
     fireEvent.click(screen.getByRole("button", { name: "Cerrar" }));
-    const table = await screen.findByRole("region", { name: "Activos de red" });
+    const table = await screen.findByRole("region", { name: "Dispositivos" });
     await waitFor(() => expect(within(table).getByText("192.168.50.77")).toBeInTheDocument());
   }, 10_000);
 
@@ -561,9 +598,9 @@ describe("NetworkPage: identificación de dispositivos", () => {
     };
     const unknown = asset("192.168.50.12");
     routes["GET /assets"] = () => ({ body: { items: [phone, console_, managed, unknown], total: 4 } });
-    renderPage();
+    renderPage("admin", "/network/devices");
 
-    const table = await screen.findByRole("region", { name: "Activos de red" });
+    const table = await screen.findByRole("region", { name: "Dispositivos" });
     const row = (ip: string) => within(table).getByText(ip, { selector: "td" }).closest("tr") as HTMLElement;
     expect(within(row("192.168.50.141")).getByRole("link", { name: "MNA-LX9" })).toBeInTheDocument();
     expect(within(row("192.168.50.141")).getByText("Móvil")).toBeInTheDocument();
@@ -578,29 +615,29 @@ describe("NetworkPage: identificación de dispositivos", () => {
 });
 
 describe("NetworkPage: observaciones de red (Fase 6A)", () => {
-  it("la pestaña Observaciones de red pagina en el servidor y el viewer puede leerla", async () => {
+  it("Descubrimiento muestra las observaciones paginadas en el servidor y el viewer puede leerlas", async () => {
     let query: URLSearchParams | undefined;
     routes["GET /discovery/observations"] = (_init, url) => {
       query = url.searchParams;
       return { body: { items: [], total: 0, limit: 50, offset: 0 } };
     };
-    renderPage("viewer");
-    const tabs = await screen.findByRole("tablist", { name: "Vistas de red" });
-    const assetsTab = within(tabs).getByRole("tab", { name: "Activos de red" });
-    expect(assetsTab).toHaveAttribute("aria-selected", "true");
+    renderPage("viewer", "/network");
+    const tabs = await screen.findByRole("tablist", { name: "Secciones de red" });
+    expect(within(tabs).getByRole("tab", { name: "Resumen" })).toHaveAttribute("aria-selected", "true");
     // Hasta abrir la pestaña no se consulta nada de observaciones.
+    expect(await screen.findByText("Todavía no hay dispositivos")).toBeInTheDocument();
     expect(calls.some((c) => c.path === "/discovery/observations")).toBe(false);
 
-    fireEvent.click(within(tabs).getByRole("tab", { name: "Observaciones de red" }));
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Descubrimiento" }));
     const panel = await screen.findByRole("region", { name: "Observaciones de red" });
     expect(await within(panel).findByText("Sin observaciones")).toBeInTheDocument();
     expect(query?.get("latest")).toBe("true");
     expect(query?.get("limit")).toBe("50");
-    expect(screen.queryByRole("region", { name: "Activos de red" })).not.toBeInTheDocument();
     expect(calls.some((c) => c.method !== "GET")).toBe(false);
 
-    fireEvent.click(assetsTab);
-    expect(await screen.findByRole("region", { name: "Activos de red" })).toBeInTheDocument();
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Dispositivos" }));
+    expect(await screen.findByRole("region", { name: "Dispositivos" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Observaciones de red" })).not.toBeInTheDocument();
   });
 
   it("el historial muestra el perfil de cada ejecución", async () => {
@@ -610,5 +647,443 @@ describe("NetworkPage: observaciones de red (Fase 6A)", () => {
     renderPage();
     const history = await screen.findByRole("region", { name: "Ejecuciones recientes" });
     expect(await within(history).findByText("Quick")).toBeInTheDocument();
+  });
+});
+
+// --- Fase 7A.5: hub Red con pestañas por ruta ------------------------------------------------
+
+function device(name: string, ip: string, overrides: Partial<Asset> = {}): Asset {
+  return { ...asset(ip), display_name: name, device_name: name, ...overrides };
+}
+
+/** GET /assets que imita al servidor: guarda cada consulta y devuelve `items` y `total`. */
+function serveAssets(items: () => Asset[], total?: () => number) {
+  const queries: URLSearchParams[] = [];
+  routes["GET /assets"] = (_init, url) => {
+    queries.push(url.searchParams);
+    return {
+      body: {
+        items: items(),
+        total: total ? total() : items().length,
+        limit: 50,
+        offset: Number(url.searchParams.get("offset") ?? 0),
+        status_counts: { online: 7000, offline: 2900, unknown: 100 },
+      },
+    };
+  };
+  return queries;
+}
+
+describe("Red: pestañas del hub (Fase 7A.5)", () => {
+  it("muestra todas las pestañas con su ARIA y cambia de pestaña por ruta", async () => {
+    renderHub("/network");
+    const tabs = await screen.findByRole("tablist", { name: "Secciones de red" });
+    const names = within(tabs).getAllByRole("tab").map((t) => t.textContent);
+    expect(names).toEqual([
+      "Resumen",
+      "Dispositivos",
+      "Descubrimiento",
+      "Topología",
+      "Puertos y servicios",
+      "Historial de cambios",
+      "Identidad y evidencias",
+      "Telemetría",
+    ]);
+    const resumen = within(tabs).getByRole("tab", { name: "Resumen" });
+    expect(resumen).toHaveAttribute("aria-selected", "true");
+    expect(resumen).toHaveAttribute("aria-controls", "network-tabpanel");
+    expect(resumen).toHaveAttribute("tabindex", "0");
+    expect(within(tabs).getByRole("tab", { name: "Dispositivos" })).toHaveAttribute("tabindex", "-1");
+    const panel = screen.getByRole("tabpanel");
+    expect(panel).toHaveAttribute("id", "network-tabpanel");
+    expect(panel).toHaveAttribute("aria-labelledby", resumen.id);
+
+    fireEvent.click(within(tabs).getByRole("tab", { name: "Dispositivos" }));
+    expect(currentPath()).toBe("/network/devices");
+    await waitFor(() =>
+      expect(within(tabs).getByRole("tab", { name: "Dispositivos" })).toHaveAttribute("aria-selected", "true"),
+    );
+    expect(resumen).toHaveAttribute("aria-selected", "false");
+    expect(await screen.findByRole("region", { name: "Dispositivos" })).toBeInTheDocument();
+  });
+
+  it("cada pestaña es una ruta: abrir la URL marca su pestaña", async () => {
+    for (const tab of NETWORK_TABS) {
+      const path = tab.path ? `/network/${tab.path}` : "/network";
+      renderHub(path);
+      const tabs = await screen.findByRole("tablist", { name: "Secciones de red" });
+      expect(within(tabs).getByRole("tab", { name: tab.label })).toHaveAttribute("aria-selected", "true");
+      expect(within(tabs).getByRole("tab", { name: tab.label })).toHaveAttribute("href", path);
+      cleanup();
+    }
+  });
+
+  it("teclado: flechas, Inicio y Fin mueven el foco; Espacio abre la pestaña", async () => {
+    renderHub("/network");
+    const tabs = await screen.findByRole("tablist", { name: "Secciones de red" });
+    const tab = (name: string) => within(tabs).getByRole("tab", { name });
+    tab("Resumen").focus();
+    fireEvent.keyDown(tab("Resumen"), { key: "ArrowRight" });
+    expect(tab("Dispositivos")).toHaveFocus();
+    // Mover el foco no navega (activación manual): cada pestaña carga sus propios datos.
+    expect(currentPath()).toBe("/network");
+    fireEvent.keyDown(tab("Dispositivos"), { key: "End" });
+    expect(tab("Telemetría")).toHaveFocus();
+    fireEvent.keyDown(tab("Telemetría"), { key: "ArrowRight" });
+    expect(tab("Resumen")).toHaveFocus();
+    fireEvent.keyDown(tab("Resumen"), { key: "ArrowLeft" });
+    expect(tab("Telemetría")).toHaveFocus();
+    fireEvent.keyDown(tab("Telemetría"), { key: "Home" });
+    expect(tab("Resumen")).toHaveFocus();
+    fireEvent.keyDown(tab("Resumen"), { key: "ArrowRight" });
+    fireEvent.keyDown(tab("Dispositivos"), { key: " " });
+    expect(currentPath()).toBe("/network/devices");
+  });
+
+  it("sin el permiso de una pestaña: no se muestra y su URL responde acceso restringido", async () => {
+    const limited = authValue("viewer");
+    const denied = new Set<Permission>(["vulnerabilities:read", "monitoring:read"]);
+    const can = (permission: Permission) => !denied.has(permission) && limited.can(permission);
+    expect(visibleNetworkTabs(can).map((t) => t.key)).toEqual(["overview", "devices", "discovery", "telemetry"]);
+
+    const routesFor = (
+      <AuthContext.Provider value={{ ...limited, can }}>
+        <Routes>
+          <Route path="/network" element={<NetworkPage />}>
+            {networkTabRoutes()}
+          </Route>
+        </Routes>
+        <LocationProbe />
+      </AuthContext.Provider>
+    );
+    renderHub("/network/services", routesFor);
+    expect(await screen.findByRole("heading", { name: "Acceso restringido" })).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Secciones de red" });
+    expect(within(tabs).queryByRole("tab", { name: "Puertos y servicios" })).toBeNull();
+    expect(within(tabs).queryByRole("tab", { name: "Topología" })).toBeNull();
+    expect(within(tabs).queryByRole("tab", { name: "Identidad y evidencias" })).toBeNull();
+    expect(calls.some((c) => c.path.startsWith("/vulnerabilities"))).toBe(false);
+  });
+
+  it("una ruta desconocida dentro del hub muestra página no encontrada", async () => {
+    renderHub("/network/no-existe");
+    expect(await screen.findByText("Página no encontrada")).toBeInTheDocument();
+    const tabs = screen.getByRole("tablist", { name: "Secciones de red" });
+    // Sin pestaña activa, la primera sigue siendo alcanzable con Tab.
+    expect(within(tabs).getByRole("tab", { name: "Resumen" })).toHaveAttribute("tabindex", "0");
+  });
+
+  it("Resumen: los recuentos llevan a Dispositivos ya filtrado", async () => {
+    routes["GET /dashboard/summary"] = () => ({
+      body: {
+        ...SUMMARY,
+        assets: {
+          total: 12,
+          online: 9,
+          offline: 2,
+          unknown: 1,
+          by_method: { discovered: 8, agentless: 0, agent: 4 },
+          by_device_type: { printer: 3, ip_camera: 2, unknown: 7 },
+        },
+      },
+    });
+    renderHub("/network");
+    const byMethod = await screen.findByRole("region", { name: "Dispositivos por método" });
+    expect(within(byMethod).getByRole("link", { name: /Gestionado\s*4/ })).toHaveAttribute(
+      "href",
+      "/network/devices?method=agent",
+    );
+    const byStatus = screen.getByRole("region", { name: "Dispositivos por estado" });
+    expect(within(byStatus).getByRole("link", { name: /Sin conexión\s*2/ })).toHaveAttribute(
+      "href",
+      "/network/devices?status=offline",
+    );
+    const byType = screen.getByRole("list", { name: "Recuento por tipo" });
+    expect(within(byType).getByRole("link", { name: "Cámara IP: 2" })).toHaveAttribute(
+      "href",
+      "/network/devices?type=ip_camera",
+    );
+  });
+});
+
+describe("Red › Dispositivos: la tabla única (Fase 7A.5)", () => {
+  it("busca por IP, MAC y nombre en el servidor y guarda la búsqueda en la URL", async () => {
+    const queries = serveAssets(() => [device("srv-db", "10.0.0.5", { mac_address: "02:00:00:00:00:05" })]);
+    renderHub("/network/devices");
+    const search = await screen.findByLabelText("Buscar dispositivos");
+    for (const term of ["10.0.0.5", "02:00:00:00:00:05", "srv-db"]) {
+      fireEvent.change(search, { target: { value: term } });
+      await waitFor(() => expect(queries.at(-1)?.get("q")).toBe(term));
+      expect(currentQuery().get("q")).toBe(term);
+      expect(queries.at(-1)?.get("offset")).toBeNull();
+    }
+    const table = screen.getByRole("region", { name: "Dispositivos" });
+    expect(within(table).getByText("10.0.0.5")).toBeInTheDocument();
+    expect(within(table).getByText("02:00:00:00:00:05")).toBeInTheDocument();
+  });
+
+  it("los filtros de la URL se aplican al abrir (enlaces desde el panel y el resumen)", async () => {
+    const queries = serveAssets(() => []);
+    renderHub("/network/devices?status=offline&q=srv&type=ip_camera&archived=include");
+    expect(await screen.findByText("Ningún dispositivo coincide con el filtro")).toBeInTheDocument();
+    const first = queries[0]!;
+    expect(first.get("status")).toBe("offline");
+    expect(first.get("q")).toBe("srv");
+    expect(first.get("device_type")).toBe("ip_camera");
+    expect(first.get("archived")).toBe("include");
+    expect(screen.getByLabelText("Buscar dispositivos")).toHaveValue("srv");
+    expect(screen.getByLabelText("Mostrar archivados")).toBeChecked();
+  });
+
+  it("los contadores vienen del servidor; estado y página se filtran en el servidor", async () => {
+    const queries = serveAssets(
+      () => [device("b-db", "10.0.0.6"), device("a-pc", "10.0.0.7")],
+      () => 120,
+    );
+    renderHub("/network/devices");
+    const stats = await screen.findByRole("region", { name: "Dispositivos por estado" });
+    expect(within(stats).getByText("10000")).toBeInTheDocument();
+    expect(within(stats).getByText("2900")).toBeInTheDocument();
+    for (const query of queries) expect(query.get("limit")).toBe("50");
+
+    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
+    await waitFor(() => expect(queries.at(-1)?.get("offset")).toBe("50"));
+    fireEvent.click(within(stats).getByRole("button", { name: /Sin conexión/ }));
+    await waitFor(() => {
+      expect(queries.at(-1)?.get("status")).toBe("offline");
+      expect(queries.at(-1)?.get("offset")).toBeNull();
+    });
+    expect(currentQuery().get("status")).toBe("offline");
+    expect(screen.getByText(/página 1 de 3/)).toBeInTheDocument();
+  });
+
+  it("filtros de contexto: se envían al servidor, ordenan por criticidad y se limpian", async () => {
+    const queries = serveAssets(() => [
+      device("b-db", "10.0.0.6", { criticality: "critical", role: "database" }),
+      device("a-pc", "10.0.0.7"),
+    ]);
+    renderHub("/network/devices");
+    const row = (await screen.findByText("b-db", { selector: "a" })).closest("tr")!;
+    expect(within(row).getByText("Base de datos")).toBeInTheDocument();
+    expect(within(row).getByText(/Crítica/)).toBeInTheDocument();
+    expect(within(screen.getByText("a-pc", { selector: "a" }).closest("tr")!).queryByText(/Media/)).toBeNull();
+
+    fireEvent.change(screen.getByLabelText("Criticidad"), { target: { value: "critical" } });
+    fireEvent.change(screen.getByLabelText("Rol"), { target: { value: "database" } });
+    fireEvent.change(screen.getByLabelText("Internet"), { target: { value: "unknown" } });
+    fireEvent.change(screen.getByLabelText("Tag"), { target: { value: "pci" } });
+    fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "cleanup_candidate" } });
+    fireEvent.change(screen.getByLabelText("Orden"), { target: { value: "criticality" } });
+    await waitFor(() => {
+      const params = queries.at(-1)!;
+      expect(params.get("criticality")).toBe("critical");
+      expect(params.get("role")).toBe("database");
+      expect(params.get("internet_exposed")).toBe("unknown");
+      expect(params.get("tag")).toBe("pci");
+      expect(params.get("lifecycle")).toBe("cleanup_candidate");
+      expect(params.get("sort")).toBe("criticality");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Limpiar" }));
+    await waitFor(() => expect(queries.at(-1)?.get("role")).toBeNull());
+    expect(queries.at(-1)?.get("sort")).toBe("criticality");
+  });
+
+  it("filtros de contexto sin resultados muestran un vacío específico", async () => {
+    let items = [device("b-db", "10.0.0.6")];
+    serveAssets(() => items);
+    renderHub("/network/devices");
+    await screen.findByText("b-db", { selector: "a" });
+    items = [];
+    fireEvent.change(screen.getByLabelText("Entorno"), { target: { value: "production" } });
+    expect(await screen.findByText("Ningún dispositivo coincide con los filtros de contexto")).toBeInTheDocument();
+  });
+
+  it("muestra Inactivo, Candidato a limpieza y Archivado y abre la ficha al pulsar la fila", async () => {
+    serveAssets(() => [
+      device("viejo", "10.0.0.1", { status: "offline", lifecycle_state: "stale" }),
+      device("purgable", "10.0.0.2", { status: "offline", lifecycle_state: "cleanup_candidate" }),
+      device("retirado", "10.0.0.3", { lifecycle_state: "archived", archived_at: iso(0), archive_reason: "Retirado" }),
+      device("vivo", "10.0.0.4", { asset_id: "33333333-3333-3333-3333-333333333333" }),
+    ]);
+    renderHub("/network/devices");
+    const rowOf = async (name: string) => (await screen.findByText(name, { selector: "a" })).closest("tr") as HTMLElement;
+    expect(within(await rowOf("viejo")).getByText("Inactivo")).toBeInTheDocument();
+    expect(within(await rowOf("purgable")).getByText("Candidato a limpieza")).toBeInTheDocument();
+    expect(within(await rowOf("retirado")).getByText("Archivado")).toHaveAttribute("title", "Retirado");
+    const vivo = await rowOf("vivo");
+    expect(within(vivo).getByText("En línea")).toBeInTheDocument();
+    fireEvent.click(within(vivo).getByText("10.0.0.4"));
+    expect(currentPath()).toBe("/assets/33333333-3333-3333-3333-333333333333");
+  });
+
+  it("CPU, RAM y disco del agente y puertos en la misma tabla", async () => {
+    serveAssets(() => [
+      device("pc-1", "10.0.0.8", {
+        monitoring_method: "agent",
+        latest_telemetry: { recorded_at: iso(0), cpu_percent: 42, ram_percent: 61, disk_percent: 77, uptime_seconds: 60 },
+        open_ports: [22, 443],
+      }),
+    ]);
+    renderHub("/network/devices");
+    const row = (await screen.findByText("pc-1", { selector: "a" })).closest("tr") as HTMLElement;
+    expect(within(row).getByRole("meter", { name: "CPU" })).toHaveAttribute("aria-valuenow", "42");
+    expect(within(row).getByRole("meter", { name: "RAM" })).toHaveAttribute("aria-valuenow", "61");
+    expect(within(row).getByRole("meter", { name: "Disco" })).toHaveAttribute("aria-valuenow", "77");
+    expect(row).toHaveTextContent("22");
+    expect(row).toHaveTextContent("443");
+  });
+});
+
+describe("Red › Identidad y evidencias (Fase 7A.5)", () => {
+  const ID = "44444444-4444-4444-4444-444444444444";
+  const camera = device("cam-patio", "192.168.50.30", {
+    asset_id: ID,
+    device_type: "ip_camera",
+    classification_confidence: "medium",
+    classification_evidence: [
+      { source: "mdns_service", value: "_rtsp._tcp, _http._tcp" },
+      { source: "web", value: "Hikvision-Webs | Login" },
+    ],
+  });
+
+  function identityRoutes() {
+    routes["GET /dhcp/sources"] = () => ({ body: { items: [] } });
+    routes["GET /dhcp/leases"] = () => ({ body: { items: [], total: 0, limit: 100, offset: 0 } });
+    routes[`GET /assets/${ID}`] = () => ({ body: camera });
+    routes[`GET /assets/${ID}/identity`] = () => ({
+      body: {
+        asset_id: ID,
+        display_name: "cam-patio",
+        custom_label: null,
+        automatic_name: "cam-patio",
+        name_source: "mdns",
+        names: [],
+        ip: "192.168.50.30",
+        mac: "02:00:00:00:00:30",
+        mac_randomized: false,
+        vendor: null,
+        device_type: "ip_camera",
+        classification_confidence: "medium",
+        leases: [],
+        wifi: null,
+        unidentified_reasons: [],
+      },
+    });
+    routes[`GET /assets/${ID}/identity/history`] = () => ({ body: { asset_id: ID, next_before_id: null, items: [] } });
+  }
+
+  it("con ?asset= muestra la identificación del equipo, sus huellas y la asignación manual (admin)", async () => {
+    identityRoutes();
+    renderHub(`/network/identity?asset=${ID}`);
+    const panel = await screen.findByRole("region", { name: "Identificación de un equipo" });
+    expect(await within(panel).findByText("Cámara IP")).toBeInTheDocument();
+    expect(within(panel).getByRole("list", { name: "Huellas de servicio" })).toHaveTextContent("_rtsp._tcp");
+    expect(within(panel).getByRole("button", { name: "Asignar tipo" })).toBeInTheDocument();
+    expect(within(panel).getByRole("link", { name: "Abrir la ficha de cam-patio" })).toHaveAttribute(
+      "href",
+      `/assets/${ID}`,
+    );
+    // Las fuentes DHCP de la antigua página /dhcp están en la misma pestaña.
+    expect(await screen.findByRole("region", { name: "Fuentes DHCP" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Nueva fuente" })).toBeInTheDocument();
+  });
+
+  it("viewer: sin asignación manual ni gestión de fuentes", async () => {
+    identityRoutes();
+    renderHub(`/network/identity?asset=${ID}`, null, "viewer");
+    const panel = await screen.findByRole("region", { name: "Identificación de un equipo" });
+    expect(await within(panel).findByText("Cámara IP")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /tipo/ })).toBeNull();
+    await screen.findByRole("region", { name: "Fuentes DHCP" });
+    expect(screen.queryByRole("button", { name: "Nueva fuente" })).toBeNull();
+  });
+
+  it("elegir un equipo lo guarda en la URL", async () => {
+    identityRoutes();
+    serveAssets(() => [camera]);
+    renderHub("/network/identity");
+    const select = await screen.findByRole("combobox", { name: "Equipo" });
+    await within(select).findByRole("option", { name: /cam-patio/ });
+    fireEvent.change(select, { target: { value: ID } });
+    expect(currentQuery().get("asset")).toBe(ID);
+    expect(await screen.findByRole("link", { name: "Abrir la ficha de cam-patio" })).toBeInTheDocument();
+  });
+
+  it("los cambios de identidad mezclan los tipos de identidad por fecha", async () => {
+    identityRoutes();
+    const asked: string[] = [];
+    routes["GET /topology/changes"] = (_init, url) => {
+      const type = url.searchParams.get("change_type") ?? "";
+      asked.push(type);
+      const base = {
+        site_id: "00000000-0000-0000-0000-00000000d5f1",
+        subject_type: "node",
+        asset_id: ID,
+        evidence: [],
+        source: "discovery",
+        confidence: "high",
+        status: "detected",
+        review_note: null,
+        reviewed_by: null,
+        reviewed_at: null,
+        preserved: false,
+        version: 1,
+      };
+      const items =
+        type === "ip_changed"
+          ? [{ ...base, id: "c1", change_type: type, subject_key: "k", subject_label: "cam-patio", before: "192.168.50.29", after: "192.168.50.30", detected_at: iso(-60_000) }]
+          : type === "name_changed"
+            ? [{ ...base, id: "c2", change_type: type, subject_key: "k", subject_label: "cam-patio", before: null, after: "cam-patio", detected_at: iso(-1_000) }]
+            : [];
+      return { body: { items, total: items.length } };
+    };
+    renderHub("/network/identity");
+    const changes = await screen.findByRole("region", { name: "Cambios de identidad" });
+    await within(changes).findByText("Cambio de IP");
+    expect(asked.sort()).toEqual(["classification_changed", "ip_changed", "mac_changed", "name_changed", "vendor_changed"]);
+    const rows = within(changes).getAllByRole("row").slice(1);
+    expect(rows[0]).toHaveTextContent("Cambio de nombre");
+    expect(rows[1]).toHaveTextContent("192.168.50.29");
+  });
+});
+
+describe("Red › Telemetría (Fase 7A.5)", () => {
+  it("lista los equipos con agente y su último envío", async () => {
+    const queries = serveAssets(() => [
+      device("pc-1", "10.0.0.8", {
+        monitoring_method: "agent",
+        latest_telemetry: { recorded_at: iso(0), cpu_percent: 12, ram_percent: 34, disk_percent: 56, uptime_seconds: 7200 },
+      }),
+      device("pc-2", "10.0.0.9", { monitoring_method: "agent" }),
+    ]);
+    routes["GET /endpoint/metrics"] = () => ({
+      body: {
+        window_hours: 24,
+        events_last_hour: 120,
+        assets_reporting_last_hour: 2,
+        ingest_lag_p50_seconds: 1,
+        ingest_lag_p95_seconds: 3,
+        ingest_lag_max_seconds: 9,
+        behavior_detections_24h: 0,
+        detection_latency_p50_seconds: null,
+        detection_latency_p95_seconds: null,
+      },
+    });
+    renderHub("/network/telemetry");
+    const panel = await screen.findByRole("region", { name: "Telemetría de equipos" });
+    const row = (await within(panel).findByText("pc-1")).closest("tr") as HTMLElement;
+    expect(within(row).getByRole("meter", { name: "CPU" })).toHaveAttribute("aria-valuenow", "12");
+    expect(within(within(panel).getByText("pc-2").closest("tr") as HTMLElement).getByText(/Sin telemetría/)).toBeInTheDocument();
+    expect(queries[0]?.get("method")).toBe("agent");
+    expect(await screen.findByRole("region", { name: "Ingesta de telemetría" })).toHaveTextContent("120 eventos");
+  });
+
+  it("sin equipos con agente lo explica y enlaza a Dispositivos", async () => {
+    serveAssets(() => []);
+    renderHub("/network/telemetry", null, "viewer");
+    expect(await screen.findByText("Ningún equipo envía telemetría")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Dispositivos" })).toHaveAttribute("href", "/network/devices");
+    // El viewer no tiene telemetry:read: no se pide la métrica de ingesta.
+    expect(calls.some((c) => c.path === "/endpoint/metrics")).toBe(false);
   });
 });

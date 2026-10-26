@@ -18,6 +18,7 @@ from datetime import datetime
 from typing import Any, Protocol
 
 from app.detection import text
+from app.detection.script_context import powershell_values
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS
 from app.models.change import ChangeCategory, ChangeKind
 from app.models.event import EventLevel, SystemEvent
@@ -470,9 +471,11 @@ def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> 
             and event.level != EventLevel.INFO
         ):
             # PowerShell registra 4104 como Warning solo cuando el propio motor de scripts
-            # marca el bloque como sospechoso. El agente no envía el contenido, así que esta
-            # señal es todo lo que sabemos: por sí sola, confianza media (SCR-001).
-            signal = _draft_factory(event)(SignalKind.POWERSHELL_SUSPICIOUS, None, {})
+            # marca el bloque como sospechoso. El agente no envía el contenido; desde 0.6.0
+            # (Fase 7A.8) sí la ruta, el hash, el PID y las palabras que lo dispararon.
+            values = powershell_values(event.data or {})
+            subject = values["script_path"] or values["script_block_id"]
+            signal = _draft_factory(event)(SignalKind.POWERSHELL_SUSPICIOUS, subject, values)
         if signal is not None:
             drafts.append(signal)
     return drafts

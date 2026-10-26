@@ -16,6 +16,7 @@ from sentra_sensor.config import ConfigError, LocalConfig, default_config_path, 
 from sentra_sensor.credentials import CredentialError, CredentialStore
 from sentra_sensor.diagnostics import local_status, run_diagnostics
 from sentra_sensor.enrollment import EnrollmentError, enroll
+from sentra_sensor.fingerprint import SystemFingerprintProber
 from sentra_sensor.logs import configure_logging, register_secret
 from sentra_sensor.names import SystemIdentityProber
 from sentra_sensor.runner import ProberSet, SensorRunner
@@ -135,7 +136,14 @@ def build_runner(config: LocalConfig, transport_factory: TransportFactory) -> Se
         icmp, neighbors, resolver = default_probers(
             config.allow_system_ping, config.allow_system_arp
         )
-        return ProberSet(AsyncioTcpProber(), icmp, neighbors, resolver, SystemIdentityProber())
+        return ProberSet(
+            AsyncioTcpProber(),
+            icmp,
+            neighbors,
+            resolver,
+            SystemIdentityProber(),
+            SystemFingerprintProber(),
+        )
 
     return SensorRunner(config, transport_factory(config), probers=probers)
 

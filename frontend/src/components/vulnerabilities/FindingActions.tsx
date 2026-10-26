@@ -9,6 +9,7 @@ import { vulnerabilitiesApi } from "../../api/sentra";
 import type { FindingAction, FindingDetail, IncidentLevel } from "../../api/types";
 import { LEVEL_LABELS, LEVEL_ORDER } from "../../lib/incidents";
 import { ACTION_LABELS, REASON_REQUIRED } from "../../lib/vulnerabilities";
+import { OwnerSelect } from "../incidents/OwnerSelect";
 import { Modal } from "../Modal";
 
 export type RunFindingAction = (action: () => Promise<unknown>) => Promise<boolean>;
@@ -119,6 +120,7 @@ function IncidentDialog({ finding, onClose }: { finding: FindingDetail; onClose:
   const navigate = useNavigate();
   const [title, setTitle] = useState("");
   const [priority, setPriority] = useState<IncidentLevel | "">("");
+  const [owner, setOwner] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const submit = async () => {
@@ -128,6 +130,7 @@ function IncidentDialog({ finding, onClose }: { finding: FindingDetail; onClose:
       const incident = await vulnerabilitiesApi.createIncident(finding.finding_id, finding.version, {
         title: title || undefined,
         priority: priority || undefined,
+        owner_user_id: owner || null,
       });
       navigate(`/incidents/${incident.incident_id}`);
     } catch (err) {
@@ -169,6 +172,7 @@ function IncidentDialog({ finding, onClose }: { finding: FindingDetail; onClose:
             ))}
           </select>
         </label>
+        <OwnerSelect value={owner} onChange={setOwner} disabled={busy} />
         {error && (
           <div className="banner banner--warn" role="alert">
             {error}

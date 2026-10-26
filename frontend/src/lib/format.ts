@@ -53,3 +53,9 @@ export function formatBytes(bytes: number | null | undefined): string {
   }
   return `${value.toFixed(unit === 0 ? 0 : 1)} ${units[unit]}`;
 }
+
+/** Fecha como valor de un input datetime-local (hora local, "YYYY-MM-DDTHH:MM"). */
+export function toLocalInputValue(date: Date): string {
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}

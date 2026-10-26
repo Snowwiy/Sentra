@@ -33,7 +33,7 @@ from app.schemas.asset import AssetList, AssetRead, ClassificationEvidence, Obse
 from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
 from app.services.asset_lifecycle_policy import LifecyclePolicy, evaluate, stale_condition
-from app.services.identification import network_adapter_vendor
+from app.services.identification import network_adapter_vendor, refresh_identity
 from app.services.site_service import SiteRef, site_refs
 
 AssetSort = Literal[
@@ -387,6 +387,39 @@ class AssetService:
             asset.custom_label_updated_by = actor_name[:64]
         return asset, previous
 
+    def set_manual_type(
+        self, public_id: UUID, device_type: str | None, version: int, actor_name: str
+    ) -> tuple[Asset, str | None]:
+        """Fija (o quita, con None) el tipo manual y recalcula la identidad. No hace commit.
+
+        Mismo patrón que set_label: fila bloqueada, versión comparada y sin cambios si el
+        valor es el mismo. Devuelve el activo y el tipo manual anterior (para la auditoría).
+        """
+        asset = self._session.scalar(
+            select(Asset).where(Asset.public_id == public_id).with_for_update()
+        )
+        if asset is None:
+            raise NotFoundError("Asset not found")
+        if asset.custom_label_version != version:
+            raise AssetLabelConflictError(
+                "The asset identity changed since it was read",
+                details=[
+                    {
+                        "current_version": asset.custom_label_version,
+                        "manual_device_type": asset.manual_device_type,
+                    }
+                ],
+            )
+        previous = asset.manual_device_type
+        if previous != device_type:
+            asset.manual_device_type = device_type
+            asset.manual_device_type_at = datetime.now(UTC)
+            asset.manual_device_type_by = actor_name[:64]
+            asset.custom_label_version = version + 1
+            ports = open_ports_by_asset(self._session, [asset.id])
+            refresh_identity(asset, ports.get(asset.id, ()))
+        return asset, previous
+
     def _to_read(
         self,
         asset: Asset,
@@ -407,6 +440,7 @@ class AssetService:
             custom_label_version=asset.custom_label_version or 0,
             custom_label_updated_at=asset.custom_label_updated_at,
             custom_label_updated_by=asset.custom_label_updated_by,
+            manual_device_type=asset.manual_device_type,
             monitoring_method=asset.monitoring_method,
             hostname=asset.hostname,
             os_name=asset.os_name,

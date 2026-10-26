@@ -1,9 +1,10 @@
 """Sentra Sensor: runtime del sensor distribuido de un Site (5F; 6A discovery avanzado; 6B SNMP;
-6C.3 módulo SNMP wlan; Corrección 6C sondas de nombre; 6E leases DHCP de ficheros locales)."""
+6C.3 módulo SNMP wlan; Corrección 6C sondas de nombre; 6E leases DHCP de ficheros locales;
+7A.4 huellas de servicio)."""
 
 from sentra_sensor import snmp as _snmp
 
-__version__ = "0.6.0"
+__version__ = "0.7.0"
 
 # Capacidades realmente implementadas. Se declaran al servidor en enroll y heartbeat; no se
 # anuncia nada que el sensor no sepa hacer. Wi-Fi (6C.3) solo como inventario SNMP de lectura
@@ -18,6 +19,9 @@ CAPABILITIES: tuple[str, ...] = (
     # Corrección 6C: sondas de nombre (mDNS, NetBIOS, SSDP/UPnP) en discovery_advanced v2,
     # las mismas que el discovery local del servidor.
     "network.discovery.names",
+    # Fase 7A.4: huellas de servicio (DNS-SD, HTTP Server/título, sujeto TLS) en
+    # discovery_advanced v3, solo en puertos que el propio scan encontró abiertos.
+    "network.discovery.fingerprint",
     "network.dns",
     "network.tcp",
     "network.icmp",

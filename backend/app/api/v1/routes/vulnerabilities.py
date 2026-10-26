@@ -497,6 +497,7 @@ def incident_from_finding(
                 title=body.title,
                 description=body.description,
                 priority=IncidentLevel(body.priority) if body.priority else None,
+                owner_user_id=body.owner_user_id,
             ),
         )
         add_history(

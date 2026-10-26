@@ -22,7 +22,7 @@ Principios:
 ## Arquitectura
 
 ```
-UI / API / tools.py ──► ResponseService ──► policy.evaluate (bloqueos, avisos)
+UI / API / app/tools ──► ResponseService ──► policy.evaluate (bloqueos, avisos)
                               │
                 ┌─────────────┴───────────────┐
         acción de servidor              acción de agente
@@ -46,7 +46,6 @@ Ficheros:
 | `app/response/handlers.py` | handlers de servidor (reutilizan los motores existentes) |
 | `app/response/results.py` | saneado y límite de tamaño de resultados |
 | `app/response/playbooks.py` | validación de pasos y playbooks built-in |
-| `app/response/tools.py` | registro cerrado de herramientas para la futura Analyst Console |
 | `app/services/response_service.py` | motor: ejecución, cola, barrido, playbooks |
 | `app/api/v1/routes/response.py` | API `/api/v1/response/*` |
 | `app/models/response.py` | tablas (migración 0030) |
@@ -197,13 +196,13 @@ evidencia. Los tests fijan estos valores en `tests/conftest.py`.
 | POST | `/agents/commands/poll` | token del agente |
 | POST | `/agents/commands/{request_id}/result` | token del agente |
 
-## Analyst Console (preparación)
+## Analyst Console
 
-`app/response/tools.py` expone un registro cerrado: `response.list_actions`,
-`response.preview`, `response.execute`, `response.status`, `playbooks.list`,
-`playbooks.preview`, `playbooks.execute`. Cada herramienta valida sus argumentos con los
-modelos de la API y llama al mismo `ResponseService` con un operador humano (su rol, su
-auditoría). No hay chat, NLP ni LLM, ni herramientas genéricas.
+Desde la Fase 7A, las herramientas para el analista viven en el Analyst Tool Engine
+(`app/tools/`, docs/analyst-tool-engine.md), que sustituye al registro preliminar de la 5D
+(`app/response/tools.py`, eliminado). Las herramientas que actúan delegan en este mismo
+`ResponseService` con el operador humano que las pide (su rol, su auditoría) y siempre tras
+una vista previa y una confirmación. La contención no se puede delegar desde las herramientas.
 
 ## Modos de fallo
 

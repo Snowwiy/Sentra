@@ -281,6 +281,10 @@ class Settings(BaseSettings):
     discovery_reverse_dns: bool = True
     # Sondas de nombre de hosts vivos: mDNS, NetBIOS y SSDP/UPnP (app/discovery/names.py).
     discovery_identify: bool = True
+    # Fase 7A.4: huellas de servicio de hosts vivos (servicios DNS-SD y modelo, cabecera
+    # Server y título HTTP, sujeto del certificado TLS), solo en puertos ya abiertos del scan y
+    # dentro de DISCOVERY_ALLOWED_NETWORKS. false = solo las sondas de nombre de la Fase 4E.
+    discovery_fingerprint: bool = True
     # Ficheros OUI del IEEE (oui.csv, mam.csv, oui36.csv) separados por coma, para resolver
     # el fabricante de la NIC sin consultar Internet. Vacío: fabricante desconocido.
     discovery_oui_file: str = ""
@@ -761,6 +765,22 @@ class Settings(BaseSettings):
     isolation_max_minutes: int = Field(default=240, ge=5, le=1440)
     isolation_default_minutes: int = Field(default=60, ge=5, le=1440)
 
+    # --- Fase 7A: Analyst Tool Engine (docs/analyst-tool-engine.md) ------------------------
+    # Encendido por defecto: las herramientas de lectura solo exponen lo que el rol ya puede
+    # leer por la API. Apagado, la API responde 409 tools_disabled.
+    analyst_tools_enabled: bool = True
+    # Ejecuciones simultáneas por usuario y en todo el servidor (429 por encima).
+    analyst_tools_max_concurrent_per_user: int = Field(default=3, ge=1, le=50)
+    analyst_tools_max_concurrent: int = Field(default=12, ge=1, le=200)
+    # Ejecuciones por usuario y minuto (vistas previas incluidas).
+    analyst_tools_per_user_per_minute: int = Field(default=60, ge=1, le=10_000)
+    # Tamaño máximo de la salida guardada; una salida mayor se guarda como `truncated`.
+    analyst_tools_result_max_kb: int = Field(default=256, ge=16, le=2048)
+    # Plazo para confirmar una vista previa de una herramienta de acción.
+    analyst_tools_preview_ttl_minutes: int = Field(default=15, ge=1, le=240)
+    # Días de historial de ejecuciones. Null = se conserva todo (evidencia SOC).
+    analyst_tools_retention_days: int | None = Field(default=None, ge=7, le=3650)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en
@@ -812,6 +832,7 @@ class Settings(BaseSettings):
         "snmp_poll_interval_minutes",
         "snmp_history_retention_days",
         "wlan_history_retention_days",
+        "analyst_tools_retention_days",
         mode="before",
     )
     @classmethod

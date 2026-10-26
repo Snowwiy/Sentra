@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-22 (Fase 6E: historial de red, identidad DHCP, telemetría de endpoint, forense y aislamiento seguro; servidor y frontend 0.3.0, agente 0.5.0, sensor 0.6.0).
+Last updated: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0043 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0047 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -437,6 +437,31 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   the dashboard shows its metrics as "—". On-demand: `python -m app.cli purge-old-data`.
 
 ## Recommended next phase
+
+Fase 7A implementada (servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0, migraciones
+0044-0047). Qué contiene y dónde está documentado:
+
+- 7A.1-7A.3 Analyst Tool Engine: registro cerrado de herramientas tipadas con permisos,
+  alcance, riesgo, límites, auditoría y vista previa obligatoria antes de cualquier acción
+  (docs/analyst-tool-engine.md). Sustituye a `app/response/tools.py`.
+- 7A.4 inteligencia de dispositivos sin agente ni SNMP: servicios mDNS, huellas HTTP y TLS
+  (sin desactivar la validación TLS en ningún sitio), clases cámara IP, DVR/NVR y dispositivo de
+  red, tipo manual que nada pisa, sensor 0.7.0 (docs/device-intelligence.md).
+- 7A.5 hub Red con pestañas; DHCP y Topología ya no tienen entrada propia en el menú y sus
+  rutas redirigen.
+- 7A.6 responsable al crear un caso (también desde el riesgo de un activo), tareas delegables y
+  solicitudes de control de red con aprobación de admin; Sentra no aplica ningún control
+  (docs/case-operations.md).
+- 7A.7 `GET /dashboard/security-overview` y gráficas con datos reales; postura global con
+  fórmula, población, pesos y datos ausentes documentados (docs/security-dashboard.md).
+- 7A.8 contexto de PowerShell (agente 0.6.0), SCR-001 v2, CORR-002 v3, NET-001 v2 y
+  excepciones exactas con caducidad (docs/powershell-detections.md).
+
+Validar en el PC: aplicar el parche y las migraciones, actualizar agente y sensor, repetir la
+instalación del agente y comprobar qué palabras marca PowerShell en el 4104, crear las
+excepciones de ruta + hash y de API en 8000 si procede, revisar las gráficas con datos reales
+y las huellas HTTP/TLS de cámaras, NAS y routers del laboratorio. Siguiente migración libre:
+0048.
 
 Fase 6E implementada (servidor y frontend 0.3.0, agente 0.5.0, sensor 0.6.0, migraciones
 0039-0043): aplicar el parche y las migraciones, actualizar agentes y sensores, importar o leer

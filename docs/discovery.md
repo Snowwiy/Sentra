@@ -59,6 +59,7 @@ The agent-based flow is unchanged: agents use the same protocol and see no diffe
 | `DISCOVERY_ICMP` | `true` | Use the system `ping` (skipped automatically if missing) |
 | `DISCOVERY_REVERSE_DNS` | `true` | Reverse lookups of live hosts |
 | `DISCOVERY_IDENTIFY` | `true` | Sondas de nombre de hosts vivos: mDNS, NetBIOS y SSDP/UPnP (Fase 4E) |
+| `DISCOVERY_FINGERPRINT` | `true` | Huellas DNS-SD, HTTP y certificado TLS en los puertos abiertos (Fase 7A, [device-intelligence.md](device-intelligence.md)) |
 | `DISCOVERY_OUI_FILE` | vacío | Ficheros OUI del IEEE (`oui.csv`, `mam.csv`, `oui36.csv`) separados por coma para el fabricante de la NIC. Vacío: fabricante desconocido |
 | `DISCOVERY_INTERVAL_MINUTES` | unset (manual) | Periodic runs over every allowed network (≥ 5) |
 | `DISCOVERY_JOB_TIMEOUT_MINUTES` | `30` | A run stops here; its results are kept as partial |

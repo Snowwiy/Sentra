@@ -33,7 +33,7 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "general",
     label: "General",
     items: [
-      { to: "/", label: "Activos", icon: "dashboard", exact: true, match: ["/assets/"] },
+      { to: "/", label: "Panel", icon: "dashboard", exact: true },
       { to: "/alerts", label: "Alertas", icon: "alert" },
       { to: "/detections", label: "Detecciones", icon: "detection" },
       { to: "/incidents", label: "Incidentes", icon: "incident", permission: "incidents:read" },
@@ -44,11 +44,11 @@ export const NAV_GROUPS: NavGroup[] = [
     id: "infrastructure",
     label: "Infraestructura",
     items: [
-      { to: "/network", label: "Red", icon: "network" },
+      // Fase 7A.5: Red reúne Activos, Topología y DHCP. La ficha de un activo y las rutas
+      // antiguas (que redirigen al hub) también marcan Red.
+      { to: "/network", label: "Red", icon: "network", match: ["/assets/", "/topology", "/dhcp"] },
       { to: "/infrastructure", label: "Infraestructura", icon: "infrastructure", permission: "monitoring:read" },
       { to: "/wlan", label: "Wi-Fi", icon: "wifi", permission: "monitoring:read" },
-      { to: "/topology", label: "Topología", icon: "topology", permission: "monitoring:read" },
-      { to: "/dhcp", label: "DHCP", icon: "dhcp", permission: "monitoring:read" },
       { to: "/agents", label: "Agentes", icon: "agent" },
       { to: "/sensors", label: "Sensores", icon: "sensor", permission: "monitoring:read" },
       { to: "/settings/sites", label: "Sites", icon: "site", permission: "monitoring:read" },

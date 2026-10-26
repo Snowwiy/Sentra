@@ -189,7 +189,7 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "threat_intel:triage", "assets:duplicates_read", "response:read", "response:execute",
         "reports:read", "reports:generate", "network:poll",
         "telemetry:read", "forensics:read", "forensics:acquire", "forensics:download",
-        "containment:preview",
+        "containment:preview", "tools:read", "tools:execute",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -465,7 +465,7 @@ def test_role_permissions_are_least_privilege() -> None:
     reads = {
         Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
         Permission.RULES_READ, Permission.VULNERABILITIES_READ, Permission.THREAT_INTEL_READ,
-        Permission.RESPONSE_READ, Permission.REPORTS_READ,
+        Permission.RESPONSE_READ, Permission.REPORTS_READ, Permission.TOOLS_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -481,6 +481,7 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.REPORTS_READ, Permission.REPORTS_GENERATE, Permission.NETWORK_POLL,
         Permission.TELEMETRY_READ, Permission.FORENSICS_READ, Permission.FORENSICS_ACQUIRE,
         Permission.FORENSICS_DOWNLOAD, Permission.CONTAINMENT_PREVIEW,
+        Permission.TOOLS_READ, Permission.TOOLS_EXECUTE,
     }  # fmt: skip
     # Fase 6E: fuentes DHCP, gestión forense y aislar/liberar un endpoint, solo admin.
     for admin_only in (
@@ -490,6 +491,10 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.CONTAINMENT_RELEASE,
     ):
         assert admin_only not in ROLE_PERMISSIONS[Role.ANALYST]
+    # Fase 7A: ver y cancelar ejecuciones ajenas de herramientas y aprobar controles de red,
+    # solo admin.
+    assert Permission.TOOLS_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
+    assert Permission.NETWORK_CONTROLS_APPROVE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Fase 6E: la telemetría de procesos y las evidencias no las ve un viewer.
     assert Permission.TELEMETRY_READ not in ROLE_PERMISSIONS[Role.VIEWER]
     assert Permission.FORENSICS_READ not in ROLE_PERMISSIONS[Role.VIEWER]
@@ -699,8 +704,12 @@ def _concrete(path: str) -> str:
         # Fase 6E: historial de topología, DHCP, procesos, forense y aislamiento.
         "snapshot_id", "change_id", "dhcp_source_id", "instance_id", "investigation_id",
         "artifact_id", "package_id", "note_id", "isolation_id", "exclusion_id",
+        # Fase 7A.6: tareas de caso y solicitudes de control de red.
+        "task_id", "control_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
+    # Fase 7A: herramientas del registro por identificador estable.
+    path = path.replace("{tool_id}", "asset.lookup")
     # Fase 5C: fuentes de inteligencia por id numérico.
     path = path.replace("{source_id}", "999999")
     # Fase 5A: reglas por identificador estable y versión numérica.

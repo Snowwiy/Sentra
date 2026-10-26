@@ -65,6 +65,7 @@ export function asset(overrides: Partial<Asset> = {}): Asset {
     custom_label_version: 0,
     custom_label_updated_at: null,
     custom_label_updated_by: null,
+    manual_device_type: null,
     observed_names: [],
     managed_history: false,
     event_coverage: null,

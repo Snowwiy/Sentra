@@ -169,6 +169,13 @@ AGENT_DATA_FIELDS: dict[str, tuple[str, ...]] = {
         "Detection User",
         "Process Name",
     ),
+    # Fase 7A.8 (agente 0.6.0): contexto del 4104, nunca ScriptBlockText.
+    POWERSHELL: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal"),
+}
+# Campos del 4104 que el agente 0.6.0 deriva (no están en EventData): copia de
+# SCRIPT_BLOCK_CONTEXT_FIELDS del agente, comprobada por el mismo test.
+AGENT_COMPUTED_FIELDS: dict[str, tuple[str, ...]] = {
+    POWERSHELL: ("ProcessID", "UserID", "ScriptSha256", "SuspiciousKeywords"),
 }
 AGENT_EVENT_CODES: dict[str, tuple[int, ...]] = {
     SECURITY: (
@@ -211,6 +218,10 @@ def _event_fields(channel: str, message: bool) -> dict[str, FieldSpec]:
         )
     for name in AGENT_DATA_FIELDS.get(channel, ()):
         specs.append(_f(f"event.data.{name}", f"data.{name}", f"EventData {name} (texto)."))
+    for name in AGENT_COMPUTED_FIELDS.get(channel, ()):
+        specs.append(
+            _f(f"event.data.{name}", f"data.{name}", f"{name} (calculado por el agente, texto).")
+        )
     return {spec.name: spec for spec in specs}
 
 

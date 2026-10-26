@@ -376,6 +376,48 @@ def schedule_due_reads(session: Session, settings: Settings, now: datetime | Non
     return created
 
 
+# Fase 7A.4: separación mínima entre lecturas automáticas tras un discovery. Un site con
+# discovery cada pocos minutos no relee el fichero de leases en cada pasada.
+AUTO_READ_MIN_INTERVAL = timedelta(minutes=10)
+
+
+def schedule_reads_after_discovery(
+    session: Session, settings: Settings, site_id: int, now: datetime | None = None
+) -> int:
+    """Encola la lectura de las fuentes DHCP de sensor del site tras un discovery completo.
+
+    Así la identificación usa los hostnames DHCP sin que nadie pulse "Leer ahora": el
+    discovery acaba de ver qué hosts hay y los leases dicen cómo se llaman. Solo fuentes
+    activas con sensor listo, sin otra lectura abierta y sin una lectura en los últimos
+    AUTO_READ_MIN_INTERVAL. Las fuentes de importación manual no cambian (no hay nada que
+    leer). No hace commit: va en la transacción que cierra el discovery.
+    """
+    now = now or _now()
+    created = 0
+    sources = session.scalars(
+        select(DhcpSource).where(
+            DhcpSource.site_id == site_id,
+            DhcpSource.kind == "sensor_file",
+            DhcpSource.status != "disabled",
+            DhcpSource.sensor_id.is_not(None),
+        )
+    ).all()
+    for source in sources:
+        recent = (
+            source.last_requested_at is not None
+            and now - source.last_requested_at < AUTO_READ_MIN_INTERVAL
+        )
+        if recent or _open_job(session, source) is not None:
+            continue
+        sensor = session.get(Sensor, source.sensor_id)
+        if not _sensor_ready(sensor):
+            continue
+        assert sensor is not None  # noqa: S101
+        _create_job(session, settings, source, sensor, "discovery", now)
+        created += 1
+    return created
+
+
 def purge_dhcp(session: Session, settings: Settings, now: datetime) -> dict[str, int]:
     """Retención: leases que ninguna lectura vuelve a ver e historial de identidad antiguo."""
     counts: dict[str, int] = {}

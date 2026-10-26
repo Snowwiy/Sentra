@@ -34,7 +34,7 @@ from app.core.metrics import REGISTRY
 from app.detection import text
 from app.detection.config import DetectionConfig
 from app.detection.custom.runtime import CustomRule, CustomRuleIndex, load_index
-from app.detection.exclusions import Exclusions, load_exclusions
+from app.detection.exclusions import Exclusions, find_exclusion, load_exclusions
 from app.detection.rules import (
     ANY_SUBJECT,
     RULES,
@@ -106,6 +106,8 @@ class _Context:
         self.config = config
         self._os: dict[int, str] = {}
         self._assets: dict[int, Mapping[str, Any]] = {}
+        # Excepciones vigentes del lote (las pone el motor).
+        self.exclusions: Exclusions = {}
 
     def _where(
         self,
@@ -168,6 +170,13 @@ class _Context:
             )
             or 0
         )
+
+    def excluded(self, rule_id: str, signal: DetectionSignal) -> bool:
+        """Fase 7A.8: una correlación descarta la evidencia que una excepción cubre (p. ej.
+        CORR-002 sin el script exceptuado). No cuenta como uso de la excepción: la misma
+        señal se vuelve a ver en cada evaluación de la ventana."""
+        data = signal.data if isinstance(signal.data, dict) else {}
+        return find_exclusion(self.exclusions, rule_id, signal.asset_id, data) is not None
 
     def asset_os(self, asset_id: int) -> str:
         if asset_id not in self._os:
@@ -337,6 +346,7 @@ class DetectionEngine:
             self._refresh_custom()
             self._exclusions = load_exclusions(self._session)
             context = _Context(self._session, self._config)
+            context.exclusions = self._exclusions
             for signal in signals:
                 self._evaluate(context, signal, run)
                 signal.evaluated_at = datetime.now(UTC)
@@ -433,17 +443,8 @@ class DetectionEngine:
 
     def _excluded(self, rule_id: str, signal: DetectionSignal) -> DetectionExclusion | None:
         """Excepción vigente de la regla que coincide con un campo de la señal, o None."""
-        candidates = self._exclusions.get(rule_id)
-        if not candidates:
-            return None
         data = signal.data if isinstance(signal.data, dict) else {}
-        for exclusion in candidates:
-            if exclusion.asset_id is not None and exclusion.asset_id != signal.asset_id:
-                continue
-            value = data.get(exclusion.field)
-            if isinstance(value, str) and value.strip().lower() == exclusion.value:
-                return exclusion
-        return None
+        return find_exclusion(self._exclusions, rule_id, signal.asset_id, data)
 
     def _flush_stats(self) -> None:
         """Vuelca los contadores del lote: una sentencia, sin tocar la fila de la regla."""
@@ -572,7 +573,7 @@ class DetectionEngine:
                 status=DetectionStatus.OPEN,
                 title=text.clean(meta.title, 255),
                 summary=text.clean(result.summary, 1000),
-                details=text.bounded_data(result.details) or None,
+                details=text.bounded_tree(result.details) or None,
                 mitre_tactic=(mitre.tactic or None) if mitre else None,
                 mitre_technique=mitre.technique if mitre else None,
                 mitre_subtechnique=mitre.subtechnique if mitre else None,
@@ -629,7 +630,7 @@ class DetectionEngine:
         detection.confidence = max_confidence(detection.confidence, confidence)
         detection.summary = text.clean(result.summary, 1000)
         if result.details:
-            detection.details = text.bounded_data(result.details)
+            detection.details = text.bounded_tree(result.details)
         if meta.source == RuleSource.BUILTIN:
             detection.rule_version = meta.version
         # Fase 5A: en reglas custom/Sigma la detección conserva la versión que la CREÓ (su

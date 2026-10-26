@@ -6,6 +6,7 @@ import { RequireAuth, RequirePermission } from "./auth/RequireAuth";
 import { Layout } from "./components/Layout";
 import { DashboardPage } from "./pages/DashboardPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { networkTabRoutes, RedirectKeepingQuery } from "./pages/network/NetworkRoutes";
 import { LoadingState } from "./components/StateViews";
 
 // Fase 6E: el bundle principal solo lleva la sesión, el layout y el dashboard (la página de
@@ -24,8 +25,8 @@ const NetworkPage = lazy(() => import("./pages/NetworkPage").then((m) => ({ defa
 const RiskPage = lazy(() => import("./pages/RiskPage").then((m) => ({ default: m.RiskPage })));
 const SettingsPage = lazy(() => import("./pages/SettingsPage").then((m) => ({ default: m.SettingsPage })));
 const UsersPage = lazy(() => import("./pages/UsersPage").then((m) => ({ default: m.UsersPage })));
-// Fase 6E: DHCP, excepciones de reglas, investigaciones forenses y aislamiento.
-const DhcpPage = lazy(() => import("./pages/DhcpPage").then((m) => ({ default: m.DhcpPage })));
+// Fase 6E: excepciones de reglas, investigaciones forenses y aislamiento. DHCP vive desde la
+// Fase 7A.5 en Red › Identidad y evidencias.
 const DetectionExclusionsPage = lazy(() =>
   import("./pages/DetectionExclusionsPage").then((m) => ({ default: m.DetectionExclusionsPage })),
 );
@@ -49,6 +50,8 @@ const IncidentsPage = lazy(() => import("./pages/IncidentsPage").then((m) => ({ 
 const IncidentDetailPage = lazy(() =>
   import("./pages/IncidentDetailPage").then((m) => ({ default: m.IncidentDetailPage })),
 );
+// Mis tareas (Fase 7A.6): mismo grupo funcional que los incidentes.
+const MyTasksPage = lazy(() => import("./pages/MyTasksPage").then((m) => ({ default: m.MyTasksPage })));
 const incidentsFallback = <LoadingState label="Cargando incidentes…" />;
 // Reglas de detección (Fase 5A): también en su propio chunk (editor e importación Sigma).
 // Vulnerabilidades (Fase 5B) en su propio chunk.
@@ -98,8 +101,6 @@ const InfrastructureDevicePage = lazy(() =>
 // Fase 6C.3: inventario Wi-Fi / AP / WLAN en su propio chunk.
 const WlanPage = lazy(() => import("./pages/WlanPage").then((m) => ({ default: m.WlanPage })));
 const infrastructureFallback = <LoadingState label="Cargando infraestructura…" />;
-// Topología de red (Fase 6D): su propio chunk (lienzo SVG y exportación).
-const TopologyPage = lazy(() => import("./pages/TopologyPage").then((m) => ({ default: m.TopologyPage })));
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
 
 export function AppRoutes() {
@@ -118,7 +119,10 @@ export function AppRoutes() {
           <Route index element={<DashboardPage />} />
           <Route path="assets/:assetId" element={page(<AssetDetailPage />)} />
           <Route path="agents" element={page(<AgentsPage />)} />
-          <Route path="network" element={page(<NetworkPage />)} />
+          {/* Fase 7A.5: Red es un hub con una ruta por pestaña (/network, /network/devices...). */}
+          <Route path="network" element={page(<NetworkPage />)}>
+            {networkTabRoutes()}
+          </Route>
           <Route path="risk" element={page(<RiskPage />)} />
           <Route path="alerts" element={page(<AlertsPage />)} />
           <Route path="detections" element={page(<DetectionsPage />)} />
@@ -260,6 +264,16 @@ export function AppRoutes() {
             }
           />
           <Route
+            path="incidents/tasks"
+            element={
+              <RequirePermission permission="incidents:read">
+                <Suspense fallback={incidentsFallback}>
+                  <MyTasksPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
             path="incidents/:incidentId"
             element={
               <RequirePermission permission="incidents:read">
@@ -376,20 +390,9 @@ export function AppRoutes() {
               </RequirePermission>
             }
           />
-          <Route
-            path="topology"
-            element={
-              <RequirePermission permission="monitoring:read">
-                <Suspense fallback={<LoadingState label="Cargando topología…" />}>
-                  <TopologyPage />
-                </Suspense>
-              </RequirePermission>
-            }
-          />
-          <Route
-            path="dhcp"
-            element={<RequirePermission permission="monitoring:read">{page(<DhcpPage />, infrastructureFallback)}</RequirePermission>}
-          />
+          {/* Páginas absorbidas por el hub Red (Fase 7A.5): los enlaces antiguos siguen valiendo. */}
+          <Route path="topology" element={<RedirectKeepingQuery to="/network/topology" />} />
+          <Route path="dhcp" element={<RedirectKeepingQuery to="/network/identity" />} />
           <Route
             path="investigations"
             element={<RequirePermission permission="forensics:read">{page(<InvestigationsPage />)}</RequirePermission>}

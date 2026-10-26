@@ -147,6 +147,20 @@ os.environ["FORENSICS_PACKAGE_MAX_MB"] = "64"
 os.environ["ISOLATION_ENABLED"] = "false"
 os.environ["ISOLATION_MAX_MINUTES"] = "240"
 os.environ["ISOLATION_DEFAULT_MINUTES"] = "60"
+# Fase 7A: Analyst Tool Engine con sus valores por defecto (un .env de desarrollo con otros
+# topes cambiaría qué peticiones responden 429); los tests de límites construyen sus ajustes.
+os.environ["DISCOVERY_FINGERPRINT"] = "true"
+os.environ["ANALYST_TOOLS_ENABLED"] = "true"
+os.environ["ANALYST_TOOLS_MAX_CONCURRENT_PER_USER"] = "3"
+os.environ["ANALYST_TOOLS_MAX_CONCURRENT"] = "12"
+os.environ["ANALYST_TOOLS_PER_USER_PER_MINUTE"] = "600"
+os.environ["ANALYST_TOOLS_RESULT_MAX_KB"] = "256"
+os.environ["ANALYST_TOOLS_PREVIEW_TTL_MINUTES"] = "15"
+os.environ["ANALYST_TOOLS_RETENTION_DAYS"] = ""
+# Fase 7A (corrección): sin base OUI. Un DISCOVERY_OUI_FILE del .env de desarrollo cambia el
+# fabricante de las MAC de prueba (00:00:00:... es de Xerox en el registro del IEEE) y con él
+# la identificación; los tests que necesitan una base OUI la construyen ellos.
+os.environ["DISCOVERY_OUI_FILE"] = ""
 # test_viewer_cannot_mutate_anything recorre todas las rutas mutables con un mismo usuario y
 # desde 6B son más de 120 (el límite por defecto por minuto): sin esto respondería 429.
 os.environ["API_MUTATIONS_PER_USER_PER_MINUTE"] = "1000"
@@ -307,8 +321,9 @@ def client(engine: Engine) -> Iterator[TestClient]:
     with engine.begin() as connection:
         connection.execute(
             text(
-                "TRUNCATE evidence_packages, investigation_notes, forensic_artifacts,"
-                " investigations, detection_exclusions, endpoint_activity, process_instances,"
+                "TRUNCATE tool_executions, evidence_packages, investigation_notes,"
+                " forensic_artifacts, investigations, detection_exclusions, endpoint_activity,"
+                " process_instances,"
                 " asset_identity_history, dhcp_leases, dhcp_sources,"
                 " network_changes, topology_snapshots, topology_links, topology_builds,"
                 " system_events, asset_inventories,"

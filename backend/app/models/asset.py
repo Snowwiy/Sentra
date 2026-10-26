@@ -177,6 +177,13 @@ class Asset(Base):
     custom_label_version: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     custom_label_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     custom_label_updated_by: Mapped[str | None] = mapped_column(String(64))
+    # --- Tipo manual (Fase 7A.4) ------------------------------------------------------------
+    # Tipo que fija una persona (admin) cuando la identificación automática no acierta o no
+    # llega. Manda sobre la inferencia (classify.MANUAL) sin borrar sus evidencias. Comparte
+    # custom_label_version como token de concurrencia de "lo que la persona escribió".
+    manual_device_type: Mapped[str | None] = mapped_column(String(32))
+    manual_device_type_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    manual_device_type_by: Mapped[str | None] = mapped_column(String(64))
     # How discovery saw it: any of "icmp", "tcp", "arp".
     discovery_sources: Mapped[list[str] | None] = mapped_column(JSONB)
     # Allowed network (CIDR) of the run that last saw it.

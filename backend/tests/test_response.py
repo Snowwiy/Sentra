@@ -916,28 +916,3 @@ def test_response_disabled_refuses_everything(client: TestClient, db: Session) -
     assert getattr(caught.value, "code", None) == "response_disabled"
     asset = db.scalar(select(Asset).where(Asset.public_id == UUID(agent["asset_id"])))
     assert asset is not None and service.pending_count(asset) == 0
-
-
-# --- Capa de herramientas (futura Analyst Console) -----------------------------------------
-
-
-def test_tool_registry_is_closed_and_uses_the_engine(client: TestClient, db: Session) -> None:
-    from app.response import tools
-
-    assert set(tools.TOOLS) == {
-        "response.list_actions", "response.preview", "response.execute", "response.status",
-        "playbooks.list", "playbooks.preview", "playbooks.execute",
-    }  # fmt: skip
-    agent = _agent(client)
-    service = _service(db)
-    admin = _admin_operator(db)
-    listed = tools.call(service, admin, "response.list_actions", {})
-    assert any(item["id"] == "recalculate_risk" for item in listed["items"])
-    out = tools.call(
-        service, admin, "response.execute",
-        {"action_id": "recalculate_risk", "target_id": agent["asset_id"]},
-    )  # fmt: skip
-    status = tools.call(service, admin, "response.status", {"execution_id": out["execution_id"]})
-    assert status["status"] == "succeeded"
-    with pytest.raises(KeyError):
-        tools.call(service, admin, "shell.run", {"cmd": "whoami"})

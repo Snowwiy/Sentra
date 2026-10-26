@@ -32,7 +32,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from sentra_sensor import names
+from sentra_sensor import fingerprint, names
+from sentra_sensor.fingerprint import FingerprintProber
 from sentra_sensor.jobs import DiscoveryParameters
 from sentra_sensor.names import IdentityProber, SsdpResponse
 
@@ -356,6 +357,7 @@ class Scanner:
         neighbors: NeighborReader | None = None,
         resolver: ReverseResolver | None = None,
         identity: IdentityProber | None = None,
+        fingerprints: FingerprintProber | None = None,
     ) -> None:
         self._params = params
         self._emit = emit
@@ -366,6 +368,8 @@ class Scanner:
         self._neighbors = neighbors if params.arp else None
         self._resolver = resolver if params.reverse_dns else None
         self._identity = identity if params.identify else None
+        # Fase 7A.4: huellas de servicio (v3), con el mismo presupuesto que los nombres.
+        self._fingerprints = fingerprints if params.fingerprint else None
         self._ssdp: dict[str, SsdpResponse] = {}
         # Presupuesto de sondas de nombre (Corrección 6C); None = sin límite propio.
         self._names_left = params.max_name_queries
@@ -390,6 +394,8 @@ class Scanner:
             self._error("reverse_dns requested but not available on this sensor")
         if params.identify and identity is None:
             self._error("name probes requested but not available on this sensor")
+        if params.fingerprint and fingerprints is None:
+            self._error("fingerprint probes requested but not available on this sensor")
 
     def _error(self, message: str) -> None:
         if len(self._errors) < MAX_ERRORS:
@@ -600,6 +606,47 @@ class Scanner:
             _guarded_probe(self, address, "upnp", upnp),
         )
 
+    async def _fingerprint(self, observation: Observation) -> None:
+        """Servicios DNS-SD y huellas web/TLS de un host vivo, solo en sus puertos abiertos."""
+        prober = self._fingerprints
+        if prober is None:
+            return
+        address = observation.address
+        timeout = max(self._params.timeout_ms / 1000, 1.0)
+        found = observation.identity
+        open_ports = {p for p, state in observation.ports.items() if state == PORT_OPEN}
+        web: list[dict[str, Any]] = []
+
+        async def services() -> None:
+            if self._names_allowed():
+                result = await self._limited(lambda: prober.mdns_services(address, timeout))
+                if result is not None:
+                    if result.services:
+                        found["mdns_services"] = list(result.services)
+                    if result.model:
+                        found["mdns_model"] = result.model
+
+        def web_probe(port: int, tls: bool) -> Callable[[], Any]:
+            async def probe() -> None:
+                if self._names_allowed():
+                    result = await self._limited(
+                        lambda: prober.web(address, port, tls, timeout * 2)
+                    )
+                    if result is not None:
+                        web.append(result.as_dict())
+
+            return probe
+
+        await asyncio.gather(
+            _guarded_probe(self, address, "mdns services", services),
+            *(
+                _guarded_probe(self, address, f"web {port}", web_probe(port, tls))
+                for port, tls in fingerprint.pick_ports(open_ports)
+            ),
+        )
+        if web:
+            found["web"] = sorted(web, key=lambda item: int(item["port"]))
+
     async def _finish_chunk(self, pending: dict[str, Observation], allow_slow: bool = True) -> None:
         if self._neighbors is not None:
             table = self._neighbors.read()
@@ -631,6 +678,8 @@ class Scanner:
                         observation.forward_dns_match = observation.address in addresses
         if self._identity is not None and allow_slow and alive:
             await asyncio.gather(*(self._names(o) for o in alive))
+        if self._fingerprints is not None and allow_slow and alive:
+            await asyncio.gather(*(self._fingerprint(o) for o in alive))
         for observation in alive:
             # Un host que respondió no es "unprobed" aunque alguna sonda suelta fallase.
             self._failed.discard(observation.address)

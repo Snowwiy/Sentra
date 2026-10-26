@@ -128,6 +128,27 @@ class IncidentRelationError(SentraError):
     code = "incident_invalid_reference"
 
 
+class CaseTaskConflictError(ConflictError):
+    # Fase 7A.6: la tarea cambió desde que el cliente la leyó (token `version` obsoleto).
+    code = "task_conflict"
+
+
+class CaseTaskStateError(ConflictError):
+    # Fase 7A.6: transición de tarea no permitida, o tarea terminada que ya no admite cambios.
+    code = "task_invalid_state"
+
+
+class NetworkControlConflictError(ConflictError):
+    # Fase 7A.6: la solicitud de control cambió desde que el cliente la leyó.
+    code = "network_control_conflict"
+
+
+class NetworkControlStateError(ConflictError):
+    # Fase 7A.6: la solicitud ya no está en un estado que permita la acción (aprobada,
+    # rechazada, caducada...). 409: lo impide el estado, no la forma de la petición.
+    code = "network_control_invalid_state"
+
+
 class IncidentAlreadyLinkedError(ConflictError):
     # La detección/alerta ya pertenece a un incidente activo: se ofrece adjuntar o abrir
     # ese caso en lugar de crear un duplicado (anti incident-flood).

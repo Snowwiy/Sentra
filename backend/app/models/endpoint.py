@@ -114,7 +114,17 @@ class ProcessInstance(Base):
     last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
 
 
-EXCLUSION_FIELDS = ("exe", "name", "sha256", "signer", "parent_name", "remote_address")
+EXCLUSION_FIELDS = (
+    "exe",
+    "name",
+    "sha256",
+    "signer",
+    "parent_name",
+    "remote_address",
+    # Fase 7A.8: ruta y hash del script de un 4104 (agente 0.6.0).
+    "script_path",
+    "script_sha256",
+)
 
 
 class DetectionExclusion(Base):
@@ -130,6 +140,13 @@ class DetectionExclusion(Base):
         Index("ix_detection_exclusions_rule", "rule_id"),
         Index("ix_detection_exclusions_asset", "asset_id"),
         CheckConstraint(_in("field", EXCLUSION_FIELDS), name="ck_detection_exclusions_field"),
+        CheckConstraint(
+            "require_sha256 IS NULL OR require_sha256 ~ '^[0-9a-f]{64}$'",
+            name="ck_detection_exclusions_require_sha256",
+        ),
+        CheckConstraint(
+            "port IS NULL OR port BETWEEN 1 AND 65535", name="ck_detection_exclusions_port"
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -148,3 +165,8 @@ class DetectionExclusion(Base):
     # Cuántas veces evitó una detección (lo actualiza el motor) y la última.
     hits: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     last_hit_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 7A.8: condiciones adicionales que también deben cumplirse. `require_sha256` ata
+    # una excepción de ruta a un contenido concreto (si el fichero cambia, la detección
+    # vuelve); `port` limita una excepción de proceso a un puerto.
+    require_sha256: Mapped[str | None] = mapped_column(String(64))
+    port: Mapped[int | None] = mapped_column(Integer)

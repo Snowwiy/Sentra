@@ -259,6 +259,10 @@ def purge_old_data() -> None:
         # Fase 6E: retenciones propias de los módulos nuevos (topología, DHCP, telemetría).
         # Cada una tiene su plazo y nunca borra lo preservado por incidentes o investigaciones.
         extra = purge_phase_6e(session, settings)
+        # Fase 7A: historial de herramientas (opt-in; nunca lo vinculado a un caso).
+        from app.services.tool_service import ToolEngine
+
+        extra["tool_executions"] = ToolEngine(session, settings).purge()
     if any(extra.values()):
         logger.info("phase 6e data purged", extra={f"purged_{k}": v for k, v in extra.items()})
     if result.total:
@@ -314,6 +318,14 @@ def run_response_engine() -> None:
         counts = ResponseService(session, get_settings(), get_discovery_runner).sweep()
         # Fase 6E.7: sesiones de aislamiento cuyo comando acaba de cerrarse sin resultado.
         isolation = sweep_isolation(session)
+        # Fase 7A: vistas previas de herramientas caducadas y ejecuciones interrumpidas.
+        from app.services.tool_service import ToolEngine
+
+        ToolEngine(session, get_settings()).sweep()
+        # Fase 7A.6: solicitudes de control de red pendientes o aprobadas que caducaron.
+        from app.services.case_operations_service import expire_controls
+
+        expire_controls(session)
     if any(counts[key] for key in ("expired", "timed_out", "cancelled", "redelivered")):
         logger.info("response sweep", extra={f"response_{k}": v for k, v in counts.items()})
     if any(isolation.values()):

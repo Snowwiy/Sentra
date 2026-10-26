@@ -32,6 +32,9 @@ ADVANCED_SCHEMA_VERSION = 1
 # `max_name_queries` (presupuesto de esas sondas). Solo se envía a sensores que declaran
 # network.discovery.names; los demás siguen recibiendo exactamente v1.
 NAMES_SCHEMA_VERSION = 2
+# Fase 7A.4: v3 = v2 + `fingerprint` (huellas DNS-SD/HTTP/TLS). Solo para sensores que
+# declaran network.discovery.fingerprint; los demás siguen recibiendo v2 o v1.
+FINGERPRINT_SCHEMA_VERSION = 3
 
 # Topes fijos (sin variable de entorno): por encima de esto un TCP connect o una consulta DNS
 # ya no aportan evidencia útil en una red interna y solo alargan el scan.
@@ -133,6 +136,9 @@ class ScanProfile:
     # Sondas de nombre de la Fase 4E (mDNS/NetBIOS/UPnP). Desde la Corrección 6C también en
     # sensores >= 0.5.0 (network.discovery.names), con el presupuesto max_name_queries.
     identify: bool
+    # Fase 7A.4: huellas de servicio (DNS-SD, HTTP, TLS) en puertos ya abiertos. En sensores,
+    # solo los que declaran network.discovery.fingerprint (>= 0.7.0).
+    fingerprint: bool
     limits: Limits
 
 
@@ -172,6 +178,7 @@ def profiles(settings: Settings) -> dict[str, ScanProfile]:
             reverse_dns=False,
             forward_dns=False,
             identify=False,
+            fingerprint=False,
             limits=Limits(500, 1000, 32, 100, 0, hosts, 16, 10, 0),
         ),
         "standard": ScanProfile(
@@ -187,6 +194,7 @@ def profiles(settings: Settings) -> dict[str, ScanProfile]:
             reverse_dns=True,
             forward_dns=True,
             identify=True,
+            fingerprint=True,
             limits=Limits(800, 1500, 64, 200, 1, hosts, 64, 30, 2048),
         ),
         "deep": ScanProfile(
@@ -202,6 +210,7 @@ def profiles(settings: Settings) -> dict[str, ScanProfile]:
             reverse_dns=True,
             forward_dns=True,
             identify=True,
+            fingerprint=True,
             limits=Limits(1200, 2000, 32, 100, 1, hosts, 128, 60, 4096),
         ),
     }
@@ -230,7 +239,12 @@ class ResolvedProfile:
         return self.profile.name
 
     def parameters(
-        self, target: str, *, for_sensor: bool = False, sensor_names: bool = False
+        self,
+        target: str,
+        *,
+        for_sensor: bool = False,
+        sensor_names: bool = False,
+        sensor_fingerprint: bool = False,
     ) -> dict[str, Any]:
         """Parámetros fijos del job (esquema versionado discovery_advanced v1 o v2).
 
@@ -260,10 +274,14 @@ class ResolvedProfile:
         }
         if not for_sensor:
             params["identify"] = self.profile.identify
+            params["fingerprint"] = self.profile.fingerprint
         elif sensor_names and self.profile.identify:
             params["schema_version"] = NAMES_SCHEMA_VERSION
             params["identify"] = True
             params["max_name_queries"] = limits.max_dns_queries
+            if sensor_fingerprint and self.profile.fingerprint:
+                params["schema_version"] = FINGERPRINT_SCHEMA_VERSION
+                params["fingerprint"] = True
         return params
 
 
@@ -356,6 +374,7 @@ def scan_config(params: dict[str, Any], server: ScanConfig) -> ScanConfig:
         icmp=bool(params["icmp"]) and server.icmp,
         reverse_dns=bool(params["reverse_dns"]) and server.reverse_dns,
         identify=bool(params.get("identify", False)) and server.identify,
+        fingerprint=bool(params.get("fingerprint", False)) and server.fingerprint,
         deadline=float(params["deadline_seconds"]),
         tcp_retries=int(params["tcp_retries"]),
         forward_dns=bool(params["forward_dns"]) and server.reverse_dns,

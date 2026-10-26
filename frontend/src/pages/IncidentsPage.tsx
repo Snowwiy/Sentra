@@ -137,11 +137,16 @@ export function IncidentsPage() {
             </p>
           )}
         </div>
-        {auth.can("incidents:manage") && (
-          <button type="button" className="button button--primary" onClick={() => setCreating(true)}>
-            Nuevo incidente
-          </button>
-        )}
+        <div className="actions">
+          <Link to="/incidents/tasks" className="button">
+            Mis tareas
+          </Link>
+          {auth.can("incidents:manage") && (
+            <button type="button" className="button button--primary" onClick={() => setCreating(true)}>
+              Nuevo incidente
+            </button>
+          )}
+        </div>
       </div>
 
       <section className="stats stats--6" aria-label="Resumen de incidentes">

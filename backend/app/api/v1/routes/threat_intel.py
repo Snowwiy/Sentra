@@ -472,6 +472,7 @@ def incident_from_match(
                 title=body.title,
                 description=body.description,
                 priority=IncidentLevel(body.priority) if body.priority else None,
+                owner_user_id=body.owner_user_id,
             ),
         )
         audit_service.record(

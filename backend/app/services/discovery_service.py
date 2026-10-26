@@ -37,10 +37,12 @@ from sqlalchemy import exists, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.core.config import Settings
+from app.core.config import Settings, get_settings
 from app.core.exceptions import ConflictError, NotFoundError
 from app.detection.recorder import SignalRecorder
+from app.dhcp.service import schedule_reads_after_discovery
 from app.discovery import probes
+from app.discovery.fingerprint import FingerprintProber
 from app.discovery.names import IdentityProber
 from app.discovery.ports import SENSITIVE_PORTS, SERVICE_HINTS, parse_ports
 from app.discovery.profiles import ResolvedProfile, check_scope, scan_config
@@ -126,6 +128,7 @@ class DiscoveryConfig:
                 icmp=settings.discovery_icmp,
                 reverse_dns=settings.discovery_reverse_dns,
                 identify=settings.discovery_identify,
+                fingerprint=settings.discovery_identify and settings.discovery_fingerprint,
                 deadline=settings.discovery_job_timeout_minutes * 60,
             ),
             offline_after_misses=settings.discovery_offline_after_misses,
@@ -239,6 +242,7 @@ class DiscoveryService:
         *,
         prober_factory: Callable[[], Prober] | None = None,
         identity_factory: Callable[[], IdentityProber] | None = None,
+        fingerprint_factory: Callable[[], FingerprintProber] | None = None,
         gateways: Callable[[], set[str]] = probes.default_gateways,
         cancel: threading.Event | None = None,
     ) -> None:
@@ -247,6 +251,7 @@ class DiscoveryService:
         self._thresholds = thresholds
         self._prober_factory = prober_factory
         self._identity_factory = identity_factory
+        self._fingerprint_factory = fingerprint_factory
         self._gateways = gateways
         # Parada de todo el proceso (shutdown). La cancelación de un job concreto la pide un
         # operador en la base de datos y la recoge _ProgressReporter.
@@ -431,8 +436,13 @@ class DiscoveryService:
         try:
             prober = self._prober_factory() if self._prober_factory else None
             identity = self._identity_factory() if self._identity_factory else None
+            fingerprints = self._fingerprint_factory() if self._fingerprint_factory else None
             scanner = NetworkScanner(
-                scan or self._config.scan, prober, _AnySet(self._cancel, operator_cancel), identity
+                scan or self._config.scan,
+                prober,
+                _AnySet(self._cancel, operator_cancel),
+                identity,
+                fingerprints,
             )
             reporter = _ProgressReporter(
                 self._sessions, job_id, scanner, operator_cancel, self._config.progress_interval
@@ -771,6 +781,9 @@ class ResultApplier:
         else:
             job.status = DiscoveryJobStatus.COMPLETED
             job.stop_reason = None
+            # Fase 7A.4: leases DHCP frescos para los hosts que acaba de ver el discovery
+            # (local o de sensor), sin que nadie tenga que pedir la lectura.
+            schedule_reads_after_discovery(self._session, get_settings(), self._site_id)
         job.completed_at = datetime.now(UTC)
         job.heartbeat_at = job.completed_at
         # Hosts realmente evaluados: en un scan parcial son menos que el total. Un host que

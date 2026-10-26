@@ -10,7 +10,12 @@ from typing import Any
 import pytest
 
 from app.detection.custom import mitre, safe_regex, sigma
-from app.detection.custom.catalog import AGENT_DATA_FIELDS, AGENT_EVENT_CODES, LOGSOURCES
+from app.detection.custom.catalog import (
+    AGENT_COMPUTED_FIELDS,
+    AGENT_DATA_FIELDS,
+    AGENT_EVENT_CODES,
+    LOGSOURCES,
+)
 from app.detection.custom.definition import compile_definition, content_hash
 from app.detection.custom.runtime import CustomRule, CustomRuleIndex, rule_from_version
 
@@ -265,6 +270,8 @@ def test_catalog_fields_match_what_the_agent_really_sends() -> None:
         assert set(AGENT_DATA_FIELDS.get(channel, ())) == sent, channel
         if channel in AGENT_EVENT_CODES:
             assert set(AGENT_EVENT_CODES[channel]) >= set(by_code), channel
+    computed = set(module.SCRIPT_BLOCK_CONTEXT_FIELDS)
+    assert set(AGENT_COMPUTED_FIELDS[module.POWERSHELL_CHANNEL]) == computed
     # Nunca contenido de scripts ni línea de comandos: el agente no los envía.
     every = {name for names in AGENT_DATA_FIELDS.values() for name in names}
     assert not every & {"ScriptBlockText", "CommandLine"}

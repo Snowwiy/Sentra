@@ -10,7 +10,7 @@ Dos superficies separadas:
 import ipaddress
 import re
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 from uuid import UUID
 
 from pydantic import AwareDatetime, Field, field_validator
@@ -363,6 +363,8 @@ class PortObservation(RequestModel):
 # igual que en el discovery local (app/discovery/names.py: MAX_TEXT, clean_text).
 _DEVICE_TEXT = r"^[^\x00-\x1f\x7f]{1,128}$"
 _DEVICE_NAME = r"^[A-Za-z0-9_][A-Za-z0-9_.-]{0,252}$"
+# Tipo de servicio DNS-SD (RFC 6763): "_ipp._tcp".
+_SERVICE_TYPE = r"^_[a-z0-9][a-z0-9-]{0,62}\._(tcp|udp)$"
 
 
 class SensorUpnpIn(RequestModel):
@@ -371,6 +373,19 @@ class SensorUpnpIn(RequestModel):
     model_name: str | None = Field(default=None, pattern=_DEVICE_TEXT)
     model_number: str | None = Field(default=None, pattern=_DEVICE_TEXT)
     device_type: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+
+
+class SensorWebIn(RequestModel):
+    """Fase 7A.4: huella de un puerto web o TLS ya abierto (cabecera Server, título, sujeto
+    del certificado). Texto del dispositivo, sin interpretar."""
+
+    port: int = Field(ge=1, le=65535)
+    tls: bool
+    server: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    title: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    cert_cn: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    cert_org: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    self_signed: bool | None = None
 
 
 class SensorIdentityIn(RequestModel):
@@ -385,6 +400,12 @@ class SensorIdentityIn(RequestModel):
     netbios_name: str | None = Field(default=None, pattern=_DEVICE_NAME, max_length=15)
     ssdp_server: str | None = Field(default=None, pattern=_DEVICE_TEXT)
     upnp: SensorUpnpIn | None = None
+    # Fase 7A.4 (discovery_advanced v3): servicios DNS-SD, modelo publicado y huellas web/TLS.
+    mdns_services: list[Annotated[str, Field(pattern=_SERVICE_TYPE)]] | None = Field(
+        default=None, max_length=24
+    )
+    mdns_model: str | None = Field(default=None, pattern=_DEVICE_TEXT)
+    web: list[SensorWebIn] | None = Field(default=None, max_length=2)
 
 
 class ObservationIn(RequestModel):

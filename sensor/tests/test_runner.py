@@ -50,6 +50,8 @@ def test_heartbeat_payload_is_safe(config: LocalConfig, server: FakeServer) -> N
         "network.discovery.basic",
         "network.discovery.advanced",
         "network.discovery.names",
+        # Fase 7A: huellas DNS-SD, HTTP y certificado TLS (discovery_advanced v3).
+        "network.discovery.fingerprint",
         "network.dns",
         "network.tcp",
         "network.icmp",

@@ -110,7 +110,12 @@ def find_discovered_match(
 
 
 _NETWORK_GEAR = frozenset(
-    {DeviceType.ROUTER.value, DeviceType.NETWORK_SWITCH.value, DeviceType.ACCESS_POINT.value}
+    {
+        DeviceType.ROUTER.value,
+        DeviceType.NETWORK_SWITCH.value,
+        DeviceType.ACCESS_POINT.value,
+        DeviceType.NETWORK_DEVICE.value,
+    }
 )
 
 

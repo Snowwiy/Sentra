@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-// Fase 6E: páginas de DHCP, excepciones de reglas, aislamiento en vivo e investigaciones, y
+// Fase 6E: fuentes DHCP (desde la Fase 7A.5 dentro de Red), excepciones de reglas, aislamiento en vivo e investigaciones, y
 // las pestañas nuevas del activo, con el control de permisos de cada rol. Datos sintéticos.
 import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
@@ -7,13 +7,13 @@ import type { ReactNode } from "react";
 import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { DetectionExclusion, DhcpSource, Role } from "../api/types";
+import { DhcpPanels } from "../components/dhcp/DhcpPanels";
 import { WithRole } from "../test/auth";
 import { asset, ASSET_ID, isolationOverview, isolationSession } from "../test/phase6e";
 import { installFetch, type Call, type Handler } from "../test/sites";
 import { AssetDetailPage } from "./AssetDetailPage";
 import { ContainmentPage } from "./ContainmentPage";
 import { DetectionExclusionsPage } from "./DetectionExclusionsPage";
-import { DhcpPage } from "./DhcpPage";
 import { InvestigationsPage } from "./InvestigationsPage";
 
 const ISO = "2026-10-22T10:00:00Z";
@@ -61,7 +61,8 @@ function dhcpSource(overrides: Partial<DhcpSource> = {}): DhcpSource {
   };
 }
 
-describe("DhcpPage", () => {
+// Fase 7A.5: las fuentes y concesiones DHCP viven en Red › Identidad y evidencias.
+describe("DHCP (Red › Identidad y evidencias)", () => {
   function setup(): Call[] {
     return installFetch({
       "GET /dhcp/sources": () => ({ body: { items: [dhcpSource()] } }),
@@ -109,7 +110,7 @@ describe("DhcpPage", () => {
 
   it("viewer: ve fuentes y concesiones, sin acciones de gestión", async () => {
     setup();
-    renderAt("/dhcp", "/dhcp", <DhcpPage />, "viewer");
+    renderAt("/network/identity", "/network/identity", <DhcpPanels />, "viewer");
     expect(await screen.findByText("router-casa", { selector: "td" })).toBeInTheDocument();
     expect(await screen.findByText("pixel-7", { selector: "td" })).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Nueva fuente" })).toBeNull();
@@ -118,7 +119,7 @@ describe("DhcpPage", () => {
 
   it("admin: importa el texto de un fichero con la versión de la fuente", async () => {
     const calls = setup();
-    renderAt("/dhcp", "/dhcp", <DhcpPage />, "admin");
+    renderAt("/network/identity", "/network/identity", <DhcpPanels />, "admin");
     expect(await screen.findByRole("button", { name: "Nueva fuente" })).toBeInTheDocument();
     await screen.findByRole("button", { name: "Importar fichero" });
     const input = screen.getByLabelText("Fichero de concesiones") as HTMLInputElement;
@@ -151,6 +152,8 @@ function exclusion(overrides: Partial<DetectionExclusion> = {}): DetectionExclus
     active: true,
     hits: 3,
     last_hit_at: ISO,
+    require_sha256: null,
+    port: null,
     ...overrides,
   };
 }

@@ -146,9 +146,9 @@ describe("menú lateral", () => {
     const nav = await screen.findByRole("navigation", { name: "Navegación principal" });
     fireEvent.click(await within(nav).findByRole("button", { name: "Seguridad" }));
     expect(within(nav).queryByRole("link", { name: "Vulnerabilidades" })).toBeNull();
-    // El grupo General contiene Activos (página actual): no se pliega.
+    // El grupo General contiene el Panel (página actual): no se pliega.
     fireEvent.click(within(nav).getByRole("button", { name: "General" }));
-    expect(within(nav).getByRole("link", { name: "Activos" })).toBeInTheDocument();
+    expect(within(nav).getByRole("link", { name: "Panel" })).toBeInTheDocument();
   });
 });
 

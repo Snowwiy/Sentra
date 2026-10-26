@@ -114,6 +114,17 @@ Wi-Fi pasivo en Windows, Linux y macOS (campo `wireless` del inventario, sin esc
 contraseñas). Guía completa, decisiones de seguridad y lo que falta validar en un Mac físico:
 [docs/agent-macos-installation.md](../docs/agent-macos-installation.md).
 
+## Agente 0.6.0 (Fase 7A.8): contexto del evento 4104 de PowerShell
+
+- En los 4104 de nivel Warning envía la ruta del script, `ScriptBlockId`, el trozo
+  (`MessageNumber`/`MessageTotal`), el PID, el SID del usuario, el SHA-256 del fichero del script
+  y qué palabras de una lista cerrada contiene el bloque. El texto del script nunca sale del
+  equipo.
+- El hash solo se calcula para rutas locales con unidad (nunca UNC, dispositivos, flujos
+  alternativos ni enlaces) y ficheros de hasta 16 MiB.
+- Sin cambios de configuración: la de 0.5.0 sigue valiendo. Detalle y excepciones en
+  [powershell-detections.md](../docs/powershell-detections.md).
+
 ## Agente 0.5.0 (Fase 6E): actividad del endpoint, forense y aislamiento opcional
 
 - Actividad: inicio y fin de procesos con su padre (`instance_key` estable aunque el PID se

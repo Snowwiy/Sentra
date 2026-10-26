@@ -8,6 +8,7 @@ export function SortHeader<K extends string>({
   sort,
   onSort,
   numeric,
+  className,
 }: {
   label: string;
   sortKey: K;
@@ -15,12 +16,14 @@ export function SortHeader<K extends string>({
   onSort: (next: SortState<K>) => void;
   /** Numbers start from the highest value (most CPU first), text from A. */
   numeric?: boolean;
+  /** Clase de la celda (p. ej. col-secondary, que se oculta en tablet como sus celdas). */
+  className?: string;
 }) {
   const active = sort.key === sortKey;
   const firstDir: SortDir = numeric ? "desc" : "asc";
   const next: SortDir = active ? (sort.dir === "asc" ? "desc" : "asc") : firstDir;
   return (
-    <th aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
+    <th className={className} aria-sort={active ? (sort.dir === "asc" ? "ascending" : "descending") : "none"}>
       <button type="button" className="th-sort" onClick={() => onSort({ key: sortKey, dir: next })}>
         {label}
         <span className="th-sort__arrow" aria-hidden="true">

@@ -95,9 +95,10 @@ const tabFallback = <LoadingState label="Cargando…" />;
 const INVENTORY_TABS: Tab[] = ["processes", "services", "software", "network", "users"];
 const INVENTORY_REFRESH_MS = Math.max(config.refreshIntervalMs, 60_000);
 
+// Fase 7A.5: el detalle de un activo pertenece a Red › Dispositivos.
 const backLink = (
-  <Link to="/" className="back">
-    ← Activos
+  <Link to="/network/devices" className="back">
+    ← Dispositivos
   </Link>
 );
 
@@ -322,7 +323,7 @@ export function AssetDetailPage() {
         {tab === "overview" && (
           <div className="stack">
             <LifecyclePanel asset={asset} onChanged={refresh} />
-            <OverviewTab asset={asset} />
+            <OverviewTab asset={asset} onChanged={refresh} />
             <AIAnalyzePanel
               title="AI Insights del activo"
               buttonLabel="Analizar con IA"

@@ -5,6 +5,7 @@ import { errorMessage } from "../../lib/format";
 import { LEVEL_LABELS, LEVEL_ORDER } from "../../lib/incidents";
 import { useAssetOptions } from "../../lib/useAssetOptions";
 import { Modal } from "../Modal";
+import { OwnerSelect } from "./OwnerSelect";
 
 /**
  * Alta manual de un incidente (incidents:manage). Severidad y prioridad se eligen por
@@ -23,6 +24,7 @@ export function CreateIncidentModal({
   const [priority, setPriority] = useState<IncidentLevel>("medium");
   const [assetId, setAssetId] = useState("");
   const [assetQuery, setAssetQuery] = useState("");
+  const [owner, setOwner] = useState("");
   const assets = useAssetOptions(assetQuery, assetId);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
@@ -38,6 +40,7 @@ export function CreateIncidentModal({
         severity,
         priority,
         asset_ids: assetId ? [assetId] : [],
+        owner_user_id: owner || null,
       });
       onCreated(created);
     } catch (err) {
@@ -128,6 +131,7 @@ export function CreateIncidentModal({
             ))}
           </select>
         </label>
+        <OwnerSelect value={owner} onChange={setOwner} disabled={busy} />
         {error && (
           <div className="banner banner--warn" role="alert">
             {error}

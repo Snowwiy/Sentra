@@ -40,6 +40,10 @@ class IncidentCreate(RequestModel):
     # Opcional: juicio explícito del analista. Si no se indica queda vacía (no se inventa).
     confidence: IncidentConfidence | None = None
     asset_ids: list[UUID] = Field(default_factory=list, max_length=20)
+    # Fase 7A.6: responsable desde la creación (id público del usuario). Null = sin asignar.
+    # Mismas reglas que assign: un analyst solo puede elegirse a sí mismo; un admin, a
+    # cualquier analyst o admin activo.
+    owner_user_id: UUID | None = None
 
 
 class IncidentUpdate(RequestModel):
@@ -86,12 +90,16 @@ class IncidentNoteCreate(RequestModel):
 
 
 class IncidentPromote(RequestModel):
-    """Crear incidente desde una detección o alerta. Lo no indicado se deriva de ella."""
+    """Crear incidente desde una detección, alerta o riesgo. Lo no indicado se deriva de ella."""
 
     title: Title | None = None
     description: Description | None = None
     # Sin valor se usa la prioridad sugerida (ver `suggested_priority` en el servicio).
     priority: IncidentLevel | None = None
+    # Fase 7A.6: responsable desde la creación (id público del usuario). Null = sin asignar.
+    # Mismas reglas que assign: un analyst solo puede elegirse a sí mismo; un admin, a
+    # cualquier analyst o admin activo.
+    owner_user_id: UUID | None = None
 
 
 # --- Respuestas ----------------------------------------------------------------------------
@@ -300,6 +308,12 @@ class IncidentDetail(IncidentSummary):
     threat_matches: list[IncidentThreatMatchRef] = Field(default_factory=list)
     threat_matches_total: int = 0
     notes_total: int
+    # Fase 7A.6: trabajo delegado del caso (detalle en /incidents/{id}/tasks y
+    # /network-controls?incident_id=). Pendientes = open, in_progress o blocked.
+    tasks_total: int = 0
+    tasks_open: int = 0
+    # Solicitudes de control pendientes de decisión o aprobadas y vigentes.
+    network_controls_open: int = 0
     metrics: IncidentMetrics
     # Estados a los que la state machine permite pasar con PATCH (comodidad de UI; el
     # backend vuelve a validar cada transición).

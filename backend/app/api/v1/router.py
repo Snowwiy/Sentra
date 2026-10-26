@@ -9,6 +9,7 @@ from app.api.v1.routes import (
     assets,
     audit,
     auth,
+    case_operations,
     console,
     console_discovery,
     dashboard,
@@ -35,6 +36,7 @@ from app.api.v1.routes import (
     sites,
     telemetry,
     threat_intel,
+    tools,
     topology,
     topology_history,
     users,
@@ -65,7 +67,9 @@ api_router.include_router(detections.router, responses=_COMMON)
 api_router.include_router(detection_rules.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(incidents.router, responses=_COMMON)
+api_router.include_router(case_operations.router, responses=_COMMON)
 api_router.include_router(response.router, responses=_COMMON)
+api_router.include_router(tools.router, responses=_COMMON)
 api_router.include_router(reports.router, responses=_COMMON)
 api_router.include_router(vulnerabilities.router, responses=_COMMON)
 api_router.include_router(vulnerability_sources.router, responses=_COMMON)

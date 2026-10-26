@@ -80,3 +80,100 @@ class DashboardSummary(ResponseModel):
     vulnerabilities: DashboardVulnerabilities | None = None
     # Fase 5F: site al que se limita el resumen (null = todos los sites).
     site_id: UUID | None = None
+
+
+# --- Fase 7A.7: vista de seguridad del dashboard ----------------------------------------------
+
+
+class PostureMethod(ResponseModel):
+    """Cómo se calcula el indicador global: va en la respuesta para que la UI lo enseñe."""
+
+    formula: str
+    population: str
+    # Peso de cada criticidad de activo en la media ponderada.
+    weights: dict[str, int]
+    missing_data: str
+    thresholds: dict[str, int]
+    reference: str
+
+
+class SecurityPosture(ResponseModel):
+    """Riesgo global ponderado (fórmula v1, docs/security-dashboard.md).
+
+    `score` es null sin datos: nunca se rellena con un valor inventado.
+    """
+
+    formula_version: int
+    # ok: cobertura >= 50 %; partial: hay datos pero menos de la mitad de los activos tienen
+    # riesgo calculado; no_data: ningún activo con riesgo calculado.
+    state: Literal["ok", "partial", "no_data"]
+    score: int | None
+    level: str | None
+    # Peor activo: la media no debe ocultar un activo crítico.
+    peak_score: int | None
+    high_or_critical: int
+    assets_current: int
+    assets_scored: int
+    coverage: float
+    method: PostureMethod
+
+
+class RecentDetection(ResponseModel):
+    detection_id: UUID
+    rule_id: str
+    title: str
+    severity: str
+    status: str
+    asset_id: UUID
+    asset_name: str
+    last_seen_at: datetime
+
+
+class RiskHistoryPoint(ResponseModel):
+    day: datetime
+    # Activos con algún valor de riesgo conocido al final de ese día (historial disponible).
+    assets_scored: int
+    average_score: float | None
+    high: int
+    critical: int
+
+
+class NewDevice(ResponseModel):
+    asset_id: UUID
+    name: str
+    device_type: str | None
+    monitoring_method: str
+    first_seen_at: datetime
+
+
+class NewDevices(ResponseModel):
+    window_days: int
+    count: int
+    items: list[NewDevice]
+
+
+class ExposedPortCount(ResponseModel):
+    port: int
+    protocol: str
+    assets: int
+
+
+class ExposedPortSummary(ResponseModel):
+    open_ports: int
+    assets_with_open_ports: int
+    top: list[ExposedPortCount]
+
+
+class SecurityOverview(ResponseModel):
+    """GET /dashboard/security-overview (Fase 7A.7). Complementa a /dashboard/summary."""
+
+    generated_at: datetime
+    site_id: UUID | None
+    window_days: int
+    posture: SecurityPosture
+    # None si el rol no puede leer incidentes (incidents:read).
+    incidents_by_status: dict[str, int] | None
+    detections_recent: list[RecentDetection]
+    risk_history: list[RiskHistoryPoint]
+    new_devices: NewDevices
+    exposed_ports: ExposedPortSummary
