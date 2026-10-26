@@ -1,12 +1,12 @@
 import { useCallback, useRef, useState, type ChangeEvent, type FormEvent } from "react";
 import { Link } from "react-router-dom";
-import { sensorsApi } from "../api/sentra";
-import { dhcpApi } from "../api/sentra6e";
-import type { DhcpFormat, DhcpLeaseMatch, DhcpSource, DhcpSourceKind } from "../api/types";
-import { useAuth } from "../auth/AuthContext";
-import { FilterSelect, Pager, SearchInput } from "../components/ListControls";
-import { ConfirmDialog, Modal } from "../components/Modal";
-import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { sensorsApi } from "../../api/sentra";
+import { dhcpApi } from "../../api/sentra6e";
+import type { DhcpFormat, DhcpLeaseMatch, DhcpSource, DhcpSourceKind } from "../../api/types";
+import { useAuth } from "../../auth/AuthContext";
+import { FilterSelect, Pager, SearchInput } from "../ListControls";
+import { ConfirmDialog, Modal } from "../Modal";
+import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import {
   DHCP_FORMAT_LABELS,
   DHCP_IMPORT_MAX_CHARS,
@@ -17,11 +17,11 @@ import {
   LEASE_MATCH_LABELS,
   LEASE_STATE_LABELS,
   SENSOR_SOURCE_NAME,
-} from "../lib/dhcp";
-import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
-import { useDebounced } from "../lib/useDebounced";
-import { usePolling } from "../lib/usePolling";
-import { useSite } from "../site/SiteContext";
+} from "../../lib/dhcp";
+import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
+import { useDebounced } from "../../lib/useDebounced";
+import { usePolling } from "../../lib/usePolling";
+import { useSite } from "../../site/SiteContext";
 
 const LEASE_PAGE = 100;
 const REFRESH_MS = 60_000;
@@ -40,12 +40,13 @@ function readText(file: Blob): Promise<string> {
 }
 
 /**
- * Fuentes DHCP y concesiones (Fase 6E.2). Las concesiones dan nombre a los equipos solo con
- * coincidencia alta (MAC e IP en la ventana de la concesión) y nunca fusionan activos. Ver es
- * monitoring:read; declarar fuentes, importar ficheros y pedir lecturas a un sensor exige
- * dhcp:manage (admin), porque una fuente decide qué nombre ven todos.
+ * Fuentes DHCP y concesiones (Fase 6E.2), como bloque reutilizable: desde la Fase 7A.5 vive en
+ * Red › Identidad y evidencias en lugar de en una página propia. Las concesiones dan nombre a
+ * los equipos solo con coincidencia alta (MAC e IP en la ventana de la concesión) y nunca
+ * fusionan activos. Ver es monitoring:read; declarar fuentes, importar ficheros y pedir
+ * lecturas a un sensor exige dhcp:manage (admin), porque una fuente decide qué nombre ven todos.
  */
-export function DhcpPage() {
+export function DhcpPanels() {
   const auth = useAuth();
   const canManage = auth.can("dhcp:manage");
   const site = useSite();
@@ -60,28 +61,21 @@ export function DhcpPage() {
   };
 
   return (
-    <div className="page">
-      <div className="page__header">
-        <div>
-          <h1>DHCP</h1>
-          <p className="muted small">
-            Concesiones DHCP como fuente de identidad: una concesión con MAC e IP coincidentes da nombre al equipo (salvo que
-            tenga una etiqueta personalizada, que siempre prevalece). Sin APIs de routers: se importan ficheros o los lee un
-            sensor.
-          </p>
-        </div>
-        {canManage && (
-          <div className="actions">
+    <>
+      <section className="panel" aria-label="Fuentes DHCP">
+        <div className="panel__toolbar">
+          <div>
+            <h2>Fuentes DHCP</h2>
+            <p className="muted small">
+              Una concesión con MAC e IP coincidentes da nombre al equipo (salvo que tenga una etiqueta personalizada, que
+              siempre prevalece). Sin APIs de routers: se importan ficheros o los lee un sensor.
+            </p>
+          </div>
+          {canManage && (
             <button type="button" className="button button--primary" onClick={() => setCreating(true)}>
               Nueva fuente
             </button>
-          </div>
-        )}
-      </div>
-
-      <section className="panel" aria-label="Fuentes DHCP">
-        <div className="panel__toolbar">
-          <h2>Fuentes</h2>
+          )}
         </div>
         {sources.loading ? (
           <LoadingState label="Cargando fuentes…" />
@@ -111,7 +105,7 @@ export function DhcpPage() {
           }}
         />
       )}
-    </div>
+    </>
   );
 }
 

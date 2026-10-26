@@ -24,7 +24,8 @@ from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Protocol
 
-from app.discovery import names, probes
+from app.discovery import fingerprint, names, probes
+from app.discovery.fingerprint import FingerprintProber, MdnsServices, WebFingerprint
 from app.discovery.names import IdentityProber, SsdpResponse, UpnpDescription
 from app.discovery.ports import liveness_ports
 from app.discovery.probes import PortState
@@ -47,6 +48,9 @@ class ScanConfig:
     reverse_dns: bool = True
     # Sondas de nombre (mDNS, NetBIOS, SSDP/UPnP); ver app/discovery/names.py.
     identify: bool = True
+    # Fase 7A.4: huellas de servicio (DNS-SD, HTTP Server/título, certificado TLS) solo en
+    # puertos que el propio scan encontró abiertos; ver app/discovery/fingerprint.py.
+    fingerprint: bool = False
     # Seconds for the whole scan (None: no limit).
     deadline: float | None = None
     # Fase 6A (perfiles avanzados). Los valores por defecto reproducen exactamente el
@@ -75,6 +79,9 @@ class HostObservation:
     netbios_name: str | None = None
     ssdp: SsdpResponse | None = None
     upnp: UpnpDescription | None = None
+    # Fase 7A.4: servicios DNS-SD y modelo publicados, y huellas web/TLS.
+    services: MdnsServices | None = None
+    web: list[WebFingerprint] = field(default_factory=list)
     # State of every port that was probed.
     ports: dict[int, PortState] = field(default_factory=dict)
     # Fase 6A: menor tiempo de un TCP connect que obtuvo respuesta (open o RST), medido de
@@ -211,6 +218,7 @@ class NetworkScanner:
         prober: Prober | None = None,
         cancel: CancelSignal | None = None,
         identity: IdentityProber | None = None,
+        fingerprints: FingerprintProber | None = None,
     ) -> None:
         self._config = config
         self._prober: Prober = prober or SystemProber()
@@ -219,6 +227,9 @@ class NetworkScanner:
         if identity is None and prober is None and config.identify:
             identity = names.SystemIdentityProber()
         self._identity = identity if config.identify else None
+        if fingerprints is None and prober is None and config.fingerprint:
+            fingerprints = fingerprint.SystemFingerprintProber()
+        self._fingerprints = fingerprints if config.fingerprint else None
         self._ssdp: dict[str, SsdpResponse] = {}
         self._cancel: CancelSignal = cancel or threading.Event()
         self._errors: list[str] = []
@@ -345,6 +356,9 @@ class NetworkScanner:
         if self._identity is not None:
             tasks.append(self._names(address, obs))
         await asyncio.gather(*tasks)
+        if self._fingerprints is not None:
+            # Después de los puertos: las huellas web solo se piden a puertos ya abiertos.
+            await self._fingerprint(address, obs)
         self._details_done += 1
 
     # --- probes ---------------------------------------------------------------------------
@@ -488,6 +502,38 @@ class NetworkScanner:
         await asyncio.gather(
             guarded("mdns", mdns), guarded("netbios", netbios), guarded("upnp", upnp)
         )
+
+    async def _fingerprint(self, address: IPAddress, obs: HostObservation) -> None:
+        """DNS-SD y huellas web/TLS. Cada sonda falla por separado sin afectar al resto."""
+        prober = self._fingerprints
+        if prober is None:
+            return
+        host = str(address)
+        timeout = max(self._config.timeout, 1.0)
+
+        async def services() -> None:
+            obs.services = await self._limited(lambda: prober.mdns_services(host, timeout))
+
+        async def web(port: int, tls: bool) -> None:
+            found = await self._limited(lambda: prober.web(host, port, tls, timeout * 2))
+            if found is not None:
+                obs.web.append(found)
+
+        async def guarded(label: str, probe: Awaitable[None]) -> None:
+            try:
+                await probe
+            except _StopScanError:
+                raise
+            except Exception as exc:
+                self._error(f"{address} {label}: {exc!r}")
+
+        probes_ = [guarded("mdns services", services())]
+        probes_.extend(
+            guarded(f"web {port}", web(port, tls))
+            for port, tls in fingerprint.pick_ports(obs.open_ports)
+        )
+        await asyncio.gather(*probes_)
+        obs.web.sort(key=lambda item: item.port)
 
     # --- control --------------------------------------------------------------------------
 

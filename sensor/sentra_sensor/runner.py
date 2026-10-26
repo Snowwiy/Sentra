@@ -26,6 +26,7 @@ from sentra_sensor.client import ApiError, SensorClient, Transport, TransportErr
 from sentra_sensor.config import LocalConfig
 from sentra_sensor.credentials import CredentialError, CredentialStore, SensorIdentity
 from sentra_sensor.dhcp import MAX_LEASES_PER_BATCH, DhcpCollector, DhcpReport
+from sentra_sensor.fingerprint import FingerprintProber
 from sentra_sensor.jobs import (
     DhcpParameters,
     DiscoveryJob,
@@ -84,6 +85,8 @@ class ProberSet:
     resolver: ReverseResolver | None = None
     # Corrección 6C: sondas de nombre (mDNS, NetBIOS, SSDP/UPnP); None = no se hacen.
     identity: IdentityProber | None = None
+    # Fase 7A.4: huellas de servicio (DNS-SD, HTTP, TLS); None = no se hacen.
+    fingerprints: FingerprintProber | None = None
 
 
 SnmpTransportFactory = Callable[[SnmpParameters, SnmpCredentials], SnmpTransport]
@@ -745,6 +748,7 @@ class SensorRunner:
             neighbors=probers.neighbors,
             resolver=probers.resolver,
             identity=probers.identity,
+            fingerprints=probers.fingerprints,
         )
         active = ActiveJob(job=job, scanner=scanner, builder=builder)
         self.active = active

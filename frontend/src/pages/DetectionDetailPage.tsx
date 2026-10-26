@@ -12,10 +12,13 @@ import {
   DetectionStatusBadge,
 } from "../components/detections/DetectionBadges";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
+import { ExclusionDialog } from "../components/detections/ExclusionDialog";
+import { RuleDetailsPanel } from "../components/detections/RuleDetailsPanel";
 import { AssetContextSummary } from "../components/incidents/IncidentTabs";
 import { RelatedIncidentsPanel } from "../components/incidents/RelatedIncidentsPanel";
 import { InvestigateButton } from "../components/response/InvestigateButton";
 import { ErrorState, LoadingState } from "../components/StateViews";
+import { draftFromDetection, RULE_POLICIES } from "../lib/exclusionPolicy";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { SOURCE_LABELS } from "../lib/rules";
 import { usePolling } from "../lib/usePolling";
@@ -121,6 +124,47 @@ function DetectionActions({ detection, onChanged }: { detection: DetectionDetail
           </span>
         )}
       </div>
+    </section>
+  );
+}
+
+/**
+ * Fase 7A.8: excepción iniciada desde la detección (rules:manage, solo reglas integradas). Llega
+ * rellenada con los valores exactos de la detección: script con su hash o ejecutable en su puerto.
+ */
+function ExceptionSection({ detection }: { detection: DetectionDetail }) {
+  const auth = useAuth();
+  const [open, setOpen] = useState(false);
+  const [created, setCreated] = useState(false);
+  if (!auth.can("rules:manage") || detection.rule_source !== "builtin") return null;
+  const policy = RULE_POLICIES[detection.rule_id];
+  return (
+    <section className="panel panel--padded" aria-label="Excepción de la regla">
+      <h2>Excepción</h2>
+      <p className="muted small">
+        Si es una actividad legítima revisada, crea una excepción exacta para que la regla no la vuelva a marcar.
+        {policy && ` ${policy.summary}`}
+      </p>
+      {created ? (
+        <p className="banner" role="status">
+          Excepción creada. Puedes revisarla en <Link to="/detections/exclusions">Excepciones de detección</Link>.
+        </p>
+      ) : (
+        <button type="button" className="button" onClick={() => setOpen(true)}>
+          Crear excepción desde esta detección
+        </button>
+      )}
+      {open && (
+        <ExclusionDialog
+          initial={draftFromDetection(detection)}
+          assetLabel={detection.hostname}
+          onClose={() => setOpen(false)}
+          onCreated={() => {
+            setOpen(false);
+            setCreated(true);
+          }}
+        />
+      )}
     </section>
   );
 }
@@ -258,6 +302,8 @@ export function DetectionDetailPage() {
         </dl>
       </section>
 
+      <RuleDetailsPanel ruleId={d.rule_id} details={d.details} />
+
       <section className="panel panel--padded">
         <h2>Recomendaciones</h2>
         {d.recommendations.length ? (
@@ -303,6 +349,7 @@ export function DetectionDetailPage() {
       />
 
       <DetectionActions detection={d} onChanged={refresh} />
+      <ExceptionSection detection={d} />
     </div>
   );
 }

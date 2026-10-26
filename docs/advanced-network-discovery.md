@@ -5,7 +5,11 @@ en servidor y sensor, evidencia con procedencia por host e historial de cambios 
 El discovery básico (Fase 4D/5F, `discovery_basic`) sigue funcionando igual.
 
 **No es pentesting.** Sin SYN ni stealth scan, sin raw sockets, sin privilegios elevados,
-sin banners, sin fingerprinting de SO o de servicio, sin UDP genérico y sin ejecutar shell.
+sin fingerprinting de SO, sin UDP genérico y sin ejecutar shell. Desde la Fase 7A los perfiles
+`standard` y `deep` leen además, en los puertos que el propio scan encontró abiertos, la
+cabecera `Server` y el título web, el sujeto del certificado TLS y los servicios DNS-SD que
+el equipo anuncia: una petición por puerto, sin credenciales y con límites fijos (ver
+[device-intelligence.md](device-intelligence.md)).
 
 ## Métodos
 
@@ -72,6 +76,9 @@ puede superar el `max_hosts` efectivo del job (`discovery_scope_too_large`).
   Corrección 6C: `schema_version: 2` añade `identify` y `max_name_queries` (sondas de nombre
   mDNS/NetBIOS/SSDP/UPnP) y solo se envía a sensores 0.5.0 con la capacidad
   `network.discovery.names`; ver [asset-identity-labels.md](asset-identity-labels.md).
+  Fase 7A: `schema_version: 3` añade `fingerprint` (huellas DNS-SD, HTTP y TLS) y solo se
+  envía a sensores 0.7.0 con `network.discovery.fingerprint`; ver
+  [device-intelligence.md](device-intelligence.md).
 - Capability requerida `network.discovery.advanced` (sensor 0.2.0). A un sensor 0.1.x nunca
   se le asigna (409 `sensor_not_available`, `details[0].required_capability`); sigue
   recibiendo `discovery_basic`.

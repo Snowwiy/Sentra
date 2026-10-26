@@ -1,6 +1,6 @@
 import { useCallback, useState } from "react";
-import { Link } from "react-router-dom";
-import { aiApi, riskApi } from "../../api/sentra";
+import { Link, useNavigate } from "react-router-dom";
+import { aiApi, incidentsApi, riskApi } from "../../api/sentra";
 import type { AssetCriticality, RiskAssetDetail, RiskContribution } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { config } from "../../config";
@@ -14,7 +14,9 @@ import {
   RISK_CATEGORY_LABELS,
   RISK_LEVEL_LABELS,
 } from "../../lib/risk";
+import { linkedIncident } from "../../lib/incidents";
 import { usePolling } from "../../lib/usePolling";
+import { OwnerSelect } from "../incidents/OwnerSelect";
 import { ConfidenceBadge, DetectionSeverityBadge, DetectionStatusBadge } from "../detections/DetectionBadges";
 import { AIAnalyzePanel } from "../ai/AIAnalyzePanel";
 import { ErrorState, LoadingState } from "../StateViews";
@@ -109,6 +111,64 @@ function CriticalityControl({
         </span>
       )}
     </span>
+  );
+}
+
+/**
+ * Fase 7A.6: abrir un caso desde el riesgo actual del activo. Es una decisión del analista
+ * (incidents:manage), nunca del motor de riesgo: la gravedad sale del nivel y la descripción
+ * cita el score y los factores principales. Exige un riesgo ya calculado.
+ */
+function CreateCaseFromRisk({ risk }: { risk: RiskAssetDetail }) {
+  const auth = useAuth();
+  const navigate = useNavigate();
+  const [owner, setOwner] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [linked, setLinked] = useState<{ incidentId: string; key: string }>();
+  if (!auth.can("incidents:manage")) return null;
+  const evaluated = risk.evaluated && risk.score !== null;
+
+  async function create() {
+    setBusy(true);
+    setError(undefined);
+    setLinked(undefined);
+    try {
+      const incident = await incidentsApi.fromRisk(risk.asset_id, { owner_user_id: owner || null });
+      navigate(`/incidents/${incident.incident_id}`);
+    } catch (err) {
+      const existing = linkedIncident(err);
+      if (existing) setLinked(existing);
+      else setError(err instanceof Error ? errorMessage(err) : String(err));
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="panel panel--padded stack" aria-label="Caso desde el riesgo">
+      <h3>Caso desde el riesgo</h3>
+      <p className="muted small">
+        Abre un incidente con el riesgo actual de este activo: la gravedad sale del nivel y la descripción cita el score y
+        los factores principales. Crear el caso no ejecuta ninguna acción sobre el equipo.
+      </p>
+      <div className="actions">
+        <OwnerSelect value={owner} onChange={setOwner} disabled={busy || !evaluated} />
+        <button type="button" className="button button--primary" disabled={busy || !evaluated} onClick={() => void create()}>
+          {busy ? "Creando…" : "Crear caso desde el riesgo"}
+        </button>
+      </div>
+      {!evaluated && <p className="muted small">El riesgo de este activo aún no está calculado.</p>}
+      {linked && (
+        <p className="banner banner--warn" role="alert">
+          El activo ya está en un caso activo abierto por riesgo: <Link to={`/incidents/${linked.incidentId}`}>{linked.key}</Link>.
+        </p>
+      )}
+      {error && (
+        <p className="banner banner--warn" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 
@@ -228,6 +288,8 @@ export function RiskPanel({ assetId }: { assetId: string }) {
           </div>
         </div>
       </section>
+
+      <CreateCaseFromRisk risk={risk} />
 
       <RiskTraceSection risk={risk} />
 

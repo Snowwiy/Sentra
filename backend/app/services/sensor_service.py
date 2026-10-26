@@ -57,6 +57,7 @@ from app.core.security import (
     generate_sensor_enrollment_token,
     hash_token,
 )
+from app.discovery.fingerprint import MdnsServices, WebFingerprint
 from app.discovery.names import SsdpResponse, UpnpDescription
 from app.discovery.ports import parse_ports
 from app.discovery.probes import PortState
@@ -132,6 +133,7 @@ from app.sensors.catalog import (
     DHCP_LEASES,
     DISCOVERY_ADVANCED,
     DISCOVERY_BASIC,
+    FINGERPRINT_CAPABILITY,
     JOB_TYPES,
     NAMES_CAPABILITY,
     REQUIRED_CAPABILITY,
@@ -220,6 +222,9 @@ def _required_capabilities(job: SensorJob) -> set[str]:
     # nombre (uno que volvió a una versión anterior lo rechazaría por esquema).
     if job.job_type == DISCOVERY_ADVANCED and (job.parameters or {}).get("identify") is True:
         required.add(NAMES_CAPABILITY)
+    # Fase 7A.4: igual con un job v3 (huellas de servicio).
+    if job.job_type == DISCOVERY_ADVANCED and (job.parameters or {}).get("fingerprint") is True:
+        required.add(FINGERPRINT_CAPABILITY)
     return required
 
 
@@ -893,6 +898,10 @@ class SensorService:
                 str(network),
                 for_sensor=True,
                 sensor_names=NAMES_CAPABILITY in (sensor.capabilities or []),
+                sensor_fingerprint=(
+                    settings.discovery_fingerprint
+                    and FINGERPRINT_CAPABILITY in (sensor.capabilities or [])
+                ),
             )
         else:
             parameters = _job_parameters(settings, network)
@@ -1889,6 +1898,12 @@ def _identity_fields(address: str, raw: dict[str, Any] | None) -> dict[str, Any]
         if identity.ssdp_server
         else None,
         "upnp": UpnpDescription(**upnp.model_dump()) if upnp is not None else None,
+        "services": (
+            MdnsServices(services=tuple(identity.mdns_services or ()), model=identity.mdns_model)
+            if identity.mdns_services or identity.mdns_model
+            else None
+        ),
+        "web": [WebFingerprint(**item.model_dump()) for item in identity.web or []],
     }
 
 

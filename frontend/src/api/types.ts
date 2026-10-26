@@ -58,6 +58,10 @@ export interface Asset {
   custom_label_version: number;
   custom_label_updated_at: IsoDateTime | null;
   custom_label_updated_by: string | null;
+  /** Fase 7A.4: tipo fijado a mano por un admin (null = identificación automática). Cuando
+   * existe, device_type ya lo refleja; se cambia con PATCH /assets/{id}/device-type usando la
+   * misma versión que la etiqueta (custom_label_version). */
+  manual_device_type: string | null;
   /** Nombres observados con procedencia (vacío hasta la siguiente identificación). */
   observed_names: ObservedName[];
   /** Fase 6D.3: por qué el activo tiene (o no) nombre. Opcional: backends anteriores no lo envían. */
@@ -86,7 +90,8 @@ export interface Asset {
   /** Marca corta de la NIC ("Realtek"). */
   network_adapter_vendor: string | null;
   /** pc, laptop, server, mobile, tablet, console, printer, router, network_switch,
-   * access_point, iot, voice_assistant, smart_tv, nas, virtual_machine; null = desconocido. */
+   * access_point, iot, voice_assistant, smart_tv, nas, virtual_machine, ip_camera, dvr_nvr,
+   * network_device; null = desconocido. */
   device_type: string | null;
   device_type_reason: string | null;
   /** Nombre resuelto por prioridad; null si nada lo nombra (la UI usa un texto de reserva). */
@@ -1324,7 +1329,13 @@ export type Permission =
   // Fase 6E.7: aislamiento: ver (analyst y admin), aislar y liberar (solo admin).
   | "containment:preview"
   | "containment:isolate"
-  | "containment:release";
+  | "containment:release"
+  // Fase 7A: herramientas del analista: ver (todos), ejecutar (analyst y admin) y gestionar las
+  // ejecuciones de otros (admin). 7A.6: aprobar controles de red (solo admin).
+  | "tools:read"
+  | "tools:execute"
+  | "tools:manage"
+  | "network_controls:approve";
 
 export interface CurrentUser {
   user_id: string;
@@ -2470,6 +2481,11 @@ export interface IncidentDetail extends IncidentSummary {
   alerts: IncidentAlertRef[];
   alerts_total: number;
   notes_total: number;
+  /** Fase 7A.6: tareas del caso (pendientes = open, in_progress o blocked). */
+  tasks_total: number;
+  tasks_open: number;
+  /** Solicitudes de control de red pendientes de decisión o aprobadas y vigentes. */
+  network_controls_open: number;
   metrics: IncidentMetrics;
   allowed_transitions: IncidentStatus[];
   /** Fase 5B: findings de vulnerabilidad del caso. */
@@ -5343,7 +5359,16 @@ export interface EndpointMetrics {
 
 // --- Fase 6E.5: excepciones de reglas integradas ------------------------------------------------
 
-export type DetectionExclusionField = "exe" | "name" | "sha256" | "signer" | "parent_name" | "remote_address";
+export type DetectionExclusionField =
+  | "exe"
+  | "name"
+  | "sha256"
+  | "signer"
+  | "parent_name"
+  | "remote_address"
+  // Fase 7A.8: excepciones exactas de las reglas de PowerShell (SCR-001, CORR-002).
+  | "script_path"
+  | "script_sha256";
 
 export interface DetectionExclusion {
   id: string;
@@ -5361,6 +5386,10 @@ export interface DetectionExclusion {
   active: boolean;
   hits: number;
   last_hit_at: IsoDateTime | null;
+  /** Fase 7A.8: huella que además debe coincidir (excepciones por ruta de script). */
+  require_sha256: string | null;
+  /** Fase 7A.8: puerto que además debe coincidir (NET-001). */
+  port: number | null;
 }
 
 export interface DetectionExclusionList {
@@ -5374,6 +5403,8 @@ export interface DetectionExclusionCreate {
   value: string;
   reason: string;
   expires_at?: string | null;
+  require_sha256?: string | null;
+  port?: number | null;
 }
 
 // --- Fase 6E.6: investigación forense remota ----------------------------------------------------
@@ -5554,4 +5585,262 @@ export interface IsolationRequest {
 export interface IsolationReleaseRequest {
   version: number;
   reason: string;
+}
+
+// --- Fase 7A.6: tareas de caso y solicitudes de control de red ----------------------------------
+
+export type CaseTaskKind =
+  | "investigate_port"
+  | "verify_service"
+  | "review_vulnerability"
+  | "analyze_evidence"
+  | "investigate_script"
+  | "review_network_activity"
+  | "request_policy"
+  | "verify_remediation"
+  | "prepare_block_rule"
+  | "document_exception"
+  | "other";
+export type CaseTaskStatus = "open" | "in_progress" | "blocked" | "done" | "cancelled";
+export type CaseEvidenceType =
+  | "detection"
+  | "alert"
+  | "asset"
+  | "vulnerability"
+  | "tool_execution"
+  | "response_execution";
+
+export interface TaskEvidenceRead {
+  type: CaseEvidenceType;
+  id: string;
+  /** Etiqueta derivada por el servidor (nunca la escribe el cliente). */
+  label: string;
+  added_by: string;
+  added_at: IsoDateTime;
+}
+
+export interface TaskAssetRef {
+  asset_id: string;
+  name: string;
+}
+
+/** Una tarea de un caso (TaskRead). Asignarla no ejecuta nada: es trabajo humano. */
+export interface TaskRead {
+  task_id: string;
+  incident_id: string;
+  incident_key: string;
+  kind: CaseTaskKind;
+  title: string;
+  description: string | null;
+  status: CaseTaskStatus;
+  asset: TaskAssetRef | null;
+  assignee: IncidentUserRef | null;
+  /** Nombre copiado al asignar: se conserva aunque la cuenta cambie o se borre. */
+  assignee_name: string | null;
+  assigned_at: IsoDateTime | null;
+  created_by: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  started_at: IsoDateTime | null;
+  completed_at: IsoDateTime | null;
+  completed_by: string | null;
+  due_at: IsoDateTime | null;
+  overdue: boolean;
+  result: string | null;
+  evidence: TaskEvidenceRead[];
+  version: number;
+  /** Estados a los que se puede pasar (comodidad de UI; el backend vuelve a validar). */
+  allowed_transitions: CaseTaskStatus[];
+}
+
+export interface TaskList {
+  items: TaskRead[];
+  total: number;
+}
+
+export interface TaskCreate {
+  kind: CaseTaskKind;
+  title: string;
+  description?: string | null;
+  asset_id?: string | null;
+  assignee_user_id?: string | null;
+  due_at?: string | null;
+}
+
+export interface TaskUpdate {
+  title?: string;
+  description?: string | null;
+  status?: CaseTaskStatus;
+  result?: string;
+  due_at?: string | null;
+}
+
+export type NetworkControlType =
+  | "block_port"
+  | "block_service"
+  | "block_address"
+  | "block_domain"
+  | "restrict_site_access"
+  | "prevent_upload";
+export type NetworkControlStatus = "pending_approval" | "approved" | "rejected" | "cancelled" | "expired";
+export type EnforcementStatus = "not_evaluated" | "no_enforcement_point" | "applied_manually";
+export type ControlDirection = "inbound" | "outbound" | "both";
+
+export interface ControlScope {
+  type: "asset" | "site" | "global";
+  asset_id: string | null;
+  site_id: string | null;
+  label: string;
+}
+
+/** Resultado de evaluar los puntos de control al aprobar (Sentra no aplica nada en 7A). */
+export interface EnforcementRead {
+  points: string[];
+  applied_by_sentra: boolean;
+  needs: string;
+  note: string;
+}
+
+export interface NetworkControlRead {
+  control_id: string;
+  incident_id: string;
+  incident_key: string;
+  task_id: string | null;
+  control_type: NetworkControlType;
+  target: Record<string, unknown>;
+  direction: ControlDirection | null;
+  scope: ControlScope;
+  justification: string;
+  status: NetworkControlStatus;
+  enforcement_status: EnforcementStatus;
+  enforcement: EnforcementRead | null;
+  expires_at: IsoDateTime | null;
+  requested_by: string;
+  created_at: IsoDateTime;
+  updated_at: IsoDateTime;
+  decided_by: string | null;
+  decided_at: IsoDateTime | null;
+  decision_note: string | null;
+  /** Aprobada por quien la pidió (instalación con un solo admin): visible, no oculto. */
+  self_approved: boolean;
+  applied_by: string | null;
+  applied_at: IsoDateTime | null;
+  applied_note: string | null;
+  version: number;
+}
+
+export interface NetworkControlList {
+  items: NetworkControlRead[];
+  total: number;
+}
+
+export interface NetworkControlCreate {
+  control_type: NetworkControlType;
+  target: Record<string, unknown>;
+  direction?: ControlDirection | null;
+  asset_id?: string | null;
+  site_id?: string | null;
+  task_id?: string | null;
+  justification: string;
+  expires_at?: string | null;
+}
+
+export interface ControlCapability {
+  control_type: NetworkControlType;
+  available: boolean;
+  points: string[];
+  needs: string;
+  note: string;
+}
+
+export interface ControlCapabilities {
+  /** Siempre false en 7A: Sentra registra la decisión pero no aplica controles de red. */
+  any_available: boolean;
+  items: ControlCapability[];
+}
+
+// --- Fase 7A.7: vista de seguridad del dashboard -------------------------------------------------
+
+/** Cómo se calcula la postura global: la UI lo enseña junto al número. */
+export interface PostureMethod {
+  formula: string;
+  population: string;
+  weights: Record<string, number>;
+  missing_data: string;
+  thresholds: Record<string, number>;
+  reference: string;
+}
+
+export interface SecurityPosture {
+  formula_version: number;
+  /** ok: cobertura >= 50 %; partial: menos de la mitad con riesgo; no_data: ninguno. */
+  state: "ok" | "partial" | "no_data";
+  /** null sin datos: nunca se rellena con un valor inventado. */
+  score: number | null;
+  level: string | null;
+  peak_score: number | null;
+  high_or_critical: number;
+  assets_current: number;
+  assets_scored: number;
+  coverage: number;
+  method: PostureMethod;
+}
+
+export interface RecentDetection {
+  detection_id: string;
+  rule_id: string;
+  title: string;
+  severity: string;
+  status: string;
+  asset_id: string;
+  asset_name: string;
+  last_seen_at: IsoDateTime;
+}
+
+export interface RiskHistoryPoint {
+  day: IsoDateTime;
+  assets_scored: number;
+  average_score: number | null;
+  high: number;
+  critical: number;
+}
+
+export interface NewDevice {
+  asset_id: string;
+  name: string;
+  device_type: string | null;
+  monitoring_method: string;
+  first_seen_at: IsoDateTime;
+}
+
+export interface NewDevices {
+  window_days: number;
+  count: number;
+  items: NewDevice[];
+}
+
+/** Puerto expuesto agregado del dashboard (ExposedPortCount; distinto de ExposedPort de un activo). */
+export interface ExposedPortCount {
+  port: number;
+  protocol: string;
+  assets: number;
+}
+
+export interface ExposedPortSummary {
+  open_ports: number;
+  assets_with_open_ports: number;
+  top: ExposedPortCount[];
+}
+
+export interface SecurityOverview {
+  generated_at: IsoDateTime;
+  site_id: string | null;
+  window_days: number;
+  posture: SecurityPosture;
+  /** null sin incidents:read. */
+  incidents_by_status: Record<string, number> | null;
+  detections_recent: RecentDetection[];
+  risk_history: RiskHistoryPoint[];
+  new_devices: NewDevices;
+  exposed_ports: ExposedPortSummary;
 }

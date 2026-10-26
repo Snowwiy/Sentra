@@ -5,7 +5,7 @@ export function NotFoundPage() {
   return (
     <div className="page">
       <EmptyState title="Página no encontrada">
-        <Link to="/">Volver a activos</Link>
+        <Link to="/">Volver al panel</Link>
       </EmptyState>
     </div>
   );

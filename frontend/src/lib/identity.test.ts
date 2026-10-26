@@ -3,8 +3,11 @@ import type { Asset } from "../api/types";
 import {
   assetTitle,
   automaticTitle,
+  DEVICE_TYPE_OPTIONS,
   deviceTypeLabel,
   evidenceLabel,
+  fingerprints,
+  isManualType,
   isProbable,
   NAME_SOURCE_LABELS,
   normalizeLabel,
@@ -86,5 +89,51 @@ describe("Corrección 6C: etiqueta personalizada", () => {
     expect("error" in normalizeLabel("a\nb")).toBe(true);
     expect("error" in normalizeLabel("x".repeat(65))).toBe(true);
     expect(normalizeLabel("x".repeat(64))).toEqual({ label: "x".repeat(64) });
+  });
+});
+
+describe("Fase 7A.4: tipos nuevos, tipo manual y huellas de servicio", () => {
+  it("traduce cámaras, grabadores y equipos de red y los ofrece para asignar a mano", () => {
+    expect(deviceTypeLabel("ip_camera")).toBe("Cámara IP");
+    expect(deviceTypeLabel("dvr_nvr")).toBe("Grabador (DVR/NVR)");
+    expect(deviceTypeLabel("network_device")).toBe("Equipo de red");
+    const values = DEVICE_TYPE_OPTIONS.map((o) => o.value);
+    expect(values).toEqual(expect.arrayContaining(["ip_camera", "dvr_nvr", "network_device", "pc", "nas"]));
+    expect(values).toHaveLength(new Set(values).size);
+    // Ordenadas por su nombre en español, no por el identificador.
+    const labels = DEVICE_TYPE_OPTIONS.map((o) => o.label);
+    expect(labels).toEqual([...labels].sort((a, b) => a.localeCompare(b, "es")));
+  });
+
+  it("etiqueta las fuentes de evidencia nuevas", () => {
+    expect(evidenceLabel({ source: "mdns_service", value: "_ipp._tcp" })).toBe("Servicios mDNS: _ipp._tcp");
+    expect(evidenceLabel({ source: "web", value: "App-webs/" })).toBe("Huella web/TLS: App-webs/");
+    expect(evidenceLabel({ source: "manual", value: "tipo asignado manualmente: ip_camera" })).toBe(
+      "Asignado manualmente: tipo asignado manualmente: ip_camera",
+    );
+  });
+
+  it("un tipo manual nunca se presenta como probable", () => {
+    const manual = { device_type: "ip_camera", classification_confidence: "low" as const, manual_device_type: "ip_camera" };
+    expect(isManualType(manual)).toBe(true);
+    expect(isProbable(manual)).toBe(false);
+    expect(typeWithConfidence(manual)).toBe("Cámara IP");
+    expect(isManualType({ manual_device_type: null })).toBe(false);
+  });
+
+  it("separa servicios mDNS, modelo y huella web, y marca las antiguas", () => {
+    const found = fingerprints([
+      { source: "mac_vendor", value: "Apple" },
+      { source: "mdns_service", value: "_ipp._tcp, _printer._tcp" },
+      { source: "mdns_service", value: "modelo MacBookPro18,3 (antiguo)" },
+      { source: "web", value: "App-webs/ | Hikvision | DS-2CD2143 | Hikvision" },
+      { source: "web", value: " (antiguo)" },
+    ]);
+    expect(found).toEqual([
+      { kind: "services", value: "_ipp._tcp, _printer._tcp", stale: false },
+      { kind: "model", value: "MacBookPro18,3", stale: true },
+      { kind: "web", value: "App-webs/ | Hikvision | DS-2CD2143 | Hikvision", stale: false },
+    ]);
+    expect(fingerprints([{ source: "reverse_dns", value: "linux" }])).toEqual([]);
   });
 });

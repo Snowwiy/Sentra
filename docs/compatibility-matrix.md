@@ -1,4 +1,46 @@
-# Matriz de compatibilidad (Fase 6E, Sentra 0.3.0)
+# Matriz de compatibilidad (Fase 7A, Sentra 0.4.0)
+
+`0.4.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y los cambios
+de 7A son aditivos: endpoints nuevos, campos opcionales nuevos, valores nuevos en
+enumeraciones de respuesta y una versión nueva del job de discovery avanzado (v3) que solo
+reciben los sensores que la declaran.
+
+## Componentes
+
+| Componente | Versión 7A | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.4.0 | Sí | Migraciones 0044-0047 |
+| Frontend | 0.4.0 | Sí | Requiere servidor 0.4.0 para el hub Red, tareas, controles y gráficas |
+| Agente | 0.6.0 | Sí | Contexto del 4104 (ruta, hash, PID, SID, palabras clave; nunca el contenido) |
+| Sensor | 0.7.0 | Sí | Capacidad `network.discovery.fingerprint` (huellas HTTP/TLS, servicios mDNS) |
+
+## Cruces
+
+| Cliente | Servidor 0.3.0 | Servidor 0.4.0 |
+| --- | --- | --- |
+| Agentes 0.1.x-0.5.0 | Compatibles | Compatibles; sus 4104 dan la detección SCR-001 agregada de antes con `missing_context = agent_without_script_context` |
+| Agente 0.6.0 | Compatible: los campos nuevos del 4104 se guardan como datos del evento y no se usan | Completo |
+| Sensores 0.1.x-0.6.x | Compatibles | Compatibles; reciben discovery avanzado v1/v2 como antes, sin huellas |
+| Sensor 0.7.0 | Compatible: no se le pide v3 | Completo con `DISCOVERY_FINGERPRINT=true` (por defecto) |
+
+## Clientes de la API
+
+- Endpoints nuevos: `/tools*` (catálogo, ejecuciones, vista previa, confirmación,
+  cancelación), `PATCH /assets/{id}/device-type`, `POST /assets/{id}/risk/incident`,
+  `/incidents/{id}/tasks`, `/tasks*`, `/incidents/{id}/network-controls`, `/network-controls*`,
+  `GET /dashboard/security-overview`.
+- Campos nuevos: `owner_user_id` al crear o promover un caso; `tasks_total`, `tasks_open` y
+  `network_controls_open` en el detalle de un incidente; `require_sha256` y `port` en las
+  excepciones de detección; detalles anidados (`script`, `process`, `owner`, `explanation`)
+  en SCR-001, CORR-002 y NET-001.
+- Excepciones: `SCR-001`, `CORR-002` y `NET-001` solo admiten excepciones exactas con
+  caducidad (422 `exclusion_too_broad`); ningún intérprete del sistema puede exceptuarse entero.
+- Valores nuevos de `device_type`: `ip_camera`, `dvr_nvr`, `network_device`.
+- Permisos nuevos: `tools:read`, `tools:execute`, `tools:manage`, `network_controls:approve`.
+
+---
+
+## Histórico: Fase 6E (Sentra 0.3.0)
 
 `0.3.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y todos los
 cambios de 6E son aditivos: endpoints nuevos, campos opcionales nuevos en el heartbeat y en los

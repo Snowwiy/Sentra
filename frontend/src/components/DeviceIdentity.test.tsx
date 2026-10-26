@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { WithRole } from "../test/auth";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { Asset } from "../api/types";
+import type { Asset, Role } from "../api/types";
 import { AssetName, DeviceTypeCell, IdentificationPanel } from "./DeviceIdentity";
 
 function asset(overrides: Partial<Asset> = {}): Asset {
@@ -58,6 +58,7 @@ function asset(overrides: Partial<Asset> = {}): Asset {
     custom_label_version: 0,
     custom_label_updated_at: null,
     custom_label_updated_by: null,
+    manual_device_type: null,
     observed_names: [],
     managed_history: false,
     event_coverage: null,
@@ -72,15 +73,18 @@ function asset(overrides: Partial<Asset> = {}): Asset {
   };
 }
 
-function renderIn(node: React.ReactNode) {
+function renderIn(node: React.ReactNode, role: Role = "admin") {
   return render(
     <MemoryRouter>
-      <WithRole role="admin">{node}</WithRole>
+      <WithRole role={role}>{node}</WithRole>
     </MemoryRouter>,
   );
 }
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 describe("presentación de la identidad", () => {
   it("muestra nombre como dato principal e IP como secundaria", () => {
@@ -278,5 +282,118 @@ describe("estado del nombre (name_status)", () => {
     cleanup();
     renderIn(<IdentificationPanel asset={asset()} />);
     expect(screen.queryByTestId("name-status-help")).not.toBeInTheDocument();
+  });
+});
+
+// Fase 7A.4: tipo manual (solo assets:manage) y huellas de servicio en la identificación.
+describe("tipo manual y huellas de servicio", () => {
+  const camera = (overrides: Partial<Asset> = {}) =>
+    asset({
+      device_type: "ip_camera",
+      classification_confidence: "medium",
+      device_vendor: "Hikvision",
+      custom_label_version: 4,
+      classification_evidence: [
+        { source: "mac_vendor", value: "Hikvision" },
+        { source: "mdns_service", value: "_rtsp._tcp" },
+        { source: "mdns_service", value: "modelo DS-2CD2143G2" },
+        { source: "web", value: "App-webs/ | Hikvision (antiguo)" },
+      ],
+      ...overrides,
+    });
+
+  it("automático: tipo con su confianza; el admin ve «Asignar tipo» y el analyst no", () => {
+    renderIn(<IdentificationPanel asset={camera()} />);
+    const panel = screen.getByRole("region", { name: "Identificación" });
+    const type = within(panel).getByText("Tipo").nextElementSibling as HTMLElement;
+    expect(type).toHaveTextContent("Cámara IP probable (automático, confianza media)");
+    expect(within(type).getByRole("button", { name: "Asignar tipo" })).toBeInTheDocument();
+    expect(within(panel).getByText("Confianza")).toBeInTheDocument();
+    cleanup();
+    renderIn(<IdentificationPanel asset={camera()} />, "analyst");
+    expect(screen.queryByRole("button", { name: /tipo/i })).not.toBeInTheDocument();
+    expect(screen.getByText("Tipo").nextElementSibling).toHaveTextContent("Cámara IP probable");
+  });
+
+  it("manual: «Asignado manualmente», sin confianza y con la contradicción visible", () => {
+    renderIn(
+      <IdentificationPanel
+        asset={camera({
+          manual_device_type: "dvr_nvr",
+          device_type: "dvr_nvr",
+          classification_confidence: "high",
+          classification_evidence: [
+            { source: "manual", value: "tipo asignado manualmente: dvr_nvr" },
+            { source: "conflict", value: "la identificación automática apunta a: ip_camera" },
+          ],
+        })}
+      />,
+    );
+    const panel = screen.getByRole("region", { name: "Identificación" });
+    const type = within(panel).getByText("Tipo").nextElementSibling as HTMLElement;
+    expect(type).toHaveTextContent("Grabador (DVR/NVR) Asignado manualmente");
+    expect(type).not.toHaveTextContent("probable");
+    expect(within(type).getByRole("button", { name: "Cambiar tipo" })).toBeInTheDocument();
+    expect(within(panel).queryByText("Confianza")).not.toBeInTheDocument();
+    const evidence = within(panel).getByRole("list", { name: "Evidencias" });
+    expect(evidence).toHaveTextContent("Asignado manualmente: tipo asignado manualmente: dvr_nvr");
+    expect(evidence).toHaveTextContent("Evidencia contradictoria: la identificación automática apunta a: ip_camera");
+  });
+
+  it("agrupa servicios mDNS, modelo y huella web junto a los nombres, sin repetirlos como evidencia", () => {
+    renderIn(<IdentificationPanel asset={camera()} />);
+    const panel = screen.getByRole("region", { name: "Identificación" });
+    const prints = within(panel).getByRole("list", { name: "Huellas de servicio" });
+    const items = within(prints).getAllByRole("listitem");
+    expect(items.map((li) => li.textContent)).toEqual([
+      "Servicios mDNS: _rtsp._tcp",
+      "Modelo (mDNS): DS-2CD2143G2",
+      "Web/TLS: App-webs/ | Hikvision · sin observaciones recientes",
+    ]);
+    const evidence = within(panel).getByRole("list", { name: "Evidencias" });
+    expect(evidence).toHaveTextContent("Fabricante MAC: Hikvision");
+    expect(evidence).not.toHaveTextContent("_rtsp._tcp");
+  });
+
+  it("guardar o un 409 recargan el activo con onChanged", async () => {
+    const replies = [
+      {
+        status: 409,
+        body: {
+          error: {
+            code: "asset_label_conflict",
+            message: "conflict",
+            details: [{ current_version: 5, manual_device_type: "ip_camera" }],
+          },
+        },
+      },
+      { status: 200, body: camera({ manual_device_type: "ip_camera", custom_label_version: 6 }) },
+    ];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        const reply = replies.shift() ?? { status: 500, body: {} };
+        return new Response(JSON.stringify(reply.body), { status: reply.status });
+      }),
+    );
+    const onChanged = vi.fn();
+    renderIn(<IdentificationPanel asset={camera()} onChanged={onChanged} />);
+    fireEvent.click(screen.getByRole("button", { name: "Asignar tipo" }));
+    const dialog = screen.getByRole("dialog", { name: "Tipo del dispositivo" });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Tipo de dispositivo" }), {
+      target: { value: "ip_camera" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Guardar" }));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Otra persona acaba de asignar el tipo «Cámara IP»");
+    expect(onChanged).toHaveBeenCalledTimes(1);
+    fireEvent.click(within(dialog).getByRole("button", { name: "Guardar" }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(2));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+
+  it("la celda de tipo de las tablas marca el tipo manual", () => {
+    renderIn(<DeviceTypeCell asset={camera({ manual_device_type: "ip_camera", classification_confidence: "high" })} />);
+    expect(screen.getByText("Cámara IP")).toBeInTheDocument();
+    expect(screen.getByText("(manual)")).toBeInTheDocument();
   });
 });

@@ -136,8 +136,10 @@ async function svgToPng(svg: string): Promise<Blob> {
  * Wi-Fi, gateways de agentes) con su clase y confianza. Solo lectura salvo «Reconstruir» y la
  * revisión de enlaces, que exigen topology:manage (admin); la API vuelve a comprobarlo.
  */
-export function TopologyPage() {
+export function TopologyPage({ embedded = false }: { embedded?: boolean }) {
   const auth = useAuth();
+  // Fase 7A.5: dentro del hub Red el título de página es «Red»; aquí va un nivel por debajo.
+  const Title = embedded ? "h2" : "h1";
   const canManage = auth.can("topology:manage");
   const site = useSite();
   const [siteFilter, setSiteFilter] = useState("");
@@ -248,7 +250,7 @@ export function TopologyPage() {
     <div className="page topo-page">
       <div className="page__header">
         <div>
-          <h1>Topología</h1>
+          <Title>Topología</Title>
           <p className="muted small page__scope">
             <SiteScopeChip siteId={data?.site.id} />
             <span>

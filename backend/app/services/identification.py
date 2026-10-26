@@ -21,14 +21,17 @@ from app.discovery import oui
 from app.discovery.classify import (
     DHCP_LEASE,
     MDNS,
+    MDNS_SERVICE,
     NETBIOS,
     REVERSE_DNS,
     UPNP,
+    WEB,
     IdentityInput,
+    WebEvidence,
     identify,
     is_default_name,
 )
-from app.discovery.device_types import ClassificationConfidence
+from app.discovery.device_types import ClassificationConfidence, DeviceType
 from app.discovery.scanner import HostObservation
 from app.discovery.vendors import display_vendor
 from app.models.asset import Asset
@@ -63,6 +66,10 @@ _SEEN_KEYS = {
     "mdns_name": MDNS,
     "netbios_name": NETBIOS,
     "upnp": UPNP,
+    # Fase 7A.4: las huellas también caducan (un firmware nuevo, una IP reasignada).
+    "mdns_services": MDNS_SERVICE,
+    "mdns_model": MDNS_SERVICE,
+    "web": WEB,
 }
 
 
@@ -121,6 +128,12 @@ def record_observation(
     }
     if obs.upnp is not None:
         updates["upnp"] = {k: v for k, v in vars(obs.upnp).items() if v}
+    # Fase 7A.4: huellas de servicio. Igual que los nombres, una ausencia no borra lo visto.
+    if obs.services is not None:
+        updates["mdns_services"] = list(obs.services.services) or None
+        updates["mdns_model"] = obs.services.model
+    if obs.web:
+        updates["web"] = [item.as_dict() for item in obs.web[:2]]
     for key, value in updates.items():
         if not value:
             continue
@@ -198,6 +211,11 @@ def identity_input(
         upnp_model_number=_text(upnp.get("model_number")),
         upnp_device_type=_text(upnp.get("device_type")),
         ssdp_server=_text(seen.get("ssdp_server")),
+        mdns_services=frozenset(
+            item for item in seen.get("mdns_services") or [] if isinstance(item, str)
+        ),
+        mdns_model=_text(seen.get("mdns_model")),
+        web=tuple(_web_items(seen.get("web"))),
         mac=asset.mac_address,
         mac_vendor=asset.vendor,
         mac_random=oui.is_locally_administered(asset.mac_address),
@@ -207,6 +225,7 @@ def identity_input(
         stale_sources=frozenset(
             source for key, source in _SEEN_KEYS.items() if _is_stale(seen_at, key, now)
         ),
+        manual_type=_manual_type(asset.manual_device_type),
     )
 
 
@@ -252,6 +271,27 @@ def refresh_identity(
 def _dhcp_hostname(value: Any) -> str | None:
     """Hostname del lease guardado por app/dhcp/service.py ({"hostname", "source", ...})."""
     return _text(value.get("hostname")) if isinstance(value, dict) else None
+
+
+def _manual_type(value: str | None) -> DeviceType | None:
+    # Un valor que ya no existe en el enum (BD manipulada) se ignora: vuelve el automático.
+    try:
+        return DeviceType(value) if value else None
+    except ValueError:
+        return None
+
+
+def _web_items(value: Any) -> Iterable[WebEvidence]:
+    if not isinstance(value, list):
+        return
+    for item in value[:2]:
+        if isinstance(item, dict):
+            yield WebEvidence(
+                server=_text(item.get("server")),
+                title=_text(item.get("title")),
+                cert_cn=_text(item.get("cert_cn")),
+                cert_org=_text(item.get("cert_org")),
+            )
 
 
 def _text(value: Any) -> str | None:

@@ -138,7 +138,7 @@ function LeasesPanel({ identity }: { identity: AssetIdentity }) {
     <section className="panel" aria-label="Concesiones DHCP">
       <div className="panel__toolbar">
         <h2>Concesiones DHCP</h2>
-        <Link to="/dhcp" className="small">
+        <Link to="/network/identity" className="small">
           Fuentes DHCP
         </Link>
       </div>

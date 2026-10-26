@@ -68,6 +68,10 @@ VULN_SOURCE_LOCK_KEYS: dict[str, int] = {"nvd": _BASE + 0x20_001, "osv": _BASE +
 # Fase 6D: una reconstrucción de topología a la vez POR SITE (lock de transacción), también
 # entre el job periódico y la petición manual. Sites distintos pueden reconstruir en paralelo.
 TOPOLOGY_SITE_LOCK_BASE = _BASE + 0x30_000
+# Fase 7A: comprobación y alta de ejecuciones del Analyst Tool Engine (lock de transacción).
+# Serializa el conteo de concurrencia con la inserción de la fila running: sin él, dos
+# peticiones simultáneas podrían ver ambas un hueco libre y superar el límite.
+TOOL_CONCURRENCY_LOCK_KEY = _BASE + 18
 
 
 def topology_site_lock_key(site_id: int) -> int:

@@ -146,6 +146,7 @@ import type {
   Exposure,
   Readiness,
   DashboardSummary,
+  SecurityOverview,
   Inventory,
   MonitoringMethod,
   Insight,
@@ -375,6 +376,9 @@ export const sentraApi = {
     apiGet<Readiness>("/health/ready", { signal, acceptStatuses: [503] }),
   dashboardSummary: (signal?: AbortSignal, siteId?: string) =>
     apiGet<DashboardSummary>(`/dashboard/summary${queryString({ site_id: siteId })}`, { signal }),
+  /** Fase 7A.7: postura, historial de riesgo y listas del Panel (days 7-90). */
+  securityOverview: (signal?: AbortSignal, siteId?: string, days = 30) =>
+    apiGet<SecurityOverview>(`/dashboard/security-overview${queryString({ site_id: siteId, days })}`, { signal }),
   listAssets: (signal?: AbortSignal, query: AssetQuery = {}) =>
     apiGet<AssetList>(
       `/assets${queryString({
@@ -406,6 +410,10 @@ export const sentraApi = {
    * es custom_label_version tal y como se leyó (409 asset_label_conflict si cambió). */
   setAssetLabel: (assetId: string, label: string | null, version: number) =>
     apiPatch<Asset>(`/assets/${encodeURIComponent(assetId)}/label`, { label, version }),
+  /** Fase 7A.4: tipo manual (assets:manage). `deviceType: null` vuelve a la identificación
+   * automática. Comparte versión con la etiqueta: 409 asset_label_conflict si cambió. */
+  setAssetDeviceType: (assetId: string, deviceType: string | null, version: number) =>
+    apiPatch<Asset>(`/assets/${encodeURIComponent(assetId)}/device-type`, { device_type: deviceType, version }),
   getTelemetry: (assetId: string, limit: number, signal?: AbortSignal) =>
     apiGet<TelemetryHistory>(
       `/assets/${encodeURIComponent(assetId)}/telemetry${queryString({ limit })}`,
@@ -930,6 +938,16 @@ export interface IncidentCreateInput {
   priority: IncidentLevel;
   confidence?: IncidentConfidence | null;
   asset_ids?: string[];
+  /** Fase 7A.6: responsable desde la creación (null = sin asignar). */
+  owner_user_id?: string | null;
+}
+
+/** Crear un caso desde una detección, alerta o riesgo: lo no indicado se deriva del origen. */
+export interface IncidentPromoteInput {
+  title?: string;
+  priority?: IncidentLevel;
+  /** Fase 7A.6: responsable desde la creación (null = sin asignar). */
+  owner_user_id?: string | null;
 }
 
 export interface IncidentChanges {
@@ -983,10 +1001,13 @@ export const incidentsApi = {
   relatedToAlert: (alertId: string, signal?: AbortSignal) =>
     apiGet<RelatedIncidentList>(`/alerts/${encodeURIComponent(alertId)}/related-incidents`, { signal }),
   create: (input: IncidentCreateInput) => apiPost<IncidentDetail>("/incidents", input),
-  fromDetection: (detectionId: string, input: { title?: string; priority?: IncidentLevel } = {}) =>
+  fromDetection: (detectionId: string, input: IncidentPromoteInput = {}) =>
     apiPost<IncidentDetail>(`/detections/${encodeURIComponent(detectionId)}/incident`, input),
-  fromAlert: (alertId: string, input: { title?: string; priority?: IncidentLevel } = {}) =>
+  fromAlert: (alertId: string, input: IncidentPromoteInput = {}) =>
     apiPost<IncidentDetail>(`/alerts/${encodeURIComponent(alertId)}/incident`, input),
+  /** Fase 7A.6: caso desde el riesgo actual del activo (decisión del analista, incidents:manage). */
+  fromRisk: (assetId: string, input: IncidentPromoteInput = {}) =>
+    apiPost<IncidentDetail>(`/assets/${encodeURIComponent(assetId)}/risk/incident`, input),
   update: (incidentId: string, version: number, changes: IncidentChanges) =>
     apiPatch<IncidentDetail>(inc(incidentId), { version, ...changes }),
   /** Sin `userId`: asignarse a uno mismo. */
@@ -1162,15 +1183,12 @@ export const vulnerabilitiesApi = {
     if (action === "accept-risk") body.accepted_until = input.acceptedUntil ?? null;
     return apiPost<FindingDetail>(`${finding(findingId)}/${action}`, body);
   },
-  createIncident: (
-    findingId: string,
-    version: number,
-    input: { title?: string; priority?: IncidentLevel } = {},
-  ) =>
+  createIncident: (findingId: string, version: number, input: IncidentPromoteInput = {}) =>
     apiPost<IncidentDetail>(`${finding(findingId)}/incident`, {
       version,
       title: input.title?.trim() || null,
       priority: input.priority ?? null,
+      owner_user_id: input.owner_user_id ?? null,
     }),
 };
 
@@ -1263,11 +1281,12 @@ export const threatIntelApi = {
   /** acknowledge (motivo opcional) | dismiss y reopen (motivo obligatorio). */
   matchAction: (matchId: string, action: "acknowledge" | "dismiss" | "reopen", version: number, reason?: string) =>
     apiPost<ThreatMatchDetail>(`${threatMatch(matchId)}/${action}`, { version, reason: reason?.trim() || null }),
-  createIncident: (matchId: string, version: number, input: { title?: string; priority?: IncidentLevel } = {}) =>
+  createIncident: (matchId: string, version: number, input: IncidentPromoteInput = {}) =>
     apiPost<IncidentDetail>(`${threatMatch(matchId)}/incident`, {
       version,
       title: input.title?.trim() || null,
       priority: input.priority ?? null,
+      owner_user_id: input.owner_user_id ?? null,
     }),
   importPreview: (sourceId: number, format: "sentra-ioc" | "stix", content: string) =>
     apiPost<ThreatImportPreview>("/threat-intel/import/preview", { source_id: sourceId, format, content }),

@@ -21,9 +21,12 @@ A per-channel cursor (last EventRecordID sent) is persisted so each event is sen
 restart resumes where it left off. The cursor only advances after the API accepted a batch.
 """
 
+import hashlib
 import json
 import logging
 import os
+import re
+import stat
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
@@ -107,6 +110,7 @@ _DEFENDER_FIELDS = (
     "Detection User",
     "Process Name",
 )
+POWERSHELL_CHANNEL = "Microsoft-Windows-PowerShell/Operational"
 DATA_FIELDS: dict[str, dict[int, tuple[str, ...]]] = {
     "System": {
         104: ("SubjectUserName", "SubjectDomainName", "Channel"),
@@ -139,8 +143,143 @@ DATA_FIELDS: dict[str, dict[int, tuple[str, ...]]] = {
     "Microsoft-Windows-Windows Defender/Operational": dict.fromkeys(
         (1116, 1117, 1118, 1119), _DEFENDER_FIELDS
     ),
+    # Fase 7A.8 (agente 0.6.0): de dónde viene el bloque, nunca qué contiene. Path es el
+    # fichero del script (vacío si se tecleó o se pasó con -Command); ScriptBlockId une los
+    # trozos de un bloque largo (MessageNumber de MessageTotal).
+    POWERSHELL_CHANNEL: {4104: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal")},
 }
 DATA_VALUE_MAX = 512
+
+
+# Fase 7A.8: palabras que el motor de PowerShell usa para marcar un bloque como sospechoso
+# (4104 de nivel Warning). Aproxima la lista interna de PowerShell. Se envía cuáles aparecen,
+# no el texto: así se ve la causa real del aviso (p. ej. "Marshal" en un instalador que
+# convierte un SecureString) sin sacar del equipo código ni credenciales.
+SUSPICIOUS_KEYWORDS = (
+    "Add-Type",
+    "DllImport",
+    "DefineDynamicAssembly",
+    "DefinePInvokeMethod",
+    "InteropServices",
+    "Marshal",
+    "AllocHGlobal",
+    "PtrToStructure",
+    "PtrToString",
+    "IntPtr",
+    "FromBase64String",
+    "ToBase64String",
+    "EncodedCommand",
+    "Bypass",
+    "MemoryStream",
+    "DeflateStream",
+    "GZipStream",
+    "Invoke-Expression",
+    "DownloadString",
+    "DownloadFile",
+    "Net.WebClient",
+    "Reflection.Assembly",
+    "GetDelegateForFunctionPointer",
+    "GetProcAddress",
+    "LoadLibrary",
+    "VirtualAlloc",
+    "VirtualProtect",
+    "WriteProcessMemory",
+    "CreateRemoteThread",
+    "CreateThread",
+    "OpenProcess",
+    "kernel32",
+    "advapi32",
+    "AdjustTokenPrivileges",
+    "MiniDumpWriteDump",
+    "NonPublic",
+    "BindingFlags",
+    "GetField",
+    "GetMethod",
+    "InvokeMember",
+    "Cryptography",
+    "CreateDecryptor",
+    "ScriptBlockLogging",
+    "AmsiUtils",
+)
+MAX_KEYWORDS = 12
+# Campos que _script_block_context añade al 4104 (el servidor los cataloga para las reglas).
+SCRIPT_BLOCK_CONTEXT_FIELDS = ("ProcessID", "UserID", "ScriptSha256", "SuspiciousKeywords")
+# Solo ficheros locales con ruta de unidad: nunca UNC (\\servidor\...), dispositivos
+# (\\.\, \\?\) ni flujos alternativos (":" tras la unidad). Leer una ruta UNC haría que
+# el equipo se autenticara contra un servidor elegido por quien escribió el evento.
+_LOCAL_SCRIPT = re.compile(r"^[A-Za-z]:\\[^:*?\"<>|]+$")
+SCRIPT_HASH_MAX = 16 * 1024 * 1024
+_hash_cache: dict[tuple[str, int, int], str] = {}
+_HASH_CACHE_MAX = 256
+
+
+def suspicious_keywords(script: str) -> list[str]:
+    """Palabras de SUSPICIOUS_KEYWORDS presentes en el bloque (sin distinguir mayúsculas)."""
+    folded = script.casefold()
+    found = [word for word in SUSPICIOUS_KEYWORDS if word.casefold() in folded]
+    return found[:MAX_KEYWORDS]
+
+
+def _hashable(path: str) -> bool:
+    return bool(_LOCAL_SCRIPT.match(path))
+
+
+def script_sha256(path: str) -> str | None:
+    """SHA-256 del fichero del script en el momento de leer el evento, o None.
+
+    Es la huella con la que se crea una excepción (ruta + hash): si alguien modifica después
+    un script legítimo, el hash deja de coincidir y la detección vuelve a abrirse. Ficheros
+    que no son regulares, enlaces o demasiado grandes no se leen.
+    """
+    if not _hashable(path):
+        return None
+    try:
+        info = os.lstat(path)
+    except OSError:
+        return None
+    if not stat.S_ISREG(info.st_mode) or info.st_size > SCRIPT_HASH_MAX:
+        return None
+    key = (path.casefold(), info.st_size, info.st_mtime_ns)
+    cached = _hash_cache.get(key)
+    if cached is not None:
+        return cached
+    digest = hashlib.sha256()
+    try:
+        with open(path, "rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+    except OSError:
+        return None
+    if len(_hash_cache) >= _HASH_CACHE_MAX:
+        _hash_cache.clear()
+    _hash_cache[key] = digest.hexdigest()
+    return _hash_cache[key]
+
+
+def _script_block_context(node: ET.Element, system: ET.Element) -> dict[str, str]:
+    """Contexto de un 4104 que no está en EventData o que se deriva de su contenido.
+
+    El texto del bloque se lee aquí solo para buscar SUSPICIOUS_KEYWORDS y se descarta.
+    """
+    found: dict[str, str] = {}
+    execution = system.find("e:Execution", _NS)
+    pid = execution.get("ProcessID") if execution is not None else None
+    if pid and pid.isdigit():
+        found["ProcessID"] = pid
+    security = system.find("e:Security", _NS)
+    user = security.get("UserID") if security is not None else None
+    if user and user.startswith("S-1-"):
+        found["UserID"] = user[:DATA_VALUE_MAX]
+    for data in node.findall("e:EventData/e:Data", _NS):
+        if data.get("Name") == "ScriptBlockText" and data.text:
+            keywords = suspicious_keywords(data.text)
+            if keywords:
+                found["SuspiciousKeywords"] = ",".join(keywords)
+        elif data.get("Name") == "Path" and data.text and data.text.strip():
+            digest = script_sha256(data.text.strip())
+            if digest:
+                found["ScriptSha256"] = digest
+    return found
 
 
 def _ids(events: dict[int, str]) -> str:
@@ -198,9 +337,7 @@ CHANNELS = (
         cursor_key="Security:4624",
         query=_LOGON_SUCCESS,
     ),
-    Channel(
-        "Microsoft-Windows-PowerShell/Operational", f"({_LEVEL_FILTER})", collect_message=False
-    ),
+    Channel(POWERSHELL_CHANNEL, f"({_LEVEL_FILTER})", collect_message=False),
     # Opcional: sin Defender (otro antivirus, Server Core) el canal no existe y se informa
     # una vez como no disponible, igual que Security sin permisos.
     Channel(
@@ -278,6 +415,8 @@ def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
         computer = (system.findtext("e:Computer", "", _NS) or "").strip()
         fields = DATA_FIELDS.get(spec.name, {}).get(event_code)
         data = _event_data(node, fields) if fields else {}
+        if spec.name == POWERSHELL_CHANNEL and event_code == 4104:
+            data.update(_script_block_context(node, system))
         events.append(
             {
                 "source": "windows_eventlog",

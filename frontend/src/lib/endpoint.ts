@@ -42,6 +42,8 @@ export const EXCLUSION_FIELD_LABELS: Record<DetectionExclusionField, string> = {
   signer: "Firmante",
   parent_name: "Proceso padre",
   remote_address: "IP remota",
+  script_path: "Ruta del script",
+  script_sha256: "SHA-256 del script",
 };
 
 /** Segundos medidos como texto; null = sin medida (nunca se muestra como 0). */

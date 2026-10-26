@@ -277,6 +277,8 @@ class MatchIncidentIn(RequestModel):
     title: str | None = Field(default=None, min_length=3, max_length=200)
     description: str | None = Field(default=None, max_length=4000)
     priority: Literal["low", "medium", "high", "critical"] | None = None
+    # Fase 7A.6: responsable desde la creación (ver IncidentPromote.owner_user_id).
+    owner_user_id: UUID | None = None
 
 
 # --- Importación -------------------------------------------------------------------------------

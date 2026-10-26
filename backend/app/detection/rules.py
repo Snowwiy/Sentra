@@ -22,6 +22,7 @@ from typing import Any, Protocol
 
 from app.detection import text
 from app.detection.config import DetectionConfig
+from app.detection.script_context import COMMON_ADMIN_KEYWORDS, SENTRA_SERVICES
 from app.detection.signals import SignalKind
 from app.models.detection import (
     CONFIDENCE_RANK,
@@ -127,6 +128,8 @@ class RuleContext(Protocol):
     ) -> int: ...
 
     def asset_os(self, asset_id: int) -> str: ...
+
+    def excluded(self, rule_id: str, signal: DetectionSignal) -> bool: ...
 
 
 class DetectionRule(Protocol):
@@ -368,13 +371,127 @@ def _account_state(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     )
 
 
+# --- Contexto de PowerShell (Fase 7A.8, docs/powershell-detections.md) ----------------------
+
+_PROCESS_KEYS = (
+    "process_name",
+    "process_exe",
+    "process_cmdline",
+    "process_user",
+    "process_sha256",
+    "process_signer",
+    "parent_name",
+    "parent_exe",
+    "parent_cmdline",
+)
+_SENTRA_COMPONENTS = {
+    "sentra_agent": "el agente de Sentra",
+    "sentra_sensor": "el sensor de Sentra",
+    "sentra_api": "la API de Sentra",
+}
+
+
+def script_details(s: DetectionSignal) -> dict[str, Any]:
+    """Qué script, qué proceso, por qué lo marcó PowerShell y qué contexto faltó."""
+    words = [str(w) for w in (_get(s, "keywords") or [])]
+    path = _get(s, "script_path")
+    origin = _get(s, "script_origin")
+    component = _get(s, "sentra_component")
+    process = {key: _get(s, key) for key in _PROCESS_KEYS if _get(s, key) is not None}
+    explanation = [
+        "PowerShell registró el bloque como evento 4104 de nivel Warning: su propio motor lo"
+        " marcó como sospechoso. Sentra no recoge el contenido."
+    ]
+    if words:
+        explanation.append(
+            "Palabras que lo dispararon: "
+            + ", ".join(words)
+            + "."
+            + (
+                " Son habituales en scripts administrativos (p. ej. convertir un SecureString),"
+                " así que explican el aviso pero no lo hacen benigno."
+                if set(words) <= COMMON_ADMIN_KEYWORDS
+                else ""
+            )
+        )
+    if origin == "file":
+        explanation.append(f"Se ejecutó desde el fichero {path}.")
+    elif origin == "inline":
+        explanation.append(
+            "No viene de un fichero: se tecleó en una consola o se pasó con -Command o"
+            " -EncodedCommand."
+        )
+    if _get(s, "sentra_script"):
+        explanation.append(
+            f"El nombre coincide con un script de Sentra ({_get(s, 'script_name')}). El nombre"
+            " no prueba el origen: compare la ruta y el hash con los de su instalación."
+        )
+    if component in _SENTRA_COMPONENTS:
+        explanation.append(
+            f"La línea de comandos del proceso o de su padre corresponde a"
+            f" {_SENTRA_COMPONENTS[component]}."
+        )
+    missing = []
+    if not any(_get(s, k) for k in ("script_block_id", "script_path", "pid")):
+        missing.append("agent_without_script_context")
+    else:
+        if _get(s, "pid") is not None and not process:
+            missing.append("process_not_in_telemetry")
+        if origin == "file" and not _get(s, "script_sha256"):
+            missing.append("script_hash_unavailable")
+    return {
+        "script": {
+            key: _get(s, key)
+            for key in (
+                "script_path",
+                "script_name",
+                "script_sha256",
+                "script_block_id",
+                "script_part",
+                "script_parts",
+                "script_origin",
+            )
+            if _get(s, key) is not None
+        },
+        "process": process,
+        "pid": _get(s, "pid"),
+        "user_sid": _get(s, "user_sid"),
+        "trigger": {"cause": "powershell_script_block_warning", "keywords": words},
+        "sentra": {"script_name_match": bool(_get(s, "sentra_script")), "component": component},
+        "explanation": explanation,
+        "missing_context": missing,
+    }
+
+
+def _script_label(s: DetectionSignal) -> str:
+    if _get(s, "script_path"):
+        return f"el script {_get(s, 'script_path')}"
+    if _get(s, "script_origin") == "inline":
+        return "un bloque escrito en línea (sin fichero)"
+    return "un bloque de script"
+
+
 def _powershell(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
-    return _single(
-        s,
-        "powershell",
-        "PowerShell registró un bloque de script marcado como sospechoso (evento 4104 de nivel"
-        " Warning). El contenido no se recoge.",
+    details = script_details(s)
+    if not _get(s, "script_block_id") and not _get(s, "script_path"):
+        # Agente anterior a 0.6.0: misma detección agregada que antes.
+        summary = (
+            "PowerShell registró un bloque de script marcado como sospechoso (evento 4104 de"
+            " nivel Warning). El contenido no se recoge."
+        )
+        return _single(s, "powershell", summary, details=details)
+    words = details["trigger"]["keywords"]
+    process = details["process"]
+    summary = (
+        f"PowerShell marcó como sospechoso {_script_label(s)}"
+        + (f" (palabras: {', '.join(words)})" if words else "")
+        + (f", ejecutado por {process['process_name']}" if process.get("process_name") else "")
+        + (f" desde {process['parent_name']}" if process.get("parent_name") else "")
+        + ". El contenido no se recoge."
     )
+    # Una detección por script (hash o ruta); los bloques en línea se agrupan.
+    key = _get(s, "script_sha256") or (str(_get(s, "script_path") or "").lower() or "inline")
+    return _single(s, _key(key, "powershell"), summary, details=details)
 
 
 def _service(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
@@ -418,15 +535,55 @@ def _port_exposed(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     hint = _get(s, "service_hint")
     sensitive = bool(_get(s, "sensitive"))
     label = f"{port}/tcp" + (f" ({hint})" if hint else "")
+    # Fase 7A.8: proceso que escucha según el inventario del agente (si el activo tiene uno).
+    owner = {
+        key: _get(s, key)
+        for key in (
+            "name",
+            "exe",
+            "pid",
+            "sha256",
+            "signer",
+            "process_user",
+            "process_cmdline",
+            "listener_address",
+            "sentra_component",
+        )
+        if _get(s, key) is not None
+    }
+    component = owner.get("sentra_component")
     summary = f"El puerto {label} pasó a ser accesible desde el servidor de Sentra." + (
         " Es un puerto de administración o datos sensible." if sensitive else ""
     )
+    explanation = []
+    if owner.get("name"):
+        summary += f" Lo abre {owner['name']}" + (
+            f" ({_SENTRA_COMPONENTS[component]})." if component in _SENTRA_COMPONENTS else "."
+        )
+    else:
+        explanation.append(
+            "Sin agente o sin inventario de conexiones no se sabe qué proceso escucha: revise"
+            " el equipo."
+        )
+    if component == "sentra_api":
+        explanation.append(
+            "Es la API de Sentra (uvicorn app.main:app). scripts/start_backend.ps1 escucha solo"
+            " en 127.0.0.1 salvo que se pase -BindHost: si discovery la alcanza, escucha en una"
+            " interfaz de red. Si es intencionado, cree una excepción de NET-001 para este"
+            " activo, este puerto y este ejecutable."
+        )
     return _single(
         s,
         _key(s.subject, str(port)),
         summary,
         severity=Sev.HIGH if sensitive else Sev.LOW,
-        details={"port": port, "service_hint": hint, "sensitive": sensitive},
+        details={
+            "port": port,
+            "service_hint": hint,
+            "sensitive": sensitive,
+            "owner": owner,
+            "explanation": explanation,
+        },
     )
 
 
@@ -751,7 +908,8 @@ class FailedThenSuccess:
 
 CORR_002 = RuleMeta(
     id="CORR-002",
-    version=2,
+    # v3 (Fase 7A.8): contexto de cada script y del servicio, secuencia y excepciones exactas.
+    version=3,
     kind=CORRELATION,
     category="persistence",
     title="PowerShell sospechoso seguido de persistencia",
@@ -801,7 +959,10 @@ class PowerShellPersistence:
     def evaluate(self, ctx: RuleContext, signal: DetectionSignal) -> list[RuleResult]:
         window = ctx.config.correlation_window
         start, end = signal.occurred_at - window, signal.occurred_at + window
-        scripts = ctx.signals(signal.asset_id, [SignalKind.POWERSHELL_SUSPICIOUS], start, end)
+        found = ctx.signals(signal.asset_id, [SignalKind.POWERSHELL_SUSPICIOUS], start, end)
+        # Fase 7A.8: un script exceptuado (ruta + hash revisados) no cuenta como la mitad
+        # "PowerShell" de la secuencia; los demás scripts de la ventana sí.
+        scripts = [s for s in found if not ctx.excluded(self.meta.id, s)]
         if not scripts:
             return []
         services = ctx.signals(
@@ -824,6 +985,41 @@ class PowerShellPersistence:
             + _tail(services, "persistence")
             + _tail(unusual or processes, "process")
         )
+        first_script = min(s.occurred_at for s in scripts)
+        sentra_service = name.strip().lower() in SENTRA_SERVICES
+        persistence = {
+            "service": name,
+            "image_path": _get(service, "image_path"),
+            "account": _get(service, "account"),
+            "start_type": _get(service, "start_type"),
+            "source": "event_7045" if service.kind == SignalKind.SERVICE_INSTALLED else "inventory",
+            "unusual_location": _get(service, "unusual_location"),
+            "sentra_service_name": sentra_service,
+        }
+        explanation = [
+            f"{len(scripts)} bloque(s) de PowerShell marcados como sospechosos y el servicio"
+            f" {name} en el mismo activo dentro de {int(window.total_seconds() // 60)} min.",
+            (
+                "El script fue anterior a la instalación del servicio."
+                if first_script <= service.occurred_at
+                else "El servicio apareció antes que el script: la relación es más débil."
+            ),
+        ]
+        if persistence["source"] == "inventory":
+            explanation.append(
+                "El servicio se vio en el inventario, no en el evento 7045: no hay ruta ni"
+                " cuenta de instalación."
+            )
+        if sentra_service:
+            explanation.append(
+                f"{name} es el nombre de un servicio de Sentra. El nombre no prueba el origen:"
+                " compare la ruta del ejecutable del servicio con la de su instalación."
+            )
+        if len(found) > len(scripts):
+            explanation.append(
+                f"{len(found) - len(scripts)} script(s) de la ventana tienen una excepción"
+                " vigente y no cuentan."
+            )
         return [
             RuleResult(
                 key=_key(service.subject, name.lower()),
@@ -834,8 +1030,17 @@ class PowerShellPersistence:
                 details={
                     "service": name,
                     "powershell_events": len(scripts),
+                    "excluded_powershell_events": len(found) - len(scripts),
                     "new_processes": len(processes),
                     "unusual_processes": len(unusual),
+                    "scripts": [script_details(s) for s in scripts[-3:]],
+                    "persistence": persistence,
+                    "sequence": (
+                        "powershell_first"
+                        if first_script <= service.occurred_at
+                        else "service_first"
+                    ),
+                    "explanation": explanation,
                 },
             )
         ]
@@ -1583,6 +1788,8 @@ RULES: tuple[DetectionRule, ...] = (
     SimpleRule(
         _meta(
             id="SCR-001",
+            # v2 (Fase 7A.8): una detección por script con su proceso y la causa del aviso.
+            version=2,
             category="scripting",
             title="PowerShell marcó un script como sospechoso",
             description=(
@@ -1597,11 +1804,17 @@ RULES: tuple[DetectionRule, ...] = (
             severity=Sev.MEDIUM,
             confidence=Conf.MEDIUM,
             triggers=frozenset({SignalKind.POWERSHELL_SUSPICIOUS}),
-            required_data=("Microsoft-Windows-PowerShell/Operational 4104 (nivel Warning)",),
+            required_data=(
+                "Microsoft-Windows-PowerShell/Operational 4104 (nivel Warning)",
+                "Agente 0.6.0 para ruta, hash, PID y causa; telemetría de procesos (6E.4) para"
+                " el árbol de procesos",
+            ),
             recommendations=(
-                "Revisar el evento 4104 en el Visor de eventos del equipo.",
-                "Identificar el usuario y el proceso que ejecutaron el script.",
-                "Revisar procesos y conexiones nuevas en la misma ventana.",
+                "Revisar el evento 4104 en el Visor de eventos del equipo (mismo ScriptBlockId).",
+                "Comprobar la ruta y el hash del script con los de una copia conocida.",
+                "Identificar el usuario, el proceso y su padre.",
+                "Si es legítimo, crear una excepción por ruta + hash con caducidad, nunca por"
+                " powershell.exe ni desactivando el registro de scripts.",
             ),
             mitre=Mitre("TA0002", "T1059", "T1059.001"),
             cooldown=timedelta(minutes=15),
@@ -1661,6 +1874,8 @@ RULES: tuple[DetectionRule, ...] = (
     SimpleRule(
         _meta(
             id="NET-001",
+            # v2 (Fase 7A.8): proceso que escucha según el inventario del agente.
+            version=2,
             category="network",
             title="Puerto expuesto en la red",
             description=(

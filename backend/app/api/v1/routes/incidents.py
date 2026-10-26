@@ -312,6 +312,31 @@ def promote_alert(
     return _detail(session, incident.public_id)
 
 
+@router.post(
+    "/assets/{asset_id}/risk/incident",
+    response_model=IncidentDetail,
+    status_code=status.HTTP_201_CREATED,
+    responses=_MUTATION_ERRORS,
+)
+def promote_risk(
+    asset_id: UUID,
+    ctx: Manager,
+    session: DbSession,
+    payload: Annotated[IncidentPromote | None, Body()] = None,
+) -> IncidentDetail:
+    """Fase 7A.6: crea un incidente desde el riesgo actual del activo (decisión del analista)."""
+    service = _service(session, ctx)
+    incident = _audited(
+        session,
+        ctx,
+        "incident_created",
+        "asset",
+        asset_id,
+        lambda: service.promote_risk(asset_id, payload or IncidentPromote()),
+    )
+    return _detail(session, incident.public_id)
+
+
 # --- Flujo de trabajo -------------------------------------------------------------------------
 
 

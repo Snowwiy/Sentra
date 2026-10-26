@@ -14,6 +14,7 @@ from app.models.asset_context import (
 )
 from app.models.asset_lineage import AssetAgentLineage, LineageEndReason
 from app.models.audit import AuditEvent
+from app.models.case_operations import IncidentTask, NetworkControlRequest
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
 from app.models.detection import (
     Detection,
@@ -110,6 +111,7 @@ from app.models.threat_intel import (
     ThreatIntelSync,
     VulnerabilityIntel,
 )
+from app.models.tool import ToolExecution
 from app.models.topology import TopologyBuild, TopologyLink
 from app.models.topology_history import NetworkChange, TopologySnapshot
 from app.models.user import User, UserSession
@@ -195,6 +197,7 @@ __all__ = [
     "IncidentDetection",
     "IncidentFeedback",
     "IncidentNote",
+    "IncidentTask",
     "IncidentThreatMatch",
     "IncidentVulnerability",
     "Investigation",
@@ -203,6 +206,7 @@ __all__ = [
     "LineageEndReason",
     "MonitoringMethod",
     "NetworkChange",
+    "NetworkControlRequest",
     "NetworkDevice",
     "NetworkDevicePoll",
     "NetworkInterface",
@@ -243,6 +247,7 @@ __all__ = [
     "ThreatIntelMatch",
     "ThreatIntelSource",
     "ThreatIntelSync",
+    "ToolExecution",
     "TopologyBuild",
     "TopologyLink",
     "TopologySnapshot",

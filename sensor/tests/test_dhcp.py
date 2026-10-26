@@ -516,7 +516,7 @@ def validate(job: dict[str, Any]) -> Any:
 
 
 def test_capability_and_version() -> None:
-    assert __version__ == "0.6.0"
+    assert __version__ == "0.7.0"
     assert "dhcp.leases.file" in CAPABILITIES
 
 

@@ -5,7 +5,7 @@ from uuid import UUID
 
 from pydantic import Field, field_validator
 
-from app.discovery.device_types import ClassificationConfidence
+from app.discovery.device_types import ClassificationConfidence, DeviceType
 from app.models.asset import AssetCriticality, AssetStatus, MonitoringMethod
 from app.models.asset_context import AssetRole
 from app.models.risk import RiskConfidence, RiskLevel
@@ -66,6 +66,17 @@ def normalize_label(value: str) -> str:
     return text
 
 
+class AssetDeviceTypeUpdate(RequestModel):
+    """PATCH /assets/{id}/device-type (Fase 7A.4). `device_type: null` vuelve al automático.
+
+    `version` es custom_label_version tal y como la leyó el cliente (el mismo token protege
+    todo lo que una persona fija a mano en la identidad del activo).
+    """
+
+    device_type: DeviceType | None
+    version: int = Field(ge=0, le=2**31 - 1)
+
+
 class AssetLabelUpdate(RequestModel):
     """PATCH /assets/{id}/label. `label: null` elimina la etiqueta (vuelve el nombre automático).
 
@@ -95,6 +106,8 @@ class AssetRead(ResponseModel):
     custom_label_version: int = 0
     custom_label_updated_at: datetime | None = None
     custom_label_updated_by: str | None = None
+    # Fase 7A.4: tipo fijado a mano (null = automático). device_type ya lo refleja.
+    manual_device_type: str | None = None
     monitoring_method: MonitoringMethod
     # Reported by the agent; null for assets only seen on the network.
     hostname: str | None

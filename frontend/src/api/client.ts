@@ -1,4 +1,5 @@
 import { config } from "../config";
+import { explainTooBroad } from "../lib/exclusionPolicy";
 import type { ApiErrorBody } from "./types";
 
 export class ApiError extends Error {
@@ -58,6 +59,12 @@ const INCIDENT_MESSAGES: Record<string, string> = {
   incident_conflict: "Otro operador ha modificado este incidente. Recarga para ver los cambios antes de volver a intentarlo.",
   incident_invalid_state: "Esa acción no está permitida en el estado actual del incidente.",
   incident_already_linked: "Ya está vinculado a un incidente abierto.",
+  // Fase 7A.6: tareas y solicitudes de control de red (versión vieja o estado que no lo permite).
+  task_conflict: "Otra persona ha modificado esta tarea. Recarga para ver los cambios antes de volver a intentarlo.",
+  task_invalid_state: "Esa acción no está permitida en el estado actual de la tarea.",
+  network_control_conflict:
+    "Otra persona ha modificado esta solicitud de control. Recarga para ver los cambios antes de volver a intentarlo.",
+  network_control_invalid_state: "Esa acción no está permitida en el estado actual de la solicitud.",
 };
 
 // Asset Context (Fase 4L). asset_context_conflict: otro admin cambió el contexto; la UI
@@ -226,6 +233,8 @@ function translate(code: string, message: string): string {
   if (code.startsWith("playbook_")) return `Playbook no válido: ${message}`;
   // El motivo (inglés) dice qué referencia falla; se conserva tras un prefijo en español.
   if (code === "incident_invalid_reference") return `Referencia no válida: ${message}`;
+  // Fase 7A.8: el detalle (inglés) dice qué condición de la política falta; se explica en español.
+  if (code === "exclusion_too_broad") return explainTooBroad(message);
   if (AI_DETAIL_PREFIXES[code]) return `${AI_DETAIL_PREFIXES[code]}: ${message}`;
   for (const [pattern, spanish] of POLICY_MESSAGES) {
     if (pattern.test(message)) return message.replace(pattern, spanish).replace(/^(.*?\.).*$/, "$1");

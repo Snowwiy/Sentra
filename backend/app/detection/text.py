@@ -48,6 +48,32 @@ def bounded_data(data: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
+def bounded_tree(data: dict[str, Any], depth: int = 4) -> dict[str, Any]:
+    """Como `bounded_data`, pero conserva diccionarios y listas anidados hasta `depth` niveles.
+
+    Fase 7A.8: los detalles de una detección agrupan contexto (script, proceso, persistencia)
+    y explicaciones de una frase. Cada nivel sigue acotado en claves, elementos y longitud;
+    lo que pasa del último nivel se guarda como texto limpio.
+    """
+    result: dict[str, Any] = {}
+    for key, value in list(data.items())[:MAX_FIELDS]:
+        item = _bounded_value(value, depth - 1)
+        if item is not None:
+            result[clean(key, 64)] = item
+    return result
+
+
+def _bounded_value(value: Any, depth: int) -> Any:
+    if value is None or isinstance(value, bool | int | float):
+        return value
+    if depth > 0 and isinstance(value, dict):
+        return bounded_tree(value, depth)
+    if depth > 0 and isinstance(value, list | tuple):
+        items = (_bounded_value(item, depth - 1) for item in list(value)[:20])
+        return [item for item in items if item is not None]
+    return clean(value)
+
+
 def principal(value: object) -> str | None:
     """Nombre de cuenta normalizado para agrupar: sin dominio y en minúsculas.
 

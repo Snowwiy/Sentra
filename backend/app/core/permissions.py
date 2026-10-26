@@ -147,6 +147,19 @@ class Permission(enum.StrEnum):
     CONTAINMENT_PREVIEW = "containment:preview"
     CONTAINMENT_ISOLATE = "containment:isolate"
     CONTAINMENT_RELEASE = "containment:release"
+    # Fase 7A: Analyst Tool Engine. Ver el catálogo de herramientas y el historial propio de
+    # ejecuciones. Ninguna herramienta amplía lo que el rol ve: cada una exige además sus
+    # permisos de dominio (p. ej. telemetry:read para el árbol de procesos).
+    TOOLS_READ = "tools:read"
+    # Ejecutar herramientas de lectura e investigación y pedir vistas previas de las de acción.
+    # Confirmar una acción exige además los permisos del Response Engine o de casos.
+    TOOLS_EXECUTE = "tools:execute"
+    # Ver y cancelar ejecuciones de otros usuarios. Solo admin.
+    TOOLS_MANAGE = "tools:manage"
+    # Fase 7A.6: aprobar o rechazar una solicitud de control de red (puerto, servicio,
+    # dirección, dominio, sitio o subida). Solo admin: decide qué se bloquearía. Proponerla y
+    # trabajar las tareas de un caso es incidents:manage.
+    NETWORK_CONTROLS_APPROVE = "network_controls:approve"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -160,6 +173,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.THREAT_INTEL_READ,
             Permission.RESPONSE_READ,
             Permission.REPORTS_READ,
+            Permission.TOOLS_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -190,6 +204,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.FORENSICS_ACQUIRE,
             Permission.FORENSICS_DOWNLOAD,
             Permission.CONTAINMENT_PREVIEW,
+            Permission.TOOLS_READ,
+            Permission.TOOLS_EXECUTE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

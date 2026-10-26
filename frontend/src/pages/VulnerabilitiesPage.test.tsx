@@ -348,7 +348,12 @@ describe("VulnerabilityDetailPage", () => {
     const dialog = screen.getByRole("dialog");
     fireEvent.click(within(dialog).getByRole("button", { name: "Crear incidente" }));
     expect(await screen.findByText("incidente abierto")).toBeInTheDocument();
-    expect(lastBody(`/vulnerabilities/findings/${ID}/incident`)).toEqual({ version: 3, title: null, priority: null });
+    expect(lastBody(`/vulnerabilities/findings/${ID}/incident`)).toEqual({
+      version: 3,
+      title: null,
+      priority: null,
+      owner_user_id: null,
+    });
   });
 });
 

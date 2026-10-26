@@ -17,6 +17,8 @@ import {
   RiskContributionsTable,
   TimelineTab,
 } from "../components/incidents/IncidentTabs";
+import { TasksSection } from "../components/incidents/CaseTasks";
+import { NetworkControlsSection } from "../components/incidents/NetworkControls";
 import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { InvestigateButton } from "../components/response/InvestigateButton";
 import { ErrorState, LoadingState } from "../components/StateViews";
@@ -32,7 +34,17 @@ import {
 } from "../lib/incidents";
 import { usePolling } from "../lib/usePolling";
 
-type Tab = "overview" | "timeline" | "evidence" | "detections" | "assets" | "notes" | "ai" | "audit";
+type Tab =
+  | "overview"
+  | "timeline"
+  | "evidence"
+  | "detections"
+  | "assets"
+  | "tasks"
+  | "controls"
+  | "notes"
+  | "ai"
+  | "audit";
 
 const TABS: { key: Tab; label: string }[] = [
   { key: "overview", label: "Resumen" },
@@ -40,6 +52,8 @@ const TABS: { key: Tab; label: string }[] = [
   { key: "evidence", label: "Evidencia" },
   { key: "detections", label: "Detecciones" },
   { key: "assets", label: "Activos" },
+  { key: "tasks", label: "Tareas" },
+  { key: "controls", label: "Controles de red" },
   { key: "notes", label: "Notas" },
   { key: "ai", label: "AI Insights" },
   { key: "audit", label: "Auditoría" },
@@ -379,6 +393,9 @@ export function IncidentDetailPage() {
     detections: incident.detections_total,
     assets: incident.asset_refs.length,
     notes: incident.notes_total,
+    // Solo lo pendiente: tareas activas y solicitudes de control abiertas.
+    tasks: incident.tasks_open,
+    controls: incident.network_controls_open,
   };
   return (
     <div className="page">
@@ -459,6 +476,8 @@ export function IncidentDetailPage() {
         {tab === "evidence" && <EvidenceTab incident={incident} />}
         {tab === "detections" && <DetectionsTab incident={incident} />}
         {tab === "assets" && <AssetsTab incident={incident} />}
+        {tab === "tasks" && <TasksSection incident={incident} onChanged={refresh} />}
+        {tab === "controls" && <NetworkControlsSection incident={incident} onChanged={refresh} />}
         {tab === "notes" && <NotesTab incident={incident} run={run} />}
         {tab === "ai" && <IncidentAI incident={incident} />}
         {tab === "audit" && <AuditTab incident={incident} />}

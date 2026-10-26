@@ -226,6 +226,10 @@ Errores: regla que no es integrada, 422 `exclusion_rule_unknown`; activo inexist
 revocar, 404 `not_found`. `expires_at` no se valida contra el reloj: una fecha pasada crea una
 excepción ya inactiva.
 
+Fase 7A.8: campos `script_path` y `script_sha256`, condiciones `require_sha256` y `port`, y
+políticas estrictas para `SCR-001`, `CORR-002` y `NET-001` (422 `exclusion_too_broad`). Ver
+[powershell-detections.md](powershell-detections.md).
+
 ## Configuración
 
 | Variable | Defecto | Efecto |

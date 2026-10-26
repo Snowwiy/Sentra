@@ -114,6 +114,10 @@ _ROLE_BY_TYPE: dict[str, AssetRole] = {
     DeviceType.VOICE_ASSISTANT.value: AssetRole.IOT,
     DeviceType.SMART_TV.value: AssetRole.IOT,
     DeviceType.VIRTUAL_MACHINE.value: AssetRole.VIRTUAL_MACHINE,
+    # Fase 7A.4.
+    DeviceType.IP_CAMERA.value: AssetRole.IOT,
+    DeviceType.DVR_NVR.value: AssetRole.IOT,
+    DeviceType.NETWORK_DEVICE.value: AssetRole.NETWORK_DEVICE,
 }
 
 _MANAGED_STATE: dict[MonitoringMethod, ManagedState] = {

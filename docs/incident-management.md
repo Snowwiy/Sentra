@@ -104,6 +104,10 @@ se permite, porque es una decisión explícita del analista (la sugerencia lo ma
 - Admin: asigna, reasigna y desasigna a cualquier analyst/admin **activo**.
 - Nunca un viewer ni un usuario desactivado (422).
 
+Desde la Fase 7A.6 el responsable también se elige al crear el caso (`owner_user_id`, mismas
+reglas), y un caso puede llevar tareas delegadas y solicitudes de control de red: ver
+[case-operations.md](case-operations.md).
+
 ## Notas
 
 Append-only, 1–5000 caracteres, texto plano no confiable (la UI lo pinta como texto; nunca

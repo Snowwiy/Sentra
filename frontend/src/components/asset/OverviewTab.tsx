@@ -74,13 +74,14 @@ function NetworkPanel({ asset }: { asset: Asset }) {
   );
 }
 
-export function OverviewTab({ asset }: { asset: Asset }) {
-  if (asset.monitoring_method !== "agent") return <NetworkOverview asset={asset} />;
-  return <AgentOverview asset={asset} />;
+/** `onChanged` recarga el activo tras cambiar su identidad (tipo manual, Fase 7A.4). */
+export function OverviewTab({ asset, onChanged }: { asset: Asset; onChanged?: () => void }) {
+  if (asset.monitoring_method !== "agent") return <NetworkOverview asset={asset} onChanged={onChanged} />;
+  return <AgentOverview asset={asset} onChanged={onChanged} />;
 }
 
 /** Asset without agent: network facts, its alerts and changes. */
-function NetworkOverview({ asset }: { asset: Asset }) {
+function NetworkOverview({ asset, onChanged }: { asset: Asset; onChanged?: () => void }) {
   const assetId = asset.asset_id;
   const fetchAlerts = useCallback(
     (signal: AbortSignal) => sentraApi.listAlerts({ assetId, active: true, limit: 10 }, signal),
@@ -90,7 +91,7 @@ function NetworkOverview({ asset }: { asset: Asset }) {
   return (
     <div className="stack">
       <div className="detail-grid">
-        <IdentificationPanel asset={asset} />
+        <IdentificationPanel asset={asset} onChanged={onChanged} />
         <NetworkPanel asset={asset} />
       </div>
       <div className="detail-grid">
@@ -119,7 +120,7 @@ function NetworkOverview({ asset }: { asset: Asset }) {
   );
 }
 
-function AgentOverview({ asset }: { asset: Asset }) {
+function AgentOverview({ asset, onChanged }: { asset: Asset; onChanged?: () => void }) {
   const assetId = asset.asset_id;
   // Secondary panels: their failures must not hide the asset itself.
   const fetchHistory = useCallback(
@@ -230,7 +231,7 @@ function AgentOverview({ asset }: { asset: Asset }) {
       </div>
 
       <div className="detail-grid">
-        <IdentificationPanel asset={asset} />
+        <IdentificationPanel asset={asset} onChanged={onChanged} />
         {asset.discovered_at && <NetworkPanel asset={asset} />}
       </div>
 

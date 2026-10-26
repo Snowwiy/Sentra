@@ -18,6 +18,27 @@ TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "t
 
 # TypeScript interface -> OpenAPI schema (response models only).
 INTERFACES = {
+    # Fase 7A.6: tareas del caso y solicitudes de control de red.
+    "TaskEvidenceRead": "TaskEvidenceRead",
+    "TaskAssetRef": "TaskAssetRef",
+    "TaskRead": "TaskRead",
+    "TaskList": "TaskList",
+    "ControlScope": "ControlScope",
+    "EnforcementRead": "EnforcementRead",
+    "NetworkControlRead": "NetworkControlRead",
+    "NetworkControlList": "NetworkControlList",
+    "ControlCapability": "ControlCapability",
+    "ControlCapabilities": "ControlCapabilities",
+    # Fase 7A.7: panel de seguridad.
+    "PostureMethod": "PostureMethod",
+    "SecurityPosture": "SecurityPosture",
+    "RecentDetection": "RecentDetection",
+    "RiskHistoryPoint": "RiskHistoryPoint",
+    "NewDevice": "NewDevice",
+    "NewDevices": "NewDevices",
+    "ExposedPortCount": "ExposedPortCount",
+    "ExposedPortSummary": "ExposedPortSummary",
+    "SecurityOverview": "SecurityOverview",
     # Fase 6D.1: topología de red.
     "TopologySiteRef": "TopologySiteRef",
     "TopologyBuild": "TopologyBuild",

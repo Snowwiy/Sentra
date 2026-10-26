@@ -66,6 +66,9 @@ SNMP_PARAMETER_KEYS = frozenset(
 # solo la envía a sensores que declaran network.discovery.names.
 ADVANCED_SCHEMA_VERSION = 1
 NAMES_SCHEMA_VERSION = 2
+# Fase 7A.4: v3 = v2 + `fingerprint` (huellas DNS-SD, HTTP y TLS en puertos ya abiertos). El
+# servidor solo la envía a sensores que declaran network.discovery.fingerprint.
+FINGERPRINT_SCHEMA_VERSION = 3
 ADVANCED_PROFILES = frozenset({"quick", "standard", "deep"})
 
 JOB_KEYS = frozenset(
@@ -116,6 +119,12 @@ ADVANCED_PARAMETER_KEYS = frozenset(
     }
 )
 NAMES_PARAMETER_KEYS = ADVANCED_PARAMETER_KEYS | {"identify", "max_name_queries"}
+FINGERPRINT_PARAMETER_KEYS = NAMES_PARAMETER_KEYS | {"fingerprint"}
+_KEYS_BY_VERSION = {
+    ADVANCED_SCHEMA_VERSION: ADVANCED_PARAMETER_KEYS,
+    NAMES_SCHEMA_VERSION: NAMES_PARAMETER_KEYS,
+    FINGERPRINT_SCHEMA_VERSION: FINGERPRINT_PARAMETER_KEYS,
+}
 MAX_DEADLINE_SECONDS = 24 * 3600
 
 
@@ -159,6 +168,8 @@ class DiscoveryParameters:
     # mDNS + NetBIOS + descripción UPnP + el M-SEARCH). Sin v2, sin sondas de nombre.
     identify: bool = False
     max_name_queries: int | None = None
+    # Fase 7A.4 (v3): huellas de servicio de hosts vivos, solo en puertos ya abiertos.
+    fingerprint: bool = False
 
 
 @dataclass(frozen=True)
@@ -375,17 +386,13 @@ def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
     Si el servidor es anterior a 6A (sin topes avanzados en la config), los topes valen 0 y
     cualquier job avanzado se rechaza: el sensor nunca supone límites que nadie le dio.
     """
-    if not isinstance(params, dict) or set(params) not in (
-        ADVANCED_PARAMETER_KEYS,
-        NAMES_PARAMETER_KEYS,
-    ):
+    if not isinstance(params, dict) or set(params) not in _KEYS_BY_VERSION.values():
         raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
     version = params.get("schema_version")
-    if isinstance(version, bool) or version not in (ADVANCED_SCHEMA_VERSION, NAMES_SCHEMA_VERSION):
+    if isinstance(version, bool) or version not in _KEYS_BY_VERSION:
         raise JobRejectedError("schema_unsupported", "unsupported discovery_advanced schema")
     # Esquema exacto por versión: una clave de v2 en un job v1 (o al revés) es un rechazo.
-    expected = NAMES_PARAMETER_KEYS if version == NAMES_SCHEMA_VERSION else ADVANCED_PARAMETER_KEYS
-    if set(params) != expected:
+    if set(params) != _KEYS_BY_VERSION[version]:
         raise JobRejectedError("invalid_schema", "unexpected or missing parameters")
     if params["profile"] not in ADVANCED_PROFILES:
         raise JobRejectedError("invalid_schema", "unknown scan profile")
@@ -424,7 +431,7 @@ def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
             params["max_dns_queries"], "max_dns_queries", 0, config.max_dns_queries
         ),
     )
-    if version == NAMES_SCHEMA_VERSION:
+    if version in (NAMES_SCHEMA_VERSION, FINGERPRINT_SCHEMA_VERSION):
         # El presupuesto de sondas de nombre tiene el mismo tope que el de DNS que fija el
         # servidor en la configuración: el sensor nunca acepta más carga que esa.
         parameters = replace(
@@ -434,6 +441,12 @@ def _advanced(params: object, config: ServerConfig) -> DiscoveryParameters:
                 params["max_name_queries"], "max_name_queries", 0, config.max_dns_queries
             ),
         )
+    if version == FINGERPRINT_SCHEMA_VERSION:
+        fingerprint = _bool(params["fingerprint"], "fingerprint")
+        if fingerprint and not parameters.identify:
+            # Las huellas comparten presupuesto y alcance con las sondas de nombre.
+            raise JobRejectedError("invalid_schema", "fingerprint requires identify")
+        parameters = replace(parameters, fingerprint=fingerprint)
     if parameters.forward_dns and not parameters.reverse_dns:
         raise JobRejectedError("invalid_schema", "forward_dns requires reverse_dns")
     if not (parameters.ports or parameters.icmp or parameters.arp):

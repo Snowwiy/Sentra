@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Asset, DashboardVulnerabilities } from "../api/types";
+import type { Asset, DashboardVulnerabilities, SecurityOverview } from "../api/types";
 import { WithRole } from "../test/auth";
 import { DashboardPage } from "./DashboardPage";
 
@@ -60,6 +60,7 @@ function asset(name: string, overrides: Partial<Asset> = {}): Asset {
     custom_label_version: 0,
     custom_label_updated_at: null,
     custom_label_updated_by: null,
+    manual_device_type: null,
     observed_names: [],
     managed_history: false,
     event_coverage: null,
@@ -81,6 +82,64 @@ let summaryCalls: number;
 let serverTotal: number | undefined;
 // Bloque vulnerabilities del resumen (Fase 6C.4); undefined = el rol no lo recibe.
 let vulnSummary: DashboardVulnerabilities | undefined;
+// Fase 7A.7: respuesta de /dashboard/security-overview; null = el endpoint falla (500).
+let overview: SecurityOverview | null;
+let overviewCalls: URL[];
+
+function day(offset: number): string {
+  const date = new Date(Date.UTC(2026, 9, 1 + offset));
+  return date.toISOString();
+}
+
+function makeOverview(overrides: Partial<SecurityOverview> = {}): SecurityOverview {
+  return {
+    generated_at: iso(),
+    site_id: null,
+    window_days: 30,
+    posture: {
+      formula_version: 1,
+      state: "ok",
+      score: 47,
+      level: "medium",
+      peak_score: 91,
+      high_or_critical: 42,
+      assets_current: 10000,
+      assets_scored: 9000,
+      coverage: 0.9,
+      method: {
+        formula: "Media de AssetRisk.score ponderada por la criticidad del activo",
+        population: "Activos actuales con riesgo calculado",
+        weights: { low: 1, medium: 2, high: 3, critical: 4 },
+        missing_data: "Los activos sin riesgo calculado no cuentan como cero",
+        thresholds: { low: 20, medium: 40, high: 60, critical: 80 },
+        reference: "docs/security-dashboard.md",
+      },
+    },
+    incidents_by_status: { open: 2, investigating: 1, closed: 4 },
+    detections_recent: [
+      {
+        detection_id: "d1",
+        rule_id: "SCR-001",
+        title: "Script de PowerShell sospechoso",
+        severity: "high",
+        status: "open",
+        asset_id: "a1",
+        asset_name: "pc-01",
+        last_seen_at: iso(),
+      },
+    ],
+    risk_history: [0, 1, 2].map((offset) => ({
+      day: day(offset),
+      assets_scored: 9000,
+      average_score: 40 + offset,
+      high: 30,
+      critical: 12,
+    })),
+    new_devices: { window_days: 7, count: 0, items: [] },
+    exposed_ports: { open_ports: 12, assets_with_open_ports: 4, top: [{ port: 445, protocol: "tcp", assets: 3 }] },
+    ...overrides,
+  };
+}
 
 const json = (status: number, body: unknown) =>
   new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -91,6 +150,8 @@ beforeEach(() => {
   summaryCalls = 0;
   serverTotal = undefined;
   vulnSummary = undefined;
+  overview = makeOverview();
+  overviewCalls = [];
   vi.stubGlobal(
     "fetch",
     vi.fn(async (input: string) => {
@@ -125,6 +186,11 @@ beforeEach(() => {
           ...(vulnSummary ? { vulnerabilities: vulnSummary } : {}),
         });
       }
+      if (path === "/dashboard/security-overview") {
+        overviewCalls.push(url);
+        if (!overview) return json(500, { error: { code: "internal_error", message: "boom" } });
+        return json(200, overview);
+      }
       if (path === "/alerts" || path === "/events") return json(200, { items: [], total: 0 });
       return json(404, { error: { code: "not_found", message: path } });
     }),
@@ -147,112 +213,62 @@ function renderPage() {
   );
 }
 
-describe("DashboardPage · contexto", () => {
-  it("lista compacta: criticidad no por defecto y rol conocido", async () => {
+// Fase 7A.5: la tabla completa de activos se movió a Red › Dispositivos (sus pruebas de
+// filtros, paginación y ciclo de vida están en NetworkPage.test.tsx). El Panel resume.
+describe("Panel (Fase 7A.5)", () => {
+  it("los contadores vienen del resumen del servidor y abren Dispositivos filtrado", async () => {
     renderPage();
-    const row = (await screen.findByText("b-db")).closest("tr")!;
-    expect(within(row).getByText("Base de datos")).toBeInTheDocument();
-    expect(within(row).getByText(/Crítica/)).toBeInTheDocument();
-    // Criticidad por defecto (media) y rol desconocido no añaden ruido a la fila.
-    const other = screen.getByText("a-pc").closest("tr")!;
-    expect(within(other).queryByText(/Media/)).toBeNull();
-  });
-
-  it("los filtros de contexto se envían al backend y se pueden limpiar", async () => {
-    renderPage();
-    await screen.findByText("b-db");
-    fireEvent.change(screen.getByLabelText("Criticidad"), { target: { value: "critical" } });
-    fireEvent.change(screen.getByLabelText("Rol"), { target: { value: "database" } });
-    fireEvent.change(screen.getByLabelText("Internet"), { target: { value: "unknown" } });
-    fireEvent.change(screen.getByLabelText("Tag"), { target: { value: "pci" } });
-    fireEvent.change(screen.getByLabelText("Orden"), { target: { value: "criticality" } });
-    await waitFor(() => {
-      const params = assetCalls.at(-1)!.searchParams;
-      expect(params.get("criticality")).toBe("critical");
-      expect(params.get("role")).toBe("database");
-      expect(params.get("internet_exposed")).toBe("unknown");
-      expect(params.get("tag")).toBe("pci");
-      expect(params.get("sort")).toBe("criticality");
-    });
-    // Con orden por criticidad se respeta el orden del servidor (no se reordena por nombre).
-    const names = screen.getAllByRole("row").map((r) => r.textContent ?? "");
-    expect(names.findIndex((t) => t.includes("b-db"))).toBeLessThan(names.findIndex((t) => t.includes("a-pc")));
-    fireEvent.click(screen.getByRole("button", { name: "Limpiar" }));
-    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("role")).toBeNull());
-  });
-
-  it("filtros sin resultados muestran un vacío específico", async () => {
-    renderPage();
-    await screen.findByText("b-db");
-    items = [];
-    fireEvent.change(screen.getByLabelText("Entorno"), { target: { value: "production" } });
-    expect(await screen.findByText("Ningún activo coincide con los filtros de contexto")).toBeInTheDocument();
-  });
-});
-
-describe("DashboardPage · paginación en servidor (Fase 4M)", () => {
-  it("nunca descarga todos los activos: siempre pide una página con limit", async () => {
-    renderPage();
-    await screen.findByText("b-db");
-    for (const call of assetCalls) {
-      expect(call.searchParams.get("limit")).toBe("50");
-      // offset 0 no se envía (es el valor por defecto del servidor).
-      expect(call.searchParams.get("offset")).toBeNull();
-    }
-  });
-
-  it("los contadores vienen del servidor, no de la página descargada", async () => {
-    renderPage();
-    await screen.findByText("b-db");
+    expect(await screen.findByRole("heading", { level: 1, name: "Panel" })).toBeInTheDocument();
     const stats = screen.getByLabelText("Resumen de estado");
-    expect(within(stats).getByText("10000")).toBeInTheDocument();
-    expect(within(stats).getByText("2900")).toBeInTheDocument();
-    expect(await screen.findByText(/4000 gestionados con agente/)).toBeInTheDocument();
+    expect(within(stats).getByRole("link", { name: /Total de dispositivos\s*10000/ })).toHaveAttribute(
+      "href",
+      "/network/devices",
+    );
+    expect(within(stats).getByRole("link", { name: /Sin conexión\s*2900/ })).toHaveAttribute(
+      "href",
+      "/network/devices?status=offline",
+    );
+    expect(within(stats).getByRole("link", { name: /En línea\s*7000/ })).toHaveAttribute(
+      "href",
+      "/network/devices?status=online",
+    );
+    expect(screen.getByText(/4000 gestionados con agente/)).toBeInTheDocument();
     expect(screen.getByText(/riesgo crítico 12/)).toBeInTheDocument();
     expect(summaryCalls).toBeGreaterThan(0);
   });
 
-  it("estado y búsqueda se filtran en el servidor y vuelven a la página 1", async () => {
-    serverTotal = 120;
+  it("solo pide los dispositivos más recientes y enlaza a la lista completa", async () => {
     renderPage();
-    await screen.findByText("b-db");
-    fireEvent.click(screen.getByRole("button", { name: "Siguiente" }));
-    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("offset")).toBe("50"));
-    fireEvent.click(screen.getByRole("button", { name: /Sin conexión/ }));
-    await waitFor(() => {
-      const params = assetCalls.at(-1)!.searchParams;
-      expect(params.get("status")).toBe("offline");
-      expect(params.get("offset")).toBeNull();
-    });
-    fireEvent.change(screen.getByLabelText("Buscar activos"), { target: { value: "srv" } });
-    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("q")).toBe("srv"));
-    expect(screen.getByText(/página 1 de 3/)).toBeInTheDocument();
-  });
-});
-
-describe("DashboardPage · ciclo de vida (Fase 5C.2)", () => {
-  it("muestra Inactivo, Candidato a limpieza y Archivado en la columna de estado", async () => {
-    items = [
-      asset("viejo", { status: "offline", lifecycle_state: "stale" }),
-      asset("purgable", { status: "offline", lifecycle_state: "cleanup_candidate" }),
-      asset("retirado", { lifecycle_state: "archived", archived_at: iso(), archive_reason: "Retirado" }),
-      asset("vivo"),
-    ];
-    renderPage();
-    const rowOf = async (name: string) => (await screen.findByText(name)).closest("tr") as HTMLElement;
-    expect(within(await rowOf("viejo")).getByText("Inactivo")).toBeInTheDocument();
-    expect(within(await rowOf("purgable")).getByText("Candidato a limpieza")).toBeInTheDocument();
-    expect(within(await rowOf("retirado")).getByText("Archivado")).toHaveAttribute("title", "Retirado");
-    expect(within(await rowOf("vivo")).getByText("En línea")).toBeInTheDocument();
+    const recent = await screen.findByRole("region", { name: "Dispositivos recientes" });
+    expect(await within(recent).findByText("b-db")).toBeInTheDocument();
+    expect(within(recent).getByRole("link", { name: "Ver todos los dispositivos" })).toHaveAttribute(
+      "href",
+      "/network/devices",
+    );
+    for (const call of assetCalls) {
+      expect(call.searchParams.get("limit")).toBe("5");
+      expect(call.searchParams.get("sort")).toBe("first_seen");
+      expect(call.searchParams.get("order")).toBe("desc");
+    }
+    // Sin la tabla completa: ni búsqueda ni filtros de contexto en el Panel.
+    expect(screen.queryByRole("searchbox")).toBeNull();
+    expect(screen.queryByLabelText("Criticidad")).toBeNull();
   });
 
-  it("el filtro de ciclo de vida se envía al servidor", async () => {
+  it("sin dispositivos lo explica en el bloque de recientes", async () => {
+    items = [];
     renderPage();
-    await screen.findByText("b-db");
-    fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "cleanup_candidate" } });
-    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("cleanup_candidate"));
-    fireEvent.change(screen.getByLabelText("Ciclo de vida"), { target: { value: "stale" } });
-    await waitFor(() => expect(assetCalls.at(-1)!.searchParams.get("lifecycle")).toBe("stale"));
+    const recent = await screen.findByRole("region", { name: "Dispositivos recientes" });
+    expect(await within(recent).findByText("No hay dispositivos registrados")).toBeInTheDocument();
+  });
+
+  it("si el resumen falla muestra el error con reintento", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => json(500, { error: { code: "internal_error", message: "boom" } })),
+    );
+    renderPage();
+    expect(await screen.findByRole("button", { name: /Reintentar/ })).toBeInTheDocument();
   });
 });
 
@@ -325,5 +341,97 @@ describe("DashboardPage: tarjeta de vulnerabilidades (Fase 6C.4)", () => {
     renderDashboard();
     await screen.findByLabelText("Resumen de la plataforma");
     expect(screen.queryByRole("region", { name: "Resumen de vulnerabilidades" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Panel: postura y gráficos (Fase 7A.7)", () => {
+  it("muestra la postura con su cobertura y cómo se calcula", async () => {
+    renderPage();
+    const card = await screen.findByRole("region", { name: "Postura de seguridad" });
+    expect(within(card).getByLabelText("Puntuación 47 de 100")).toBeInTheDocument();
+    expect(within(card).getByText("Medio")).toBeInTheDocument();
+    expect(within(card).getByText(/9000 de 10000 activos \(90 %\)/)).toBeInTheDocument();
+    expect(within(card).queryByText("Cobertura parcial")).not.toBeInTheDocument();
+    expect(within(card).getByText("Cómo se calcula")).toBeInTheDocument();
+    expect(card).toHaveTextContent("Crítico 80");
+    expect(card).toHaveTextContent("Media de AssetRisk.score ponderada");
+  });
+
+  it("sin datos no enseña ninguna puntuación", async () => {
+    overview = makeOverview({
+      posture: {
+        ...makeOverview().posture,
+        state: "no_data",
+        score: null,
+        level: null,
+        peak_score: null,
+        assets_scored: 0,
+        coverage: 0,
+      },
+      risk_history: [{ day: day(0), assets_scored: 0, average_score: null, high: 0, critical: 0 }],
+    });
+    renderPage();
+    const card = await screen.findByRole("region", { name: "Postura de seguridad" });
+    expect(within(card).getByText("Sin datos.")).toBeInTheDocument();
+    expect(within(card).queryByLabelText(/Puntuación/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Sin historial de riesgo en este periodo/)).toBeInTheDocument();
+  });
+
+  it("con cobertura parcial lo marca de forma visible", async () => {
+    overview = makeOverview({
+      posture: { ...makeOverview().posture, state: "partial", assets_scored: 1000, coverage: 0.1 },
+    });
+    renderPage();
+    const card = await screen.findByRole("region", { name: "Postura de seguridad" });
+    expect(within(card).getByText("Cobertura parcial")).toBeInTheDocument();
+    expect(within(card).getByRole("note")).toHaveTextContent("Solo 1000 de 10000 activos");
+  });
+
+  it("los anillos tienen tabla con valores y porcentajes; el de incidentes depende del permiso", async () => {
+    renderPage();
+    const detections = await screen.findByRole("figure", { name: "Detecciones activas por severidad" });
+    expect(within(detections).getByRole("img")).toHaveAccessibleName(/Alta 5 \(100 %\)/);
+    const methods = screen.getByRole("figure", { name: "Gestionados y descubiertos" });
+    expect(within(methods).getByRole("row", { name: /Descubierto 6000 60 %/ })).toBeInTheDocument();
+    expect(within(methods).getByRole("link", { name: "Gestionado" })).toHaveAttribute(
+      "href",
+      "/network/devices?method=agent",
+    );
+    expect(await screen.findByRole("figure", { name: "Incidentes por estado" })).toBeInTheDocument();
+    cleanup();
+    overview = makeOverview({ incidents_by_status: null });
+    renderPage();
+    await screen.findByRole("region", { name: "Postura de seguridad" });
+    expect(screen.queryByRole("figure", { name: "Incidentes por estado" })).not.toBeInTheDocument();
+  });
+
+  it("el selector de periodo vuelve a pedir el historial con days", async () => {
+    renderPage();
+    await screen.findByRole("figure", { name: "Evolución del riesgo medio" });
+    expect(overviewCalls.at(-1)?.searchParams.get("days")).toBe("30");
+    fireEvent.click(screen.getByRole("button", { name: "90 días" }));
+    await screen.findByRole("button", { name: "90 días", pressed: true });
+    await vi.waitFor(() => expect(overviewCalls.at(-1)?.searchParams.get("days")).toBe("90"));
+  });
+
+  it("si la vista de seguridad falla, el resto del Panel sigue funcionando", async () => {
+    overview = null;
+    renderPage();
+    expect(await screen.findByText(/No se pudo cargar la postura de seguridad/)).toBeInTheDocument();
+    expect(screen.getByLabelText("Resumen de estado")).toBeInTheDocument();
+    expect(screen.getByRole("figure", { name: "Distribución del riesgo" })).toBeInTheDocument();
+  });
+
+  it("lista detecciones recientes y puertos expuestos", async () => {
+    renderPage();
+    const recent = await screen.findByRole("region", { name: "Detecciones recientes" });
+    expect(within(recent).getByRole("link", { name: "Script de PowerShell sospechoso" })).toHaveAttribute(
+      "href",
+      "/detections/d1",
+    );
+    const ports = screen.getByRole("region", { name: "Puertos expuestos" });
+    expect(ports).toHaveTextContent("12 puertos abiertos en 4 activos.");
+    expect(within(ports).getByText("445/tcp")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: "Dispositivos nuevos" })).toHaveTextContent("Ningún dispositivo nuevo");
   });
 });

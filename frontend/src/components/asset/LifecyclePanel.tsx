@@ -4,6 +4,7 @@ import { lifecycleApi } from "../../api/sentra";
 import type { Asset, AssetDeleteCheck, DuplicateCandidate, DuplicateConfidence, DuplicatePair } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { config } from "../../config";
+import { DEVICES_PATH } from "../../lib/deviceFilters";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
 import {
   CONFIDENCE_CLASSES,
@@ -262,7 +263,8 @@ function DeleteDialog({
         } catch (error) {
           throw lifecycleError(error);
         }
-        navigate("/", { replace: true });
+        // El listado de equipos vive en Red › Dispositivos desde la Fase 7A.5.
+        navigate(DEVICES_PATH, { replace: true });
       }}
     >
       <p>

@@ -1,269 +1,71 @@
 import { useCallback, useState } from "react";
-import { Link, useNavigate } from "react-router-dom";
-import { sentraApi, type AssetQuery } from "../api/sentra";
-import type {
-  AssetCriticality,
-  AssetEnvironment,
-  AssetRole,
-  AssetStatus,
-  LifecycleFilter,
-  MonitoringMethod,
-  NetworkZone,
-} from "../api/types";
+import { Link } from "react-router-dom";
+import { sentraApi } from "../api/sentra";
+import type { AssetStatus } from "../api/types";
 import { AlertTable } from "../components/AlertTable";
+import {
+  ExposedPortsList,
+  NewDevicesList,
+  RecentDetectionsList,
+  SummaryCharts,
+} from "../components/charts/DashboardCharts";
+import { PostureCard } from "../components/charts/PostureCard";
+import { RiskHistoryChart, type HistoryDays } from "../components/charts/RiskHistoryChart";
+import { AssetName, DeviceTypeCell } from "../components/DeviceIdentity";
 import { EventTable } from "../components/EventTable";
 import { IncidentsOverviewPanel } from "../components/incidents/IncidentsOverviewPanel";
-import { AssetName } from "../components/DeviceIdentity";
-import { MethodBadge } from "../components/NetworkBadges";
-import { MetricBar } from "../components/MetricBar";
-import { CriticalityBadge, RiskCell } from "../components/risk/RiskBadges";
-import { Pager } from "../components/ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { AssetStateBadge } from "../components/StatusBadge";
 import { VulnSummaryCard } from "../components/vulnerabilities/VulnSummaryCard";
 import { config } from "../config";
+import { DEVICES_PATH, devicesLink } from "../lib/deviceFilters";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
-import { typeWithConfidence } from "../lib/identity";
 import { usePolling } from "../lib/usePolling";
 import { useSite } from "../site/SiteContext";
 import { SiteScopeChip } from "../site/SiteSelector";
-import { useScopedPage } from "../site/useScopedPage";
-import { useDebounced } from "../lib/useDebounced";
-import { CRITICALITY_LABELS, CRITICALITY_ORDER } from "../lib/risk";
-import {
-  ENVIRONMENT_LABELS,
-  ENVIRONMENT_ORDER,
-  ROLE_LABELS,
-  ROLE_ORDER,
-  ZONE_LABELS,
-  ZONE_ORDER,
-} from "../lib/assetContext";
 
-type Filter = AssetStatus | "all";
+type StatusCard = AssetStatus | "all";
 
-const STAT_CARDS: { key: Filter; label: string }[] = [
-  { key: "all", label: "Total de activos" },
+const STAT_CARDS: { key: StatusCard; label: string }[] = [
+  { key: "all", label: "Total de dispositivos" },
   { key: "online", label: "En línea" },
   { key: "offline", label: "Sin conexión" },
   { key: "unknown", label: "Desconocidos" },
 ];
 
-// Fase 4M: el listado se pagina, filtra y ordena en el servidor. Nunca se descargan todos
-// los activos (con 10 000 eran ~1,5 s por refresco); los contadores llegan agregados.
-const PAGE_SIZE = 50;
+/** Dispositivos recientes que se muestran en el panel; la lista completa está en Red. */
+const RECENT_DEVICES = 5;
 
-/** Filtros de contexto (Fase 4L) del listado; se aplican en el servidor. */
-interface ContextFilters {
-  criticality: AssetCriticality | "";
-  role: AssetRole | "";
-  environment: AssetEnvironment | "";
-  networkZone: NetworkZone | "";
-  internetExposed: "true" | "false" | "unknown" | "";
-  method: MonitoringMethod | "";
-  /** Fase 5C.2: solo inactivos (stale) o candidatos a limpieza. */
-  lifecycle: LifecycleFilter | "";
-  department: string;
-  tag: string;
-  sort: "name" | "criticality";
-}
-
-const NO_FILTERS: ContextFilters = {
-  criticality: "",
-  role: "",
-  environment: "",
-  networkZone: "",
-  internetExposed: "",
-  method: "",
-  lifecycle: "",
-  department: "",
-  tag: "",
-  sort: "name",
-};
-
-function toQuery(f: ContextFilters): AssetQuery {
-  return {
-    criticality: f.criticality || undefined,
-    role: f.role || undefined,
-    environment: f.environment || undefined,
-    networkZone: f.networkZone || undefined,
-    internetExposed: f.internetExposed || undefined,
-    method: f.method || undefined,
-    lifecycle: f.lifecycle || undefined,
-    department: f.department.trim() || undefined,
-    tag: f.tag.trim() || undefined,
-    sort: f.sort === "name" ? undefined : f.sort,
-  };
-}
-
-function FilterSelect<T extends string>({
-  label,
-  value,
-  options,
-  labels,
-  onChange,
-}: {
-  label: string;
-  value: T | "";
-  options: T[];
-  labels: Record<T, string>;
-  onChange: (value: T | "") => void;
-}) {
-  return (
-    <select
-      className="input input--select"
-      aria-label={label}
-      value={value}
-      onChange={(event) => onChange(event.target.value as T | "")}
-    >
-      <option value="">{label}: todos</option>
-      {options.map((option) => (
-        <option key={option} value={option}>
-          {labels[option]}
-        </option>
-      ))}
-    </select>
-  );
-}
-
-export function ContextFilterBar({
-  filters,
-  onChange,
-}: {
-  filters: ContextFilters;
-  onChange: (filters: ContextFilters) => void;
-}) {
-  const set = <K extends keyof ContextFilters>(key: K, value: ContextFilters[K]) =>
-    onChange({ ...filters, [key]: value });
-  const active = Object.entries(filters).filter(([k, v]) => k !== "sort" && v !== "").length;
-  return (
-    <details className="context-filters" open={active > 0}>
-      <summary className="small">Filtros de contexto{active > 0 && ` (${active})`}</summary>
-      <div className="panel__toolbar panel__toolbar--filters">
-        <FilterSelect
-          label="Criticidad"
-          value={filters.criticality}
-          options={CRITICALITY_ORDER}
-          labels={CRITICALITY_LABELS}
-          onChange={(v) => set("criticality", v)}
-        />
-        <FilterSelect
-          label="Rol"
-          value={filters.role}
-          options={ROLE_ORDER}
-          labels={ROLE_LABELS}
-          onChange={(v) => set("role", v)}
-        />
-        <FilterSelect
-          label="Entorno"
-          value={filters.environment}
-          options={ENVIRONMENT_ORDER}
-          labels={ENVIRONMENT_LABELS}
-          onChange={(v) => set("environment", v)}
-        />
-        <FilterSelect
-          label="Zona"
-          value={filters.networkZone}
-          options={ZONE_ORDER}
-          labels={ZONE_LABELS}
-          onChange={(v) => set("networkZone", v)}
-        />
-        <FilterSelect
-          label="Internet"
-          value={filters.internetExposed}
-          options={["true", "false", "unknown"]}
-          labels={{ true: "Expuesto", false: "No expuesto", unknown: "Desconocida" }}
-          onChange={(v) => set("internetExposed", v)}
-        />
-        <FilterSelect
-          label="Gestión"
-          value={filters.method}
-          options={["discovered", "agentless", "agent"]}
-          labels={{ discovered: "Descubierto", agentless: "Monitorizado", agent: "Gestionado" }}
-          onChange={(v) => set("method", v)}
-        />
-        <FilterSelect
-          label="Ciclo de vida"
-          value={filters.lifecycle}
-          options={["stale", "cleanup_candidate"]}
-          labels={{ stale: "Stale (inactivos)", cleanup_candidate: "Candidatos a limpieza" }}
-          onChange={(v) => set("lifecycle", v)}
-        />
-        <input
-          className="input"
-          aria-label="Equipo/Departamento"
-          placeholder="Equipo/Departamento"
-          value={filters.department}
-          maxLength={64}
-          onChange={(e) => set("department", e.target.value)}
-        />
-        <input
-          className="input"
-          aria-label="Tag"
-          placeholder="Tag"
-          value={filters.tag}
-          maxLength={32}
-          onChange={(e) => set("tag", e.target.value)}
-        />
-        <FilterSelect
-          label="Orden"
-          value={filters.sort === "name" ? "" : filters.sort}
-          options={["criticality"]}
-          labels={{ criticality: "Orden: criticidad" }}
-          onChange={(v) => set("sort", v || "name")}
-        />
-        {active > 0 && (
-          <button
-            type="button"
-            className="button button--ghost button--small"
-            onClick={() => onChange({ ...NO_FILTERS, sort: filters.sort })}
-          >
-            Limpiar
-          </button>
-        )}
-      </div>
-    </details>
-  );
-}
-
+/**
+ * Panel (Fase 7A.5): la página de entrada resume el estado de la plataforma (recuentos,
+ * riesgo, vulnerabilidades, incidentes, alertas y actividad). La tabla completa de activos que
+ * había aquí se unió con la de Red en Red › Dispositivos; cada tarjeta lleva allí ya filtrada.
+ */
 export function DashboardPage() {
   // Fase 5F: KPIs, tablas y recuentos con el mismo alcance de site.
-  const { scopeId, sites } = useSite();
-  // Columna Site solo con "Todos los sites" y más de un site (con uno solo no aporta nada).
-  const showSite = !scopeId && sites.length > 1;
-  const [contextFilters, setContextFilters] = useState<ContextFilters>(NO_FILTERS);
-  const [filter, setFilter] = useState<Filter>("all");
-  const [query, setQuery] = useState("");
-  // Al cambiar de site se vuelve a la primera página.
-  const [page, setPage] = useScopedPage();
-  // Fase 5C.1: los activos archivados no se muestran salvo que se pida (con su historial).
-  const [showArchived, setShowArchived] = useState(false);
-  // Los campos de texto esperan a que se deje de escribir antes de consultar.
-  const debouncedFilters = useDebounced(contextFilters, 300);
-  const q = useDebounced(query.trim(), 300);
-  const fetchAssets = useCallback(
-    (signal: AbortSignal) =>
-      sentraApi.listAssets(signal, {
-        ...toQuery(debouncedFilters),
-        status: filter === "all" ? undefined : filter,
-        q: q || undefined,
-        archived: showArchived ? "include" : undefined,
-        limit: PAGE_SIZE,
-        offset: (page - 1) * PAGE_SIZE,
-        siteId: scopeId,
-      }),
-    [debouncedFilters, filter, q, page, showArchived, scopeId],
-  );
-  const { data, error, loading, refreshing, updatedAt, refresh } = usePolling(
-    fetchAssets,
-    config.refreshIntervalMs,
-    true,
-    true,
-  );
+  const { scopeId } = useSite();
   const fetchSummary = useCallback(
     (signal: AbortSignal) => sentraApi.dashboardSummary(signal, scopeId),
     [scopeId],
   );
   const summary = usePolling(fetchSummary, config.refreshIntervalMs);
+  // Fase 7A.7: postura, historial y listas. Su fallo no tumba el Panel: se avisa en su sitio.
+  const [historyDays, setHistoryDays] = useState<HistoryDays>(30);
+  const fetchOverview = useCallback(
+    (signal: AbortSignal) => sentraApi.securityOverview(signal, scopeId, historyDays),
+    [scopeId, historyDays],
+  );
+  // Se conservan los datos anteriores al cambiar el periodo (sin parpadeo), pero nunca se
+  // muestran los de otro site: el eco site_id del servidor tiene que coincidir con el alcance.
+  const overview = usePolling(fetchOverview, config.refreshIntervalMs, true, true);
+  const overviewData =
+    overview.data && (overview.data.site_id ?? undefined) === (scopeId ?? undefined) ? overview.data : undefined;
+  const fetchRecent = useCallback(
+    (signal: AbortSignal) =>
+      sentraApi.listAssets(signal, { siteId: scopeId, sort: "first_seen", order: "desc", limit: RECENT_DEVICES }),
+    [scopeId],
+  );
+  const recent = usePolling(fetchRecent, config.refreshIntervalMs);
   const fetchOpenAlerts = useCallback(
     (signal: AbortSignal) => sentraApi.listAlerts({ active: true, limit: 5, siteId: scopeId }, signal),
     [scopeId],
@@ -275,89 +77,103 @@ export function DashboardPage() {
   );
   // Los eventos del sistema no se filtran por site: solo se muestran con "Todos los sites".
   const activity = usePolling(fetchActivity, config.refreshIntervalMs, !scopeId);
-  const navigate = useNavigate();
 
-  // Cualquier cambio de filtro, búsqueda u orden vuelve a la primera página.
-  const changeFilters = (next: ContextFilters) => {
-    setContextFilters(next);
-    setPage(1);
-  };
-  const changeStatus = (next: Filter) => {
-    setFilter(next);
-    setPage(1);
-  };
-  const changeQuery = (next: string) => {
-    setQuery(next);
-    setPage(1);
+  const refreshAll = () => {
+    summary.refresh();
+    overview.refresh();
+    recent.refresh();
+    openAlerts.refresh();
+    if (!scopeId) activity.refresh();
   };
 
-  const assets = data?.items ?? [];
-  // Tarjetas: recuento por estado del servidor con los demás filtros aplicados (como antes,
-  // los filtros de contexto acotan los contadores; el filtro de estado no).
-  const statusCounts = data?.status_counts ?? { online: 0, offline: 0, unknown: 0 };
-  const counts: Record<Filter, number> = {
-    all: statusCounts.online + statusCounts.offline + statusCounts.unknown,
-    ...statusCounts,
-  };
-  const contextFiltered = Object.values(toQuery(debouncedFilters)).some((v) => v !== undefined);
-  const total = data?.total ?? 0;
-  const pages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (summary.loading) return <LoadingState label="Cargando panel…" />;
+  if (!summary.data) {
+    return <ErrorState message={errorMessage(summary.error ?? new Error("Sin datos"))} onRetry={summary.refresh} />;
+  }
   const kpis = summary.data;
-
-  if (loading) return <LoadingState label="Cargando activos…" />;
-  if (!data && error) return <ErrorState message={errorMessage(error)} onRetry={refresh} />;
+  const counts: Record<StatusCard, number> = {
+    all: kpis.assets.total,
+    online: kpis.assets.online,
+    offline: kpis.assets.offline,
+    unknown: kpis.assets.unknown,
+  };
 
   return (
     <div className="page">
       <div className="page__header">
         <div>
-          <h1>Activos</h1>
+          <h1>Panel</h1>
           <p className="muted small page__scope">
-            {/* Eco del servidor (summary.site_id) cuando ya llegó; si no, la selección local. */}
-            <SiteScopeChip siteId={kpis ? kpis.site_id : undefined} />
-            {updatedAt && `Actualizado ${formatRelative(updatedAt.toISOString())} · `}
+            {/* Eco del servidor (summary.site_id): el alcance que de verdad se aplicó. */}
+            <SiteScopeChip siteId={kpis.site_id ?? undefined} />
+            {summary.updatedAt && `Actualizado ${formatRelative(summary.updatedAt.toISOString())} · `}
             refresco cada {config.refreshIntervalMs / 1000} s
           </p>
         </div>
-        <button type="button" className="button" onClick={refresh} disabled={refreshing}>
-          {refreshing ? "Actualizando…" : "Actualizar"}
+        <button type="button" className="button" onClick={refreshAll} disabled={summary.refreshing}>
+          {summary.refreshing ? "Actualizando…" : "Actualizar"}
         </button>
       </div>
 
-      {error && (
+      {summary.error && (
         <div className="banner banner--warn" role="alert">
-          Fallo al actualizar: {errorMessage(error)}. Se muestran los últimos datos recibidos.
+          Fallo al actualizar: {errorMessage(summary.error)}. Se muestran los últimos datos recibidos.
         </div>
       )}
 
+      {/* Cada tarjeta abre Red › Dispositivos con ese estado ya filtrado. */}
       <section className="stats" aria-label="Resumen de estado">
         {STAT_CARDS.map(({ key, label }) => (
-          <button
+          <Link
             key={key}
-            type="button"
-            className={`stat stat--${key}${filter === key ? " stat--active" : ""}`}
-            aria-pressed={filter === key}
-            onClick={() => changeStatus(filter === key ? "all" : key)}
+            className={`stat stat--${key}`}
+            to={key === "all" ? DEVICES_PATH : devicesLink({ status: key })}
           >
             <span className="stat__label">{label}</span>
             <span className="stat__value">{counts[key]}</span>
-          </button>
+          </Link>
         ))}
       </section>
 
-      {kpis && (
-        <p className="muted small" aria-label="Resumen de la plataforma">
-          {kpis.assets.by_method.agent} gestionados con agente · {kpis.assets.by_method.discovered}{" "}
-          descubiertos · riesgo crítico {kpis.risk.by_level.critical ?? 0} · riesgo alto{" "}
-          {kpis.risk.by_level.high ?? 0} · {kpis.detections.active} detecciones activas ·{" "}
-          {kpis.active_alerts} alertas activas
-        </p>
+      {overviewData ? (
+        <PostureCard posture={overviewData.posture} />
+      ) : !overview.error ? (
+        <LoadingState label="Cargando postura…" />
+      ) : (
+        <ErrorState
+          message={`No se pudo cargar la postura de seguridad: ${errorMessage(overview.error ?? new Error("Sin datos"))}`}
+          onRetry={overview.refresh}
+        />
       )}
-      {kpis?.vulnerabilities && <VulnSummaryCard data={kpis.vulnerabilities} />}
+
+      <SummaryCharts summary={kpis} incidentsByStatus={overviewData?.incidents_by_status} />
+
+      {overviewData && (
+        <>
+          <RiskHistoryChart
+            points={overviewData.risk_history}
+            days={historyDays}
+            onDays={setHistoryDays}
+            busy={overview.refreshing}
+          />
+          <div className="overview-grid">
+            <RecentDetectionsList items={overviewData.detections_recent} />
+            <NewDevicesList data={overviewData.new_devices} />
+            <ExposedPortsList data={overviewData.exposed_ports} />
+          </div>
+        </>
+      )}
+
+      <p className="muted small" aria-label="Resumen de la plataforma">
+        {kpis.assets.by_method.agent} gestionados con agente · {kpis.assets.by_method.discovered} descubiertos ·
+        riesgo crítico {kpis.risk.by_level.critical ?? 0} · riesgo alto {kpis.risk.by_level.high ?? 0} ·{" "}
+        {kpis.detections.active} detecciones activas · {kpis.active_alerts} alertas activas
+      </p>
+      {kpis.vulnerabilities && <VulnSummaryCard data={kpis.vulnerabilities} />}
 
       {scopeId ? (
         // El resumen SOC de incidentes es global; con un site elegido se usan los KPIs del alcance.
-        kpis?.incidents && (
+        kpis.incidents && (
           <p className="muted small" aria-label="Incidentes del site">
             <Link to="/incidents">Incidentes</Link>: {kpis.incidents.active} activos ·{" "}
             {kpis.incidents.critical} críticos · {kpis.incidents.unassigned} sin asignar
@@ -379,42 +195,21 @@ export function DashboardPage() {
         </section>
       )}
 
-      <section className="panel">
+      <section className="panel" aria-label="Dispositivos recientes">
         <div className="panel__toolbar">
-          <h2>
-            {filter === "all" ? "Todos los activos" : `Activos ${filter}`}
-            <span className="muted"> ({total})</span>
-          </h2>
-          <input
-            type="search"
-            className="input"
-            placeholder="Buscar nombre, IP, MAC o fabricante"
-            value={query}
-            onChange={(event) => changeQuery(event.target.value)}
-            aria-label="Buscar activos"
-          />
-          <label className="checkbox small">
-            <input
-              type="checkbox"
-              checked={showArchived}
-              onChange={(event) => {
-                setShowArchived(event.target.checked);
-                setPage(1);
-              }}
-            />{" "}
-            Mostrar archivados
-          </label>
+          <h2>Dispositivos recientes</h2>
+          <Link to={DEVICES_PATH} className="small">
+            Ver todos los dispositivos
+          </Link>
         </div>
-        <ContextFilterBar filters={contextFilters} onChange={changeFilters} />
-
-        {assets.length === 0 && contextFiltered ? (
-          <EmptyState title="Ningún activo coincide con los filtros de contexto" />
-        ) : assets.length === 0 && (filter !== "all" || q) ? (
-          <EmptyState title="Ningún activo coincide con el filtro" />
-        ) : assets.length === 0 ? (
-          <EmptyState title="No hay activos registrados">
-            Los activos aparecerán aquí cuando un agente se registre en la API o cuando el
-            descubrimiento de red encuentre equipos en las redes autorizadas.
+        {recent.loading ? (
+          <LoadingState label="Cargando dispositivos…" />
+        ) : !recent.data ? (
+          <ErrorState message={errorMessage(recent.error ?? new Error("Sin datos"))} onRetry={recent.refresh} />
+        ) : recent.data.items.length === 0 ? (
+          <EmptyState title="No hay dispositivos registrados">
+            Aparecerán cuando un agente se registre en la API o cuando el descubrimiento de red encuentre equipos
+            en las redes autorizadas.
           </EmptyState>
         ) : (
           <div className="table-wrap">
@@ -422,83 +217,26 @@ export function DashboardPage() {
               <thead>
                 <tr>
                   <th>Dispositivo</th>
+                  <th>Tipo</th>
                   <th>Estado</th>
-                  <th>Método</th>
-                  <th>OS / tipo</th>
-                  <th>IP</th>
-                  {showSite && <th>Site</th>}
-                  <th>Riesgo</th>
-                  <th>CPU</th>
-                  <th>RAM</th>
-                  <th>Disco</th>
-                  <th>Última actividad</th>
+                  <th>Descubierto</th>
                 </tr>
               </thead>
               <tbody>
-                {assets.map((asset) => {
-                  const t = asset.latest_telemetry;
+                {recent.data.items.map((asset) => {
+                  const first = asset.discovered_at ?? asset.first_seen_at;
                   return (
-                    <tr
-                      key={asset.asset_id}
-                      className="table__row--link"
-                      onClick={() => navigate(`/assets/${asset.asset_id}`)}
-                    >
+                    <tr key={asset.asset_id}>
                       <td>
-                        <AssetName asset={asset} showIp={false} />
+                        <AssetName asset={asset} />
                       </td>
                       <td>
-                        {/* Fase 5C.2: Inactivo / Candidato a limpieza / Archivado ganan a En línea / Sin conexión. */}
+                        <DeviceTypeCell asset={asset} />
+                      </td>
+                      <td>
                         <AssetStateBadge asset={asset} />
                       </td>
-                      <td>
-                        <MethodBadge method={asset.monitoring_method} />
-                      </td>
-                      <td>
-                        {/* Con agente: SO real. Sin agente: tipo deducido y SO probable si lo hay. */}
-                        {asset.os_name ? (
-                          <>
-                            {asset.os_name} <span className="muted">{asset.os_version}</span>
-                          </>
-                        ) : (
-                          <span className="muted">
-                            {typeWithConfidence(asset)}
-                            {asset.probable_os && ` · ${asset.probable_os} probable`}
-                          </span>
-                        )}
-                      </td>
-                      <td className="mono">{asset.primary_ip}</td>
-                      {showSite && <td className="small">{asset.site_name}</td>}
-                      <td>
-                        <RiskCell
-                          score={asset.risk_score}
-                          level={asset.risk_level}
-                          confidence={asset.risk_confidence}
-                        />
-                        {/* Fase 4L: criticidad (solo si no es la de por defecto) y rol confirmado. */}
-                        {(asset.criticality !== "medium" || asset.role !== "unknown") && (
-                          <div className="small">
-                            {asset.criticality !== "medium" && (
-                              <CriticalityBadge criticality={asset.criticality} />
-                            )}{" "}
-                            {asset.role !== "unknown" && (
-                              <span className="muted">{ROLE_LABELS[asset.role]}</span>
-                            )}
-                          </div>
-                        )}
-                      </td>
-                      <td>
-                        <MetricBar value={t?.cpu_percent} label="CPU" />
-                      </td>
-                      <td>
-                        <MetricBar value={t?.ram_percent} label="RAM" />
-                      </td>
-                      <td>
-                        <MetricBar value={t?.disk_percent} label="Disco" />
-                      </td>
-                      {/* Agent contact, or the last discovery run that saw it (no agent). */}
-                      <td title={formatDateTime(asset.last_seen_at ?? asset.last_network_seen_at)}>
-                        {formatRelative(asset.last_seen_at ?? asset.last_network_seen_at)}
-                      </td>
+                      <td title={formatDateTime(first)}>{formatRelative(first)}</td>
                     </tr>
                   );
                 })}
@@ -506,7 +244,6 @@ export function DashboardPage() {
             </table>
           </div>
         )}
-        {total > 0 && <Pager page={page} pages={pages} total={total} onPage={setPage} noun="activos" />}
       </section>
 
       {!scopeId && activity.data && activity.data.items.length > 0 && (

@@ -48,6 +48,9 @@ def _source_and_confidence(asset: Asset, field: str) -> tuple[str, str]:
     if field == "vendor":
         return "oui", "medium"
     if field == "device_type":
+        # Fase 7A.4: un tipo fijado por un admin no es una clasificación.
+        if asset.manual_device_type and asset.device_type == asset.manual_device_type:
+            return "manual", "high"
         confidence = _text(asset.classification_confidence) or "low"
         return "classification", confidence[:8]
     return ("agent", "high") if managed else ("discovery", "medium")

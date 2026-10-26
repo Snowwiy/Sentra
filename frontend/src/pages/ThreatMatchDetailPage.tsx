@@ -5,6 +5,7 @@ import { threatIntelApi } from "../api/sentra";
 import { useAuth } from "../auth/AuthContext";
 import { config } from "../config";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
+import { OwnerSelect } from "../components/incidents/OwnerSelect";
 import { ClassificationBadge, MatchStatusBadge, TrustBadge } from "../components/threatintel/IntelBadges";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import {
@@ -40,6 +41,8 @@ export function ThreatMatchDetailPage() {
   const [reason, setReason] = useState("");
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
+  // Fase 7A.6: responsable del caso que se cree desde la coincidencia (vacío = sin asignar).
+  const [owner, setOwner] = useState("");
 
   if (loading) return <LoadingState label="Cargando coincidencia…" />;
   if (!data) {
@@ -128,6 +131,7 @@ export function ThreatMatchDetailPage() {
                   {MATCH_ACTION_LABELS[a]}
                 </button>
               ))}
+            {canIncident && <OwnerSelect value={owner} onChange={setOwner} disabled={busy} />}
             {canIncident && (
               <button
                 type="button"
@@ -135,7 +139,9 @@ export function ThreatMatchDetailPage() {
                 disabled={busy}
                 onClick={() =>
                   void execute(async () => {
-                    const incident = await threatIntelApi.createIncident(data.match_id, data.version);
+                    const incident = await threatIntelApi.createIncident(data.match_id, data.version, {
+                      owner_user_id: owner || null,
+                    });
                     navigate(`/incidents/${incident.incident_id}`);
                   })
                 }

@@ -56,6 +56,14 @@ MAC_VENDOR = "mac_vendor"
 MAC_RANDOM = "mac_random"
 PORTS = "ports"
 GATEWAY = "gateway"
+# Fase 7A.4: servicios DNS-SD y modelo publicados por mDNS, y huellas web/TLS (cabecera
+# Server, título, sujeto del certificado). Lo declara el propio equipo, pero un nombre de
+# producto en una página web no es tan fiable como un tipo UPnP: ver las fuerzas de cada tabla.
+MDNS_SERVICE = "mdns_service"
+WEB = "web"
+# Fase 7A.4: tipo asignado a mano por un admin (assets.manual_device_type). Manda sobre
+# cualquier inferencia, igual que la etiqueta personalizada manda sobre el nombre.
+MANUAL = "manual"
 # Corrección 6C: dos pistas que se contradicen (fabricante o tipo). Se guardan como evidencia
 # para que la UI las enseñe; nunca se resuelven eligiendo una al azar.
 CONFLICT = "conflict"
@@ -86,6 +94,19 @@ NAME_KIND_GENERIC = "generic"
 
 
 @dataclass(frozen=True)
+class WebEvidence:
+    """Huella de un puerto web o TLS (app/discovery/fingerprint.py), ya limpia."""
+
+    server: str | None = None
+    title: str | None = None
+    cert_cn: str | None = None
+    cert_org: str | None = None
+
+    def text(self) -> str:
+        return " | ".join(v for v in (self.server, self.title, self.cert_cn, self.cert_org) if v)
+
+
+@dataclass(frozen=True)
 class IdentityInput:
     managed: bool = False
     hostname: str | None = None
@@ -102,6 +123,10 @@ class IdentityInput:
     upnp_model_number: str | None = None
     upnp_device_type: str | None = None
     ssdp_server: str | None = None
+    # Fase 7A.4: tipos de servicio DNS-SD ("_ipp._tcp"), modelo de _device-info y huellas web.
+    mdns_services: frozenset[str] = frozenset()
+    mdns_model: str | None = None
+    web: tuple[WebEvidence, ...] = ()
     mac: str | None = None
     # Organización registrada del prefijo de la MAC (oui.py), tal cual o ya abreviada.
     mac_vendor: str | None = None
@@ -114,6 +139,8 @@ class IdentityInput:
     # Fuentes de nombre cuyo último dato es antiguo (ver identification.NAME_STALE_DAYS): se
     # conservan como evidencia, pero un nombre reciente de otra fuente pasa por delante.
     stale_sources: frozenset[str] = frozenset()
+    # Fase 7A.4: tipo asignado a mano (ver MANUAL). None = automático.
+    manual_type: DeviceType | None = None
 
 
 @dataclass
@@ -215,6 +242,16 @@ _NAME_HINTS: tuple[tuple[re.Pattern[str], _Hint], ...] = (
     (_rx(r"^win-[a-z0-9]{11}$"), _Hint(T.SERVER, 2, None, "Windows")),
     (_rx(r"macbook"), _Hint(T.LAPTOP, 3, "Apple", "macOS")),
     (_rx(r"^imac|mac-?mini|mac-?studio"), _Hint(T.PC, 3, "Apple", "macOS")),
+    # Fase 7A.4: nombres por defecto de cámaras y grabadores (Axis usa axis-<MAC>).
+    (_rx(r"^axis-[0-9a-f]{12}$"), _Hint(T.IP_CAMERA, 3, "Axis")),
+    (_rx(r"^(ipc|ipcam|ip-?camera|cam(era)?)([-_\d]|$)"), _Hint(T.IP_CAMERA, 2)),
+    # DS-2CD es la línea de cámaras de red de Hikvision; la marca sola no dice el tipo (también
+    # fabrica grabadores, videoporteros y switches), así que solo aporta la marca.
+    (_rx(r"^ds-2cd"), _Hint(T.IP_CAMERA, 2, "Hikvision")),
+    (_rx(r"^hikvision"), _Hint(None, 2, "Hikvision")),
+    (_rx(r"^reolink"), _Hint(None, 2, "Reolink")),
+    (_rx(r"^(nvr|dvr)([-_\d]|$)|^ds-\d{4}n"), _Hint(T.DVR_NVR, 2)),
+    (_rx(r"^(sw|switch)[-_]\d|^(usw|us-\d{2})[-_]"), _Hint(T.NETWORK_SWITCH, 1)),
     (
         _rx(r"^(esp[-_]?[0-9a-f]{4,}|esp32|esp8266|tasmota|shelly|tuya|smartplug|wled)"),
         _Hint(T.IOT, 2),
@@ -261,6 +298,99 @@ _SUPPORT_PORTS: dict[int, tuple[DeviceType, str]] = {
     5001: (T.NAS, "nas-https"),
 }
 
+# Fase 7A.4: tipos de servicio DNS-SD → (tipo, fuerza, marca, SO). Un servicio dice qué
+# OFRECE el equipo, no qué es: _airplay lo anuncian un Apple TV, un televisor con AirPlay y
+# un Mac, por eso es débil; _ipp casi solo lo anuncia una impresora, por eso es fuerte. Un
+# servicio genérico (_ssh, _http, _smb) no se lista: no distingue nada.
+_SERVICE_HINTS: dict[str, _Hint] = {
+    "_ipp._tcp": _Hint(T.PRINTER, 3),
+    "_ipps._tcp": _Hint(T.PRINTER, 3),
+    "_printer._tcp": _Hint(T.PRINTER, 3),
+    "_pdl-datastream._tcp": _Hint(T.PRINTER, 3),
+    "_scanner._tcp": _Hint(T.PRINTER, 1),
+    "_uscan._tcp": _Hint(T.PRINTER, 1),
+    "_googlecast._tcp": _Hint(T.SMART_TV, 2),
+    "_androidtvremote2._tcp": _Hint(T.SMART_TV, 3, None, "Android"),
+    "_amzn-wplay._tcp": _Hint(T.SMART_TV, 2, "Amazon"),
+    "_airplay._tcp": _Hint(T.SMART_TV, 1),
+    "_raop._tcp": _Hint(T.SMART_TV, 1),
+    "_hap._tcp": _Hint(T.IOT, 2),
+    "_matter._tcp": _Hint(T.IOT, 2),
+    "_matterc._udp": _Hint(T.IOT, 2),
+    "_hue._tcp": _Hint(T.IOT, 3, "Philips Hue"),
+    "_esphomelib._tcp": _Hint(T.IOT, 3),
+    "_shelly._tcp": _Hint(T.IOT, 3, "Shelly"),
+    "_sonos._tcp": _Hint(T.IOT, 2, "Sonos"),
+    "_axis-video._tcp": _Hint(T.IP_CAMERA, 3, "Axis"),
+    "_rtsp._tcp": _Hint(T.IP_CAMERA, 1),
+    "_adisk._tcp": _Hint(T.NAS, 2),
+    "_nvstream._tcp": _Hint(T.PC, 2),
+    "_workstation._tcp": _Hint(T.PC, 1, None, "Linux"),
+    "_apple-mobdev2._tcp": _Hint(T.MOBILE, 2, "Apple"),
+    "_companion-link._tcp": _Hint(None, 2, "Apple"),
+}
+
+# Fase 7A.4: identificadores de modelo que publican los equipos Apple en _device-info
+# ("MacBookPro18,3", "iPhone15,2", "AudioAccessory5,1"). Los declara el propio equipo.
+_DEVICE_INFO_MODELS: tuple[tuple[re.Pattern[str], _Hint], ...] = (
+    (_rx(r"^macbook"), _Hint(T.LAPTOP, 3, "Apple", "macOS")),
+    (_rx(r"^(imac|macmini|macpro|mac\d+,\d+)"), _Hint(T.PC, 3, "Apple", "macOS")),
+    (_rx(r"^(rackmac|xserve)"), _Hint(T.SERVER, 3, "Apple", "macOS")),
+    (_rx(r"^iphone"), _Hint(T.MOBILE, 3, "Apple", "iOS")),
+    (_rx(r"^ipad"), _Hint(T.TABLET, 3, "Apple", "iPadOS")),
+    (_rx(r"^appletv"), _Hint(T.SMART_TV, 3, "Apple", "tvOS")),
+    (_rx(r"^audioaccessory"), _Hint(T.VOICE_ASSISTANT, 3, "Apple")),
+)
+
+# Fase 7A.4: patrones sobre la huella web (cabecera Server, título, CN y O del certificado).
+# Son nombres de producto o de firmware que el equipo sirve en su propia interfaz; un servidor
+# web genérico (nginx, Apache, lighttpd) no aparece porque no distingue nada. Una marca sola
+# solo aporta la marca, nunca el tipo: Hikvision, Synology, QNAP o Ubiquiti fabrican equipos
+# de clases distintas, y el tipo tiene que salir de un producto o firmware concreto.
+_WEB_HINTS: tuple[tuple[re.Pattern[str], _Hint], ...] = (
+    (_rx(r"dnvrs-webs|network video recorder|\bnvr\b|\bdvr\b"), _Hint(T.DVR_NVR, 3)),
+    (_rx(r"app-webs/|\bds-2cd"), _Hint(T.IP_CAMERA, 2, "Hikvision")),
+    (_rx(r"hikvision"), _Hint(None, 2, "Hikvision")),
+    (_rx(r"\bdahua\b"), _Hint(None, 2, "Dahua")),
+    (_rx(r"\baxis\b.*(camera|video)"), _Hint(T.IP_CAMERA, 3, "Axis")),
+    (_rx(r"^axis$|axis communications"), _Hint(None, 2, "Axis")),
+    (_rx(r"\breolink\b"), _Hint(None, 2, "Reolink")),
+    (_rx(r"(ip|network|web)\s*camera|\bipcam\b"), _Hint(T.IP_CAMERA, 2)),
+    (_rx(r"diskstation|\bdsm\b"), _Hint(T.NAS, 3, "Synology")),
+    (_rx(r"synology router|\bsrm\b"), _Hint(T.ROUTER, 2, "Synology")),
+    (_rx(r"synology"), _Hint(None, 2, "Synology")),
+    (_rx(r"\bqts\b|turbo nas"), _Hint(T.NAS, 3, "QNAP")),
+    (_rx(r"\bqnap\b"), _Hint(None, 2, "QNAP")),
+    (_rx(r"truenas|freenas"), _Hint(T.NAS, 2)),
+    (_rx(r"routeros"), _Hint(T.ROUTER, 2, "MikroTik")),
+    (_rx(r"mikrotik"), _Hint(None, 2, "MikroTik")),
+    (_rx(r"openwrt|\bluci\b"), _Hint(T.ROUTER, 2, None, "Linux")),
+    (_rx(r"pfsense|opnsense"), _Hint(T.ROUTER, 2)),
+    (_rx(r"fritz!?\s?box"), _Hint(T.ROUTER, 3, "AVM")),
+    (
+        _rx(r"tp-?link.*(archer|router|deco)|(archer|deco)\b.*tp-?link"),
+        _Hint(T.ROUTER, 2, "TP-Link"),
+    ),
+    (_rx(r"managed switch|smart switch|prosafe|procurve|catalyst"), _Hint(T.NETWORK_SWITCH, 2)),
+    (_rx(r"\bunifi\b"), _Hint(None, 2, "Ubiquiti")),
+    (_rx(r"hp http server|hp-chaiserver|laserjet|officejet|deskjet"), _Hint(T.PRINTER, 3, "HP")),
+    (_rx(r"epson.*(http server|printer|ecotank)|epson_linux"), _Hint(T.PRINTER, 3, "Epson")),
+    (_rx(r"canon http server"), _Hint(T.PRINTER, 3, "Canon")),
+    (_rx(r"^debut/"), _Hint(T.PRINTER, 2, "Brother")),
+    (_rx(r"\bbrother\b"), _Hint(None, 2, "Brother")),
+    (_rx(r"\blexmark\b"), _Hint(None, 2, "Lexmark")),
+    (_rx(r"\bxerox\b"), _Hint(None, 2, "Xerox")),
+    (_rx(r"\bkyocera\b"), _Hint(None, 2, "Kyocera")),
+    (_rx(r"\bricoh\b"), _Hint(None, 2, "Ricoh")),
+    (_rx(r"\bprinter\b|\bimpresora\b"), _Hint(T.PRINTER, 2)),
+    (_rx(r"\bilo\b|integrated lights-out|idrac|\bipmi\b|\bbmc\b"), _Hint(T.SERVER, 3)),
+    (_rx(r"vmware esxi|proxmox"), _Hint(T.SERVER, 3)),
+    (_rx(r"microsoft-iis"), _Hint(T.SERVER, 1, None, "Windows")),
+    (_rx(r"microsoft-httpapi"), _Hint(None, 1, None, "Windows")),
+    (_rx(r"\bwebos\b|\btizen\b|\bbravia\b|\broku\b"), _Hint(T.SMART_TV, 2)),
+    (_rx(r"philips hue"), _Hint(T.IOT, 3, "Philips Hue")),
+)
+
 
 @dataclass
 class _Score:
@@ -282,6 +412,29 @@ class _Evidence:
 
 
 def identify(data: IdentityInput) -> Identification:
+    """Identificación automática y, encima, el tipo manual si un admin lo fijó.
+
+    El tipo manual manda (como la etiqueta personalizada manda sobre el nombre), pero no
+    borra la evidencia: si la inferencia apunta a otro tipo, queda como conflicto visible.
+    """
+    result = _identify_auto(data)
+    manual = data.manual_type
+    if manual is None:
+        return result
+    automatic = result.device_type
+    evidence = _Evidence()
+    evidence.items = list(result.evidence)
+    evidence.add(MANUAL, f"tipo asignado manualmente: {manual.value}")
+    if automatic is not None and automatic != manual:
+        evidence.add(CONFLICT, f"la identificación automática apunta a: {automatic.value}")
+    result.device_type = manual
+    result.confidence = Confidence.HIGH
+    result.reason = "asignado manualmente"
+    result.evidence = evidence.items
+    return result
+
+
+def _identify_auto(data: IdentityInput) -> Identification:
     evidence = _Evidence()
     result = Identification()
     types: dict[DeviceType, _Score] = defaultdict(_Score)
@@ -384,6 +537,55 @@ def identify(data: IdentityInput) -> Identification:
             if hint.type is not None:
                 vote_type(hint.type, 1, SSDP, f"SSDP {data.ssdp_server}")
 
+    # --- Huellas de servicio (Fase 7A.4) ----------------------------------------------------
+    def best_hints(found: Iterable[tuple[_Hint, str]], source: str) -> None:
+        # Varias pistas de la misma fuente para el mismo tipo (_ipp y _ipps, título y Server)
+        # repiten lo mismo: cuenta la más fuerte, no la suma.
+        best: dict[DeviceType, tuple[int, str]] = {}
+        for hint, label in found:
+            if hint.type is not None and hint.strength > best.get(hint.type, (0, ""))[0]:
+                best[hint.type] = (hint.strength, label)
+            if hint.vendor:
+                # Sin `implied`: la marca sale de la misma pista, no puede confirmarla.
+                vote(vendors, hint.vendor, 2, source)
+            if hint.os:
+                vote(oses, hint.os, 2, source)
+        for device_type, (strength, label) in best.items():
+            vote_type(device_type, strength, source, label)
+
+    services_stale = MDNS_SERVICE in data.stale_sources
+    if data.mdns_services:
+        listed = ", ".join(sorted(data.mdns_services))
+        evidence.add(MDNS_SERVICE, listed + (" (antiguo)" if services_stale else ""))
+    if data.mdns_model:
+        evidence.add(
+            MDNS_SERVICE, f"modelo {data.mdns_model}" + (" (antiguo)" if services_stale else "")
+        )
+    if not services_stale:
+        found = [
+            (_SERVICE_HINTS[svc], f"servicio {svc}")
+            for svc in sorted(data.mdns_services)
+            if svc in _SERVICE_HINTS
+        ]
+        if data.mdns_model:
+            model_hints = [h for p, h in _DEVICE_INFO_MODELS if p.search(data.mdns_model)]
+            for hint in model_hints or list(_name_hints(data.mdns_model)):
+                found.append((hint, f"modelo {data.mdns_model}"))
+                if hint.vendor:
+                    # El modelo lo declara el propio equipo: la marca vale como la de UPnP.
+                    vote(vendors, hint.vendor, 1, MDNS_SERVICE)
+        best_hints(found, MDNS_SERVICE)
+    web_stale = WEB in data.stale_sources
+    web_found: list[tuple[_Hint, str]] = []
+    for item in data.web:
+        text = item.text()
+        if not text:
+            continue
+        evidence.add(WEB, text + (" (antiguo)" if web_stale else ""))
+        if not web_stale:
+            web_found.extend((hint, f"web {text}") for p, hint in _WEB_HINTS if p.search(text))
+    best_hints(web_found, WEB)
+
     # --- Puertos y posición en la red -----------------------------------------------------
     # Corrección 6C: un único puerto nunca decide el tipo por sí solo. Con un solo servicio
     # el puerto solo refuerza un tipo que ya sugiere otra fuente (nombre, fabricante, UPnP).
@@ -428,6 +630,9 @@ def identify(data: IdentityInput) -> Identification:
         if data.upnp_model_number and data.upnp_model_number not in model:
             model = f"{model} {data.upnp_model_number}"
         result.device_model = _clip(model)
+    elif data.mdns_model and not services_stale:
+        # Fase 7A.4: modelo publicado por el propio equipo en _device-info.
+        result.device_model = _clip(data.mdns_model)
     else:
         for code, vendor in model_codes:
             if result.device_vendor == vendor and len(vendors[vendor].sources) >= 2:
@@ -595,7 +800,9 @@ def _vendor_conflicts(vendors: dict[str, _Score], evidence: _Evidence) -> None:
     de _pick; aquí solo se conserva la contradicción para que nadie la tome por certeza.
     """
     declared = [
-        (brand, score) for brand, score in vendors.items() if score.sources & {MAC_VENDOR, UPNP}
+        (brand, score)
+        for brand, score in vendors.items()
+        if score.sources & {MAC_VENDOR, UPNP, MDNS_SERVICE}
     ]
     if len(declared) < 2:
         return
@@ -629,7 +836,11 @@ def _corroborate(types: dict[DeviceType, _Score], vendors: dict[str, _Score]) ->
     """
     for score in types.values():
         for vendor in sorted(score.implied):
-            backing = vendors[vendor].sources & {MAC_VENDOR, UPNP} if vendor in vendors else set()
+            backing = (
+                vendors[vendor].sources & {MAC_VENDOR, UPNP, MDNS_SERVICE}
+                if vendor in vendors
+                else set()
+            )
             if backing:
                 score.total += 2
                 score.sources |= backing

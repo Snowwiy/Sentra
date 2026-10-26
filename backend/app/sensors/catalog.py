@@ -31,6 +31,9 @@ ADVANCED_CAPABILITY = "network.discovery.advanced"
 # Corrección 6C: el sensor sabe hacer las sondas de nombre del discovery local (mDNS, NetBIOS,
 # SSDP/UPnP) y acepta discovery_advanced v2. Sin ella el sensor recibe v1, como hasta ahora.
 NAMES_CAPABILITY = "network.discovery.names"
+# Fase 7A.4: el sensor sabe tomar huellas de servicio (DNS-SD, HTTP Server/título, sujeto
+# TLS) y acepta discovery_advanced v3. Sin ella recibe v2 (o v1), como hasta ahora.
+FINGERPRINT_CAPABILITY = "network.discovery.fingerprint"
 # Capacidades que el servidor reconoce. Lo que el sensor declare fuera de esta lista se
 # descarta (un sensor no puede "anunciar" capacidades para recibir trabajos que no existen).
 CAPABILITIES: frozenset[str] = frozenset(
@@ -38,6 +41,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         "network.discovery.basic",
         ADVANCED_CAPABILITY,
         NAMES_CAPABILITY,
+        FINGERPRINT_CAPABILITY,
         "network.arp",
         "network.icmp",
         "network.tcp",
@@ -55,7 +59,7 @@ REQUIRED_CAPABILITY = {
 }
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.6.0"
+SENSOR_RUNTIME_VERSION = "0.7.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

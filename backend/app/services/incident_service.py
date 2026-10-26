@@ -22,7 +22,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.orm import Session
 
 from app.core.exceptions import (
@@ -37,6 +37,12 @@ from app.incidents import workflow
 from app.incidents.workflow import incident_key
 from app.models.alert import Alert
 from app.models.asset import Asset
+from app.models.case_operations import (
+    OPEN_CONTROL_STATUSES,
+    OPEN_TASK_STATUSES,
+    IncidentTask,
+    NetworkControlRequest,
+)
 from app.models.detection import Detection
 from app.models.incident import (
     ACTIVE_STATUSES,
@@ -106,6 +112,14 @@ _VULNERABILITY_CONFIDENCE = {
 _THREAT_LEVEL = {"malicious": IncidentLevel.HIGH, "suspicious": IncidentLevel.MEDIUM}
 THREAT_MATCH_ACTIVE = frozenset({"open", "acknowledged"})
 
+# Fase 7A.6: nivel de riesgo -> gravedad del caso abierto desde el riesgo de un activo.
+_RISK_LEVEL = {
+    "informational": IncidentLevel.LOW,
+    "low": IncidentLevel.LOW,
+    "medium": IncidentLevel.MEDIUM,
+    "high": IncidentLevel.HIGH,
+    "critical": IncidentLevel.CRITICAL,
+}
 # Detalle: relaciones mostradas en la respuesta (el resto en /evidence y en el timeline).
 DETAIL_RELATIONS_LIMIT = 50
 RISK_ASSETS_LIMIT = 10
@@ -127,6 +141,19 @@ class Operator:
         cls, user: User, client_ip: str | None, permissions: Iterable[Permission]
     ) -> "Operator":
         return cls(user, Actor.for_user(user, client_ip), Permission.INCIDENTS_ADMIN in permissions)
+
+
+def _risk_summary(risk: AssetRisk) -> str:
+    """Descripción inicial de un caso abierto desde el riesgo: score y factores principales."""
+    lines = [f"Riesgo {risk.level.value} ({risk.score}/100, confianza {risk.confidence.value})."]
+    items = [i for i in risk.contributions or [] if isinstance(i, dict) and i.get("label")]
+    items.sort(key=lambda i: float(i.get("points") or 0), reverse=True)
+    factors = [str(i["label"]) for i in items[:TOP_CONTRIBUTORS]]
+    if factors:
+        lines.append("Factores principales: " + "; ".join(factors) + ".")
+    elif risk.top_factor:
+        lines.append(f"Factor principal: {risk.top_factor}.")
+    return " ".join(lines)
 
 
 def _now() -> datetime:
@@ -280,6 +307,7 @@ class IncidentService:
         )
         for asset in assets:
             self._link_asset(incident, asset, "manual", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
         self._snapshot_risk(incident, now, "created")
         self._audit(
             "incident_created",
@@ -353,6 +381,7 @@ class IncidentService:
             alert = self._session.get(Alert, detection.alert_id)
             if alert is not None:
                 self._link_alert(incident, alert, asset, "detection", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
         self._snapshot_risk(incident, now, "created")
         self._audit(
             "incident_created",
@@ -398,6 +427,7 @@ class IncidentService:
         self._link_alert(incident, alert, asset, "alert", now)
         for detection in detections:
             self._link_detection(incident, detection, asset, "alert", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
         self._snapshot_risk(incident, now, "created")
         self._audit(
             "incident_created",
@@ -455,6 +485,7 @@ class IncidentService:
             now,
         )
         self._link_vulnerability(incident, finding, asset, "vulnerability", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
         self._snapshot_risk(incident, now, "created")
         self._audit(
             "incident_created",
@@ -571,12 +602,73 @@ class IncidentService:
             detection = self._session.get(Detection, match.detection_id)
             if detection is not None:
                 self._link_detection(incident, detection, asset, "threat_match", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
         self._snapshot_risk(incident, now, "created")
         self._audit(
             "incident_created",
             incident,
             {"source": "threat_match", "match": str(match.public_id), "indicator": value[:200]},
         )
+        return incident
+
+    def promote_risk(self, asset_id: UUID, payload: IncidentPromote) -> Incident:
+        """Fase 7A.6: abre un caso desde el riesgo actual de un activo (nunca automático).
+
+        Lo decide un analista mirando el riesgo; el motor 4I nunca abre casos. Se exige un
+        riesgo ya calculado y que el activo no esté ya en un caso activo abierto por riesgo.
+        La gravedad sale del nivel (informational cuenta como low) y la confianza, de la del
+        cálculo; la descripción cita el score y los factores principales del ledger.
+        """
+        asset = self._session.scalar(
+            select(Asset).where(Asset.public_id == asset_id).with_for_update()
+        )
+        if asset is None:
+            raise NotFoundError("Asset not found")
+        risk = self._session.get(AssetRisk, asset.id)
+        if risk is None or risk.calculated_at is None:
+            raise IncidentStateError("The asset has no calculated risk yet")
+        existing = self._session.scalar(
+            select(Incident)
+            .join(IncidentAsset, IncidentAsset.incident_id == Incident.id)
+            .where(
+                IncidentAsset.asset_id == asset.id,
+                IncidentAsset.source == "risk",
+                Incident.status.in_(ACTIVE_STATUSES),
+            )
+            .order_by(Incident.number)
+            .limit(1)
+        )
+        if existing is not None:
+            key = incident_key(existing.number)
+            raise IncidentAlreadyLinkedError(
+                f"Already part of active incident {key}; open it instead",
+                details=[{"incident_id": str(existing.public_id), "key": key}],
+            )
+        now = _now()
+        severity = _RISK_LEVEL[risk.level.value]
+        priority = payload.priority or self._suggested_priority(severity, [asset])
+        incident = self._new_incident(
+            payload.title or f"Riesgo {risk.level.value} en {asset.display_name}"[:200],
+            payload.description if payload.description is not None else _risk_summary(risk),
+            severity,
+            priority,
+            IncidentConfidence(risk.confidence.value),
+            now,
+        )
+        self._link_asset(incident, asset, "risk", now)
+        self._apply_owner(incident, payload.owner_user_id, now)
+        self._snapshot_risk(incident, now, "created")
+        self._audit(
+            "incident_created",
+            incident,
+            {
+                "source": "risk",
+                "asset": str(asset.public_id),
+                "score": risk.score,
+                "level": risk.level.value,
+            },
+        )
+        self._session.commit()
         return incident
 
     def attach_threat_match(self, public_id: UUID, match_id: UUID) -> bool:
@@ -934,18 +1026,16 @@ class IncidentService:
             "incident_status_changed", incident, {"from": previous.value, "to": new_status.value}
         )
 
-    def assign(self, public_id: UUID, payload: IncidentAssign) -> Incident:
-        incident = self._lock(public_id)
-        self._check_version(incident, payload.version)
-        self._not_frozen(incident)
-        if payload.user_id is None or payload.user_id == self.op.user.public_id:
+    def _owner_for(self, user_id: UUID | None) -> User:
+        """Quién será owner: uno mismo (None o su propio id) o, solo si es admin, otro."""
+        if user_id is None or user_id == self.op.user.public_id:
             owner = self.op.user
         else:
             if not self.op.is_admin:
                 # Política 4K: un analyst solo se asigna a sí mismo; asignar a otros es de
                 # admin (incidents:admin). Ver docs/incident-management.md.
                 raise IncidentRelationError("Only an administrator can assign incidents to others")
-            found = self._session.scalar(select(User).where(User.public_id == payload.user_id))
+            found = self._session.scalar(select(User).where(User.public_id == user_id))
             if found is None:
                 raise IncidentRelationError("Owner does not exist")
             owner = found
@@ -953,6 +1043,36 @@ class IncidentService:
             raise IncidentRelationError(
                 "Owner must be an active analyst or admin (viewers cannot own incidents)"
             )
+        return owner
+
+    def _apply_owner(self, incident: Incident, user_id: UUID | None, now: datetime) -> None:
+        """Fase 7A.6: responsable elegido al crear el caso (mismas reglas que assign).
+
+        Se llama dentro de la transacción de creación: si el owner no es válido, la ruta
+        deshace el caso entero en vez de dejarlo creado sin responsable.
+        """
+        if user_id is None:
+            return
+        owner = self._owner_for(user_id)
+        incident.owner_user_id = owner.id
+        incident.assigned_at = now
+        incident.assigned_by_user_id = self.op.user.id
+        self._activity(
+            incident,
+            "assigned",
+            f"Asignado a {owner.username} al crear el caso",
+            now,
+            "user",
+            owner.public_id,
+            {"owner": owner.username, "previous": None},
+        )
+        self._audit("incident_assigned", incident, {"owner": owner.username, "previous": None})
+
+    def assign(self, public_id: UUID, payload: IncidentAssign) -> Incident:
+        incident = self._lock(public_id)
+        self._check_version(incident, payload.version)
+        self._not_frozen(incident)
+        owner = self._owner_for(payload.user_id)
         if (
             not self.op.is_admin
             and incident.owner_user_id is not None
@@ -1186,6 +1306,7 @@ class IncidentService:
             raise IncidentStateError("Reopen closed incidents before merging them")
         now = _now()
         copied = self._copy_relations(source, target, now)
+        copied.update(self._move_open_work(source, target, now))
         self._widen_window(target, source.first_seen_at, source.last_seen_at)
         source_status = source.status
         source.status = IncidentStatus.MERGED
@@ -1219,6 +1340,34 @@ class IncidentService:
         self._touch(target, now)
         self._session.commit()
         return target
+
+    def _move_open_work(self, source: Incident, target: Incident, now: datetime) -> dict[str, int]:
+        """Fase 7A.6: las tareas y solicitudes de control pendientes pasan al destino.
+
+        Al contrario que las relaciones (que se copian), el trabajo pendiente se MUEVE: el
+        origen queda congelado y nadie podría terminarlo allí. Lo ya terminado (tareas done o
+        cancelled, solicitudes decididas) se queda en el origen como historial.
+        """
+        moved_tasks = self._session.execute(
+            update(IncidentTask)
+            .where(
+                IncidentTask.incident_id == source.id,
+                IncidentTask.status.in_(OPEN_TASK_STATUSES),
+            )
+            .values(incident_id=target.id, updated_at=now)
+        )
+        moved_controls = self._session.execute(
+            update(NetworkControlRequest)
+            .where(
+                NetworkControlRequest.incident_id == source.id,
+                NetworkControlRequest.status.in_(OPEN_CONTROL_STATUSES),
+            )
+            .values(incident_id=target.id, updated_at=now)
+        )
+        return {
+            "tasks_moved": int(getattr(moved_tasks, "rowcount", 0) or 0),
+            "network_controls_moved": int(getattr(moved_controls, "rowcount", 0) or 0),
+        }
 
     def _copy_relations(self, source: Incident, target: Incident, now: datetime) -> dict[str, int]:
         counts = {
@@ -1836,6 +1985,24 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
         )
         or 0
     )
+    task_counts = dict(
+        session.execute(
+            select(IncidentTask.status, func.count())
+            .where(IncidentTask.incident_id == incident.id)
+            .group_by(IncidentTask.status)
+        ).all()
+    )
+    controls_open = (
+        session.scalar(
+            select(func.count())
+            .select_from(NetworkControlRequest)
+            .where(
+                NetworkControlRequest.incident_id == incident.id,
+                NetworkControlRequest.status.in_(OPEN_CONTROL_STATUSES),
+            )
+        )
+        or 0
+    )
     related_ids = [i for i in (incident.duplicate_of_id, incident.merged_into_id) if i is not None]
     related = (
         {i.id: i for i in session.scalars(select(Incident).where(Incident.id.in_(related_ids)))}
@@ -1901,6 +2068,9 @@ def detail(session: Session, incident: Incident) -> IncidentDetail:
         threat_matches=threat_matches,
         threat_matches_total=threats_total,
         notes_total=notes_total,
+        tasks_total=sum(task_counts.values()),
+        tasks_open=sum(n for s, n in task_counts.items() if s in OPEN_TASK_STATUSES),
+        network_controls_open=controls_open,
         metrics=IncidentMetrics(
             # Edad hasta la resolución/cierre si ya terminó: dato observado, no un SLA.
             age_seconds=int(((end or _now()) - incident.created_at).total_seconds()),

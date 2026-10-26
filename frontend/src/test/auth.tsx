@@ -6,7 +6,18 @@ import { AuthContext, type AuthValue } from "../auth/AuthContext";
 
 // Igual que backend/app/core/permissions.py (ROLE_PERMISSIONS).
 export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
-  viewer: ["monitoring:read", "ai:use", "incidents:read", "rules:read", "vulnerabilities:read", "threat_intel:read", "response:read", "reports:read"],
+  viewer: [
+    "monitoring:read",
+    "ai:use",
+    "incidents:read",
+    "rules:read",
+    "vulnerabilities:read",
+    "threat_intel:read",
+    "response:read",
+    "reports:read",
+    // Fase 7A: ver el catálogo de herramientas del analista.
+    "tools:read",
+  ],
   analyst: [
     "monitoring:read",
     "alerts:manage",
@@ -33,6 +44,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "forensics:acquire",
     "forensics:download",
     "containment:preview",
+    // Fase 7A: ver y ejecutar herramientas del analista.
+    "tools:read",
+    "tools:execute",
   ],
   admin: [
     "monitoring:read",
@@ -82,6 +96,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "containment:preview",
     "containment:isolate",
     "containment:release",
+    // Fase 7A: herramientas del analista (también las ejecuciones ajenas) y aprobar controles de red.
+    "tools:read",
+    "tools:execute",
+    "tools:manage",
+    "network_controls:approve",
   ],
 };
 

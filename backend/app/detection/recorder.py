@@ -16,7 +16,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.orm import Session
 
 from app.core.config import get_settings
-from app.detection import behavior, text
+from app.detection import behavior, script_context, text
 from app.detection.config import DetectionConfig
 from app.detection.custom.runtime import active_event_channels
 from app.detection.signals import (
@@ -85,6 +85,28 @@ class SignalRecorder:
             )
         )
 
+    def _enrich(self, asset_id: int, drafts: Sequence[SignalDraft]) -> None:
+        """Fase 7A.8: contexto de proceso para PowerShell y puertos expuestos (en sitio).
+
+        Se guarda en la señal, no se calcula al leer: las excepciones comparan la señal y el
+        proceso puede haber desaparecido de la telemetría cuando alguien revise la detección.
+        Lo que no se encuentra se deja fuera; la regla dice qué faltó en vez de inventarlo.
+        """
+        for draft in drafts:
+            context: dict[str, Any] | None = None
+            if draft.kind == SignalKind.POWERSHELL_SUSPICIOUS:
+                pid = draft.data.get("pid")
+                if isinstance(pid, int):
+                    context = script_context.process_context(
+                        self._session, asset_id, pid, draft.occurred_at
+                    )
+            elif draft.kind == SignalKind.PORT_EXPOSED:
+                port = draft.data.get("port")
+                if isinstance(port, int):
+                    context = script_context.listener_owner(self._session, asset_id, port)
+            if context:
+                draft.data.update(text.bounded_data(context))
+
     # --- Fuentes -------------------------------------------------------------------------------
 
     def record_events(self, asset_id: int, events: Sequence[SystemEvent]) -> None:
@@ -92,7 +114,9 @@ class SignalRecorder:
 
         def action() -> None:
             not_before = datetime.now(UTC) - self._config.max_event_age
-            self._insert(asset_id, signals_from_events(events, not_before))
+            drafts = signals_from_events(events, not_before)
+            self._enrich(asset_id, drafts)
+            self._insert(asset_id, drafts)
 
         def raw_action() -> None:
             # Fase 5A: solo canales con reglas personalizadas activas (caché por proceso con
@@ -305,6 +329,7 @@ class SignalRecorder:
         def action() -> None:
             draft = signal_from_discovery_change(kind, item, occurred_at, details or {})
             if draft is not None:
+                self._enrich(asset_id, [draft])
                 self._insert(asset_id, [draft])
 
         if kind in (ChangeKind.PORT_OPENED, ChangeKind.DISAPPEARED):

@@ -1,24 +1,23 @@
-import { useCallback, useState, type FormEvent } from "react";
+import { useCallback, useState } from "react";
 import { Link } from "react-router-dom";
 import { endpointApi, exclusionsApi } from "../api/sentra6e";
-import type { DetectionExclusion, DetectionExclusionField } from "../api/types";
+import type { DetectionExclusion } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
-import { ConfirmDialog, Modal } from "../components/Modal";
+import { ExclusionDialog } from "../components/detections/ExclusionDialog";
+import { ConfirmDialog } from "../components/Modal";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { EXCLUSION_FIELD_LABELS, formatSeconds } from "../lib/endpoint";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { usePolling } from "../lib/usePolling";
 
 const REFRESH_MS = 60_000;
-const RULE_ID = /^[A-Z0-9-]{3,64}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-
-const toError = (err: unknown) => (err instanceof Error ? err : new Error(String(err)));
 
 /**
  * Excepciones de reglas integradas (Fase 6E.5), junto a las reglas de detección. Cada
  * excepción es un valor exacto (ejecutable, nombre, hash, firmante, padre o IP remota) con
- * justificación y, opcionalmente, caducidad. Ver: rules:read; crear y revocar: rules:manage.
+ * justificación y, opcionalmente, caducidad. Fase 7A.8: SCR-001, CORR-002 y NET-001 solo
+ * admiten excepciones exactas (script con su hash, o ejecutable en un puerto de un equipo) y
+ * con caducidad; el formulario lo aplica y el servidor lo vuelve a comprobar. Ver: rules:read; crear y revocar: rules:manage.
  * Con telemetry:read se muestran además la ingesta y la latencia medidas de la detección
  * conductual (BEH-*), que es periódica, no en tiempo real.
  */
@@ -95,7 +94,12 @@ export function DetectionExclusionsPage() {
                       {!x.active && <span className="badge badge--muted">{x.revoked_at ? "revocada" : "caducada"}</span>}
                     </td>
                     <td>{EXCLUSION_FIELD_LABELS[x.field] ?? x.field}</td>
-                    <td className="mono small">{x.value}</td>
+                    <td className="mono small">
+                      {x.value}
+                      {/* Fase 7A.8: condiciones que además deben coincidir. */}
+                      {x.require_sha256 && <div className="muted">con SHA-256 {x.require_sha256}</div>}
+                      {x.port !== null && x.port !== undefined && <div className="muted">en el puerto {x.port}</div>}
+                    </td>
                     <td className="small">
                       {x.reason}
                       <div className="muted">
@@ -126,7 +130,7 @@ export function DetectionExclusionsPage() {
       </section>
 
       {creating && (
-        <CreateExclusionDialog
+        <ExclusionDialog
           onClose={() => setCreating(false)}
           onCreated={() => {
             setCreating(false);
@@ -186,119 +190,5 @@ function BehaviorMetrics() {
       </dl>
       <p className="muted small">El motor evalúa periódicamente: la latencia medida es la referencia, no «tiempo real».</p>
     </section>
-  );
-}
-
-function CreateExclusionDialog({ onClose, onCreated }: { onClose: () => void; onCreated: () => void }) {
-  const [ruleId, setRuleId] = useState("");
-  const [field, setField] = useState<DetectionExclusionField>("exe");
-  const [value, setValue] = useState("");
-  const [reason, setReason] = useState("");
-  const [assetId, setAssetId] = useState("");
-  const [expires, setExpires] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-
-  const errors: string[] = [];
-  if (!RULE_ID.test(ruleId.trim())) errors.push("Indica el identificador de la regla (p. ej. BEH-001).");
-  if (!value.trim() || value.length > 1024) errors.push("Indica el valor exacto (máx. 1024 caracteres).");
-  if (reason.trim().length < 3) errors.push("La justificación es obligatoria (mín. 3 caracteres).");
-  if (assetId.trim() && !UUID.test(assetId.trim())) errors.push("El identificador de equipo no es válido.");
-  const expiresAt = expires ? new Date(expires) : undefined;
-  if (expiresAt && Number.isNaN(expiresAt.getTime())) errors.push("La fecha de caducidad no es válida.");
-
-  const submit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (errors.length) return;
-    // Se comprueba al enviar (no al dibujar): «ahora» cambia entre renders.
-    if (expiresAt && expiresAt.getTime() <= Date.now()) {
-      setError("La caducidad debe ser una fecha futura.");
-      return;
-    }
-    setBusy(true);
-    setError(undefined);
-    try {
-      await exclusionsApi.create({
-        rule_id: ruleId.trim(),
-        field,
-        value: value.trim(),
-        reason: reason.trim(),
-        asset_id: assetId.trim() || null,
-        expires_at: expiresAt ? expiresAt.toISOString() : null,
-      });
-      onCreated();
-    } catch (err) {
-      setError(errorMessage(toError(err)));
-      setBusy(false);
-    }
-  };
-
-  return (
-    <Modal title="Nueva excepción" onClose={busy ? () => undefined : onClose}>
-      <form className="stack" onSubmit={(e) => void submit(e)} noValidate>
-        <label className="form-field">
-          <span>Regla</span>
-          <input
-            className="input mono"
-            value={ruleId}
-            placeholder="BEH-001"
-            maxLength={64}
-            onChange={(e) => setRuleId(e.target.value.toUpperCase())}
-            disabled={busy}
-          />
-        </label>
-        <label className="form-field">
-          <span>Campo</span>
-          <select
-            className="input input--select"
-            value={field}
-            onChange={(e) => setField(e.target.value as DetectionExclusionField)}
-            disabled={busy}
-          >
-            {Object.entries(EXCLUSION_FIELD_LABELS).map(([v, label]) => (
-              <option key={v} value={v}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="form-field">
-          <span>Valor exacto</span>
-          <input className="input mono" value={value} maxLength={1024} onChange={(e) => setValue(e.target.value)} disabled={busy} />
-        </label>
-        <label className="form-field">
-          <span>Justificación</span>
-          <textarea className="input" rows={2} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} disabled={busy} />
-        </label>
-        <label className="form-field">
-          <span>Solo para el equipo (identificador, opcional)</span>
-          <input className="input mono" value={assetId} onChange={(e) => setAssetId(e.target.value)} disabled={busy} />
-        </label>
-        <label className="form-field">
-          <span>Caduca (opcional)</span>
-          <input className="input" type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} disabled={busy} />
-        </label>
-        {errors.length > 0 && (ruleId || value || reason) && (
-          <ul className="plain-list small text-crit">
-            {errors.map((e) => (
-              <li key={e}>{e}</li>
-            ))}
-          </ul>
-        )}
-        {error && (
-          <div className="banner banner--warn" role="alert">
-            {error}
-          </div>
-        )}
-        <div className="modal__actions">
-          <button type="button" className="button" onClick={onClose} disabled={busy}>
-            Cancelar
-          </button>
-          <button type="submit" className="button button--primary" disabled={busy || errors.length > 0}>
-            {busy ? "Creando…" : "Crear excepción"}
-          </button>
-        </div>
-      </form>
-    </Modal>
   );
 }

@@ -32,7 +32,7 @@ from app.risk.config import RiskConfig
 from app.risk.engine import RiskEngine
 from app.risk.queue import request_recalculation
 from app.schemas.agent_management import AgentRead
-from app.schemas.asset import AssetLabelUpdate, AssetList, AssetRead
+from app.schemas.asset import AssetDeviceTypeUpdate, AssetLabelUpdate, AssetList, AssetRead
 from app.schemas.asset_context import (
     DEPARTMENT_MAX,
     TAG_MAX,
@@ -381,6 +381,55 @@ def set_asset_label(
             target_type="asset",
             target_id=asset_id,
             details={"from": previous, "to": body.label, "version": asset.custom_label_version},
+            commit=False,
+        )
+    session.commit()
+    return service.get_asset(asset_id)
+
+
+@router.patch(
+    "/{asset_id}/device-type",
+    response_model=AssetRead,
+    responses=error_responses(401, 403, 404, 409),
+)
+def set_asset_device_type(
+    asset_id: UUID,
+    body: AssetDeviceTypeUpdate,
+    ctx: AssetManager,
+    session: DbSession,
+    service: Service,
+) -> AssetRead:
+    """Fija o quita (`device_type: null`) el tipo del activo a mano (Fase 7A.4).
+
+    Solo assets:manage (admin), como la etiqueta: el tipo cambia el rol sugerido, los filtros
+    y los gráficos de todos. Manda sobre la identificación automática pero no borra sus
+    evidencias; si la inferencia apunta a otro tipo, queda como conflicto visible. Versión
+    obsoleta: 409 asset_label_conflict. Auditado como asset_device_type_changed.
+    """
+    action = "asset_device_type_changed"
+    value = body.device_type.value if body.device_type else None
+    try:
+        asset, previous = service.set_manual_type(asset_id, value, body.version, actor(ctx).name)
+    except SentraError as exc:
+        session.rollback()
+        audit_service.record(
+            session,
+            actor(ctx),
+            action,
+            audit_service.FAILURE,
+            "asset",
+            asset_id,
+            details={"error": exc.code},
+        )
+        raise
+    if previous != value:
+        audit_service.record(
+            session,
+            actor(ctx),
+            action,
+            target_type="asset",
+            target_id=asset_id,
+            details={"from": previous, "to": value, "version": asset.custom_label_version},
             commit=False,
         )
     session.commit()

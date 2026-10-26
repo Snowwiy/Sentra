@@ -21,10 +21,11 @@ def write(tmp_path: Path, text: str) -> Path:
     return path
 
 
-def test_version_is_050() -> None:
-    assert __version__ == "0.5.0"
+def test_version_is_current() -> None:
+    # Fase 7A.8: 0.6.0 (contexto del 4104). La configuración de 0.5.0 sigue siendo válida.
+    assert __version__ == "0.6.0"
     project = tomllib.loads((AGENT / "pyproject.toml").read_text())
-    assert project["project"]["version"] == "0.5.0"
+    assert project["project"]["version"] == "0.6.0"
 
 
 def test_new_sections_have_safe_defaults(tmp_path: Path) -> None:
