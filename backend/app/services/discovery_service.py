@@ -67,7 +67,9 @@ from app.models.discovery import (
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.inventory import AssetInventory
 from app.risk.queue import request_recalculation
+from app.services.agent_management_service import local_ipv4_addresses
 from app.services.alert_service import AlertService, AlertThresholds
+from app.services.device_identity import alias_mac_targets
 from app.services.discovery_observations import ObservationRecorder
 from app.services.identification import (
     oui_database,
@@ -660,6 +662,13 @@ class AssetIndex:
                 )
             )
             self.add(asset, ips, macs)
+        # Fase 7B.2: una MAC que un admin asoció a mano a un activo (alias archivado, MAC
+        # privada que rotó) se resuelve a ese activo, por encima del ranking automático.
+        by_id = {asset.id: asset for asset in assets}
+        for mac, target_id in alias_mac_targets(session, site).items():
+            target = by_id.get(target_id)
+            if target is not None:
+                self.by_mac[mac] = target
 
     def add(self, asset: Asset, ips: set[str] | None = None, macs: set[str] | None = None) -> None:
         for mac in (macs or set()) | ({asset.mac_address} if asset.mac_address else set()):
@@ -712,6 +721,7 @@ class ResultApplier:
         self._change_details: dict[str, Any] | None = None
         self._ports_opened = 0
         self._ports_closed = 0
+        self._local_addresses: frozenset[str] | None = None
 
     def apply(
         self,
@@ -853,6 +863,21 @@ class ResultApplier:
             # The agent reports its own address; a discovered host is where it was seen.
             asset.primary_ip = obs.address
 
+    def _vantage(self, address: str) -> str | None:
+        """¿El puerto se comprobó desde el propio equipo o desde otro? (Fase 7B-Fix1)
+
+        El discovery del servidor que sondea una IP del propio servidor no atraviesa el
+        firewall de Windows: ver el puerto abierto no prueba que otro equipo de la LAN llegue.
+        Un sensor se despliega en otro equipo del site: su observación cuenta como remota
+        (si se instalara en el mismo equipo que observa, esto lo sobrestimaría; la guía de
+        sensores lo desaconseja).
+        """
+        if self._executor != "local":
+            return "remote"
+        if self._local_addresses is None:
+            self._local_addresses = frozenset(local_ipv4_addresses())
+        return "self" if address in self._local_addresses else "remote"
+
     def _load_ports(self, asset_ids: list[int]) -> dict[int, dict[int, AssetPort]]:
         found: dict[int, dict[int, AssetPort]] = {}
         unique = sorted(set(asset_ids))
@@ -904,6 +929,7 @@ class ResultApplier:
                     opened.append(port)
                 row.last_seen_at = now
                 row.misses = 0
+                row.observed_from = self._vantage(obs.address)
             elif (
                 row is not None
                 and row.state == PortStateValue.OPEN

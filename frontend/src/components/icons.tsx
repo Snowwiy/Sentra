@@ -42,9 +42,11 @@ export type IconName =
   | "logout"
   | "layout-sidebar"
   | "layout-top"
-  | "layout-auto";
+  | "layout-auto"
+  | "console";
 
 const PATHS: Record<IconName, string> = {
+  console: "M4 5h16v14H4zM8 9l3 3-3 3M13 15h4",
   menu: "M4 6h16M4 12h16M4 18h16",
   close: "M6 6l12 12M18 6L6 18",
   "chevron-down": "M6 9l6 6 6-6",

@@ -149,6 +149,7 @@ export const CORRELATION_LABELS: Record<WlanCorrelationBasis, string> = {
   agent_self: "lo informa el propio agente",
   mac_match: "MAC global coincidente con el activo",
   agent_reported_mac: "MAC informada por el agente",
+  manual: "asociado a mano por un administrador",
 };
 
 export const CLIENT_STATES: WlanClientState[] = [

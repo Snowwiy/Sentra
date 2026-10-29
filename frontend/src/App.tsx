@@ -99,6 +99,8 @@ const InfrastructureDevicePage = lazy(() =>
   import("./pages/InfrastructureDevicePage").then((m) => ({ default: m.InfrastructureDevicePage })),
 );
 // Fase 6C.3: inventario Wi-Fi / AP / WLAN en su propio chunk.
+const MaintenancePage = lazy(() => import("./pages/MaintenancePage").then((m) => ({ default: m.MaintenancePage })));
+const ConsolePage = lazy(() => import("./pages/ConsolePage").then((m) => ({ default: m.ConsolePage })));
 const WlanPage = lazy(() => import("./pages/WlanPage").then((m) => ({ default: m.WlanPage })));
 const infrastructureFallback = <LoadingState label="Cargando infraestructura…" />;
 const LifecyclePage = lazy(() => import("./pages/LifecyclePage").then((m) => ({ default: m.LifecyclePage })));
@@ -393,6 +395,14 @@ export function AppRoutes() {
           {/* Páginas absorbidas por el hub Red (Fase 7A.5): los enlaces antiguos siguen valiendo. */}
           <Route path="topology" element={<RedirectKeepingQuery to="/network/topology" />} />
           <Route path="dhcp" element={<RedirectKeepingQuery to="/network/identity" />} />
+          <Route
+            path="admin/maintenance"
+            element={<RequirePermission permission="maintenance:manage">{page(<MaintenancePage />)}</RequirePermission>}
+          />
+          <Route
+            path="console"
+            element={<RequirePermission permission="tools:read">{page(<ConsolePage />)}</RequirePermission>}
+          />
           <Route
             path="investigations"
             element={<RequirePermission permission="forensics:read">{page(<InvestigationsPage />)}</RequirePermission>}

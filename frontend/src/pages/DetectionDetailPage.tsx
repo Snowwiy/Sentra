@@ -12,6 +12,7 @@ import {
   DetectionStatusBadge,
 } from "../components/detections/DetectionBadges";
 import { AIAnalyzePanel } from "../components/ai/AIAnalyzePanel";
+import { AttributionPanel } from "../components/detections/AttributionPanel";
 import { ExclusionDialog } from "../components/detections/ExclusionDialog";
 import { RuleDetailsPanel } from "../components/detections/RuleDetailsPanel";
 import { AssetContextSummary } from "../components/incidents/IncidentTabs";
@@ -210,6 +211,13 @@ export function DetectionDetailPage() {
           targets={[{ assetId: d.asset_id, label: d.hostname }]}
         />
         <GenerateReportLink type="detection" ids={{ detection_id: d.detection_id }} />
+        {/* Fase 7B-Fix1: la consola abre con la detección y su activo como contexto. */}
+        <Link
+          className="button"
+          to={`/console?asset=${encodeURIComponent(d.asset_id)}&detection=${encodeURIComponent(d.detection_id)}`}
+        >
+          Abrir en consola
+        </Link>
       </div>
       {error && (
         <div className="banner banner--warn" role="alert">
@@ -303,6 +311,9 @@ export function DetectionDetailPage() {
       </section>
 
       <RuleDetailsPanel ruleId={d.rule_id} details={d.details} />
+
+      {/* Fase 7B.1: solo las reglas atribuibles (scripts, servicios, procesos, puertos). */}
+      <AttributionPanel detectionId={d.detection_id} />
 
       <section className="panel panel--padded">
         <h2>Recomendaciones</h2>

@@ -30,6 +30,8 @@ os.environ["ASSET_CLEANUP_INTERVAL_MINUTES"] = "360"
 # desarrollo con RESPONSE_OFFLINE_AGENT_POLICY=queue o con Response apagado cambiaría lo que
 # comprueban los tests). Los tests de otra política la construyen explícita.
 os.environ["RESPONSE_ENABLED"] = "true"
+# Fase 7B.1: reconocimiento automático de mantenimiento con su valor por defecto (encendido).
+os.environ["MAINTENANCE_AUTO_RECOGNITION"] = "true"
 os.environ["PLAYBOOKS_ENABLED"] = "true"
 os.environ["RESPONSE_COMMAND_TTL_MINUTES"] = "15"
 os.environ["RESPONSE_COMMAND_LEASE_SECONDS"] = "300"

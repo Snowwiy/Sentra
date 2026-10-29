@@ -428,3 +428,74 @@ describe("WlanPage: redes, BSS y clientes", () => {
     expect(within(panel).queryByRole("button", { name: "Cargar más observaciones" })).not.toBeInTheDocument();
   });
 });
+
+describe("WlanPage: detalle de cliente y asociación manual (Fase 7B.2)", () => {
+  const CLIENT = "c1000000-0000-0000-0000-000000000001";
+  const ASSET = "a5000000-0000-0000-0000-000000000009";
+
+  function clientRoutes() {
+    routes[`GET /network/wlan/clients/${CLIENT}`] = () => ({ body: wlanClient() });
+    routes[`GET /network/wlan/clients/${CLIENT}/observations`] = () => ({
+      body: { items: [wlanObservation({ observation_id: 7, data: { rssi: -61 } })], total: 1, limit: 50, offset: 0 },
+    });
+    routes["GET /identity/links"] = () => ({ body: { items: [] } });
+  }
+
+  it("viewer: ve el historial del cliente y el aviso de MAC privada, sin asociar", async () => {
+    clientRoutes();
+    renderPage("viewer", "/wlan?tab=clients");
+    fireEvent.click(await screen.findByRole("button", { name: "Ver detalle del cliente da:a1:19:00:00:01" }));
+    const panel = await screen.findByRole("dialog", { name: "Detalle del cliente Wi-Fi" });
+    expect(await within(panel).findByText("rssi: -61")).toBeInTheDocument();
+    expect(within(panel).getByText(/MAC privada: el dispositivo puede cambiarla/)).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: "Asociar a un activo…" })).toBeNull();
+    expect(lastQuery("/identity/links").get("wlan_client_id")).toBe(CLIENT);
+  });
+
+  it("admin: asocia el cliente a un activo con vista previa y motivo", async () => {
+    clientRoutes();
+    routes["GET /assets"] = () => ({
+      body: { items: [{ asset_id: ASSET, display_name: "movil-ana", primary_ip: "10.0.0.40" }], total: 1 },
+    });
+    const bodies: Record<string, unknown>[] = [];
+    routes["POST /identity/links/preview"] = (init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      const ref = { asset_id: ASSET, display_name: "movil-ana", primary_ip: "10.0.0.40", mac_address: null, managed: false, archived: false, last_seen_at: null };
+      return {
+        body: {
+          kind: "wlan_client",
+          target: ref,
+          alias: null,
+          wlan_client_id: CLIENT,
+          mac: "da:a1:19:00:00:01",
+          allowed: true,
+          blockers: [],
+          evidence: [],
+          effects: ["client_identity_manual"],
+        },
+      };
+    };
+    routes["POST /identity/links"] = (init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return { status: 201, body: {} };
+    };
+    renderPage("admin", "/wlan?tab=clients");
+    fireEvent.click(await screen.findByRole("button", { name: "Ver detalle del cliente da:a1:19:00:00:01" }));
+    const panel = await screen.findByRole("dialog", { name: "Detalle del cliente Wi-Fi" });
+    fireEvent.click(await within(panel).findByRole("button", { name: "Asociar a un activo…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Asociar cliente Wi-Fi a un activo" });
+    const select = within(dialog).getByLabelText("Activo");
+    await within(dialog).findByRole("option", { name: /movil-ana/ });
+    fireEvent.change(select, { target: { value: ASSET } });
+    expect(await within(dialog).findByText(/identidad confirmada a mano/)).toBeInTheDocument();
+    expect(bodies[0]).toEqual({ kind: "wlan_client", target_asset_id: ASSET, wlan_client_id: CLIENT });
+    const confirm = within(dialog).getByRole("button", { name: "Confirmar asociación" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Motivo (queda en la auditoría)"), {
+      target: { value: "Comprobado en el ajuste Wi-Fi del móvil" },
+    });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toMatchObject({ confirm: true, kind: "wlan_client", wlan_client_id: CLIENT });
+  });
+});

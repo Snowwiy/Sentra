@@ -160,6 +160,23 @@ export function reasonLabel(code: string): string {
   return BLOCKING_LABELS[code] ?? SKIP_LABELS[code] ?? code.replace(/_/g, " ");
 }
 
+// Fase 7B-Fix1: causa más probable del duplicado. Es una explicación para decidir; la
+// reconciliación sigue siendo manual y con vista previa.
+export const DUPLICATE_HYPOTHESIS_LABELS: Record<string, string> = {
+  re_enrollment: "Reenrolado: misma identidad de máquina con otro agente",
+  reinstall: "Reinstalación probable: misma MAC o nombre con otra identidad de máquina",
+  agent_identity_change: "El agente pasó de un registro a otro",
+  discovered_record: "El mismo equipo visto también por la red, sin agente",
+  platform_mismatch: "Otro sistema operativo: arranque dual o equipos distintos con el mismo nombre",
+  historical_record: "Historial legítimo del mismo agente",
+  unknown: "Causa no determinada con la evidencia disponible",
+};
+
+export function hypothesisText(code: string | undefined): string | null {
+  if (!code || code === "unknown") return null;
+  return DUPLICATE_HYPOTHESIS_LABELS[code] ?? code;
+}
+
 export function reasonsText(reasons: DuplicateReason[]): string {
   return reasons.map((r) => DUPLICATE_REASON_LABELS[r] ?? r).join(", ");
 }

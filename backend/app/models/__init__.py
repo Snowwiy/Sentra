@@ -13,6 +13,11 @@ from app.models.asset_context import (
     NetworkZone,
 )
 from app.models.asset_lineage import AssetAgentLineage, LineageEndReason
+from app.models.attribution import (
+    DetectionAttributionEvent,
+    MaintenanceArtifact,
+    MaintenanceOperation,
+)
 from app.models.audit import AuditEvent
 from app.models.case_operations import IncidentTask, NetworkControlRequest
 from app.models.change import AssetChange, ChangeCategory, ChangeKind
@@ -51,6 +56,7 @@ from app.models.forensics import (
     Investigation,
     InvestigationNote,
 )
+from app.models.identity_link import AssetIdentityLink
 from app.models.incident import (
     Incident,
     IncidentActivity,
@@ -153,6 +159,7 @@ __all__ = [
     "AssetCriticality",
     "AssetEnvironment",
     "AssetIdentityHistory",
+    "AssetIdentityLink",
     "AssetInventory",
     "AssetPort",
     "AssetProcessSnapshot",
@@ -168,6 +175,7 @@ __all__ = [
     "ContextSource",
     "DataSensitivity",
     "Detection",
+    "DetectionAttributionEvent",
     "DetectionBaseline",
     "DetectionConfidence",
     "DetectionEvidence",
@@ -204,6 +212,8 @@ __all__ = [
     "InvestigationNote",
     "IsolationSession",
     "LineageEndReason",
+    "MaintenanceArtifact",
+    "MaintenanceOperation",
     "MonitoringMethod",
     "NetworkChange",
     "NetworkControlRequest",

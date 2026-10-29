@@ -371,6 +371,40 @@ def assess(
     return result
 
 
+def duplicate_hypothesis(
+    newer: Asset, older: Asset, newer_id: _Identity, older_id: _Identity, result: Assessment
+) -> str:
+    """Causa más probable de que la misma máquina tenga dos registros (Fase 7B-Fix1).
+
+    Solo con lo comparado: el identificador estable del agente (y su linaje) es la evidencia
+    principal; MAC, nombre e IP solo apoyan. Es una explicación para el admin, no una
+    decisión: nada se fusiona solo.
+    """
+    if "platform_mismatch" in result.blockers:
+        # Mismo hardware con otro SO (arranque dual) o equipos distintos con el mismo nombre.
+        return "platform_mismatch"
+    if not has_managed_history(older) or not has_managed_history(newer):
+        # Uno de los dos solo se vio por la red: es el mismo equipo visto sin agente.
+        return "discovered_record"
+    shared_agents = newer_id.agents & older_id.agents
+    if shared_agents and newer.agent_id is not None and newer.agent_id == older.agent_id:
+        return "historical_record"
+    if shared_agents:
+        # El agente pasó de un registro a otro (reconciliación anterior o cambio de activo).
+        return "agent_identity_change"
+    if "same_machine_id" in result.reasons:
+        # Misma identidad de máquina con otro agente: se volvió a enrolar sin reinstalar.
+        return "re_enrollment"
+    if "machine_id_mismatch" in result.conflicts or (
+        result.reasons and {"same_mac", "same_hostname"} & set(result.reasons)
+    ):
+        # Otra identidad de máquina con la misma MAC universal o el mismo nombre: típico de
+        # una reinstalación del sistema (Windows genera otro MachineGuid; Linux otro
+        # machine-id) seguida de un agente nuevo.
+        return "reinstall"
+    return "unknown"
+
+
 class AssetLifecycleService:
     def __init__(
         self,
@@ -876,6 +910,7 @@ class AssetLifecycleService:
                     conflicts=result.conflicts,
                     reconcile_warnings=result.warnings,
                     requires_acknowledgement=result.requires_acknowledgement,
+                    hypothesis=duplicate_hypothesis(asset, other, mine, theirs[other.id], result),
                 )
             )
         rank = {"high": 0, "medium": 1, "low": 2}
@@ -905,6 +940,10 @@ class AssetLifecycleService:
                     (a.c.hostname.is_not(None))
                     & (func.lower(a.c.hostname) == func.lower(b.c.hostname)),
                     (a.c.primary_ip == b.c.primary_ip) & a.c.ever_managed & b.c.ever_managed,
+                    # Fase 7B-Fix1: la misma MAC en los dos registros (dos "Ravenslg Linux"
+                    # con b4:2e:99:e0:ee:fb). assess() solo da confianza media a una MAC
+                    # universal; una privada coincidente queda en baja y no se lista.
+                    (a.c.mac_address.is_not(None)) & (a.c.mac_address == b.c.mac_address),
                     a.c.id.in_(
                         select(lineage.c.asset_id).where(lineage.c.agent_id == b.c.agent_id)
                     ),
@@ -950,6 +989,9 @@ class AssetLifecycleService:
                     conflicts=result.conflicts,
                     reconcile_warnings=result.warnings,
                     requires_acknowledgement=result.requires_acknowledgement,
+                    hypothesis=duplicate_hypothesis(
+                        newer, older, identities[newer.id], identities[older.id], result
+                    ),
                 )
             )
         items.sort(key=lambda p: rank[p.confidence])

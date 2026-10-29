@@ -53,7 +53,7 @@ function When({ iso }: { iso: string | null }) {
   );
 }
 
-function ObservationTable({ items }: { items: WlanObservationRead[] }) {
+export function ObservationTable({ items }: { items: WlanObservationRead[] }) {
   return (
     <div className="table-wrap">
       <table className="table">

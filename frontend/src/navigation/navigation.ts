@@ -68,6 +68,8 @@ export const NAV_GROUPS: NavGroup[] = [
         // Fase 6E.5: las excepciones de reglas cuelgan de Reglas, no de Detecciones.
         match: ["/detections/exclusions"],
       },
+      // Fase 7B.4: consola de analista sobre el motor de herramientas 7A.
+      { to: "/console", label: "Consola", icon: "console", permission: "tools:read" },
       { to: "/response", label: "Response", icon: "response", permission: "response:read" },
       { to: "/investigations", label: "Investigaciones", icon: "forensics", permission: "forensics:read" },
       { to: "/containment", label: "Aislamiento", icon: "isolation", permission: "containment:preview" },
@@ -88,6 +90,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/admin/users", label: "Usuarios", icon: "users", permission: "users:manage" },
       { to: "/admin/lifecycle", label: "Ciclo de vida", icon: "lifecycle", permission: "assets:manage" },
+      // Fase 7B.1: operaciones de mantenimiento que verifican detecciones legítimas.
+      { to: "/admin/maintenance", label: "Mantenimiento", icon: "settings", permission: "maintenance:manage" },
       // Sin permiso: todos pueden elegir su estilo de navegación. Las secciones de
       // configuración con permiso propio (IA local, Sites) se filtran dentro de la página.
       { to: "/settings", label: "Configuración", icon: "settings", exact: true, match: ["/settings/ai"] },

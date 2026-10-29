@@ -1,4 +1,40 @@
-# Matriz de compatibilidad (Fase 7A, Sentra 0.4.0)
+# Matriz de compatibilidad (Fase 7B y 7B-Fix1, Sentra 0.5.0)
+
+`0.5.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y los cambios
+de 7B son aditivos.
+
+| Componente | Versión 7B | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.5.0 | Sí | Migraciones 0048-0049; fórmula de riesgo v6; PER-001 v2, CORR-002 v4. 7B-Fix1: migración 0050, riesgo v7, PER-001 v3, CORR-002 v5 |
+| Frontend | 0.5.0 | Sí | Requiere servidor 0.5.0 para Consola, Mantenimiento, atribución e identidad |
+| Agente | 0.6.1 / 0.6.2 (7B-Fix1) | Sí | 0.6.1: canal `PowerShellCore/Operational` (4104 de PowerShell 7). 0.6.2: tipo, ejecutable y firma de cada servicio de Windows |
+| Sensor | 0.7.0 | No | |
+
+| Cliente | Servidor 0.4.0 | Servidor 0.5.0 |
+| --- | --- | --- |
+| Agentes hasta 0.5.x | Compatibles | Compatibles; sus 4104 sin contexto dan `insufficient_evidence` en la atribución |
+| Agente 0.6.0 | Completo | Completo, sin eventos de PowerShell 7 |
+| Agente 0.6.1 | Compatible: el servidor 0.4.0 ya guardaba el canal PowerShellCore | Completo; con 7B-Fix1 las instancias de servicio por usuario quedan `probable` |
+| Agente 0.6.2 (7B-Fix1) | Compatible: descarta los campos nuevos de servicios | Completo con 7B-Fix1 (verificación de instancias por usuario). Actualizar antes el servidor |
+
+- Endpoints nuevos: `/maintenance-operations*`, `/detections/{id}/attribution*`,
+  `/assets/{id}/identity/profile`, `/assets/{id}/identity/candidates`, `/identity/compare`,
+  `/identity/links*`, `/network/wlan/clients/{id}*`, `/search`.
+- Campos nuevos: `identity_state` y `mac_randomized` en activos, `attribution_verdict` en
+  detecciones, `breakdown.components` y `breakdown.reductions` en riesgo, `sort=risk` en
+  `GET /assets`, base de correlación Wi-Fi `manual`.
+- Permisos nuevos: `maintenance:manage`, `identity:manage` (solo admin).
+- Herramientas nuevas del catálogo: `attribution.explain`, `detections.related`,
+  `identity.candidates`.
+
+- 7B-Fix1 (aditivo): `POST /detections/correlation-review/preview` y `/apply`;
+  `model`, `assigned_name` y `missing` en el perfil de identidad; `coverage` en el grafo de
+  topología; `hypothesis` en candidatos y pares de duplicados; `observed_from` en puertos;
+  cambio `image_changed`. Sin permisos nuevos ni ajustes nuevos ([fase-7b-fix1.md](fase-7b-fix1.md)).
+
+---
+
+## Histórico: Fase 7A (Sentra 0.4.0)
 
 `0.4.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y los cambios
 de 7A son aditivos: endpoints nuevos, campos opcionales nuevos, valores nuevos en

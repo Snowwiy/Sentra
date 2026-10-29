@@ -138,6 +138,7 @@ function candidate(overrides: Partial<DuplicateCandidate> = {}): DuplicateCandid
     ],
     conflicts: [],
     reconcile_warnings: [],
+    hypothesis: "re_enrollment",
     requires_acknowledgement: false,
     ...overrides,
   };

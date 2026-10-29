@@ -18,6 +18,7 @@ import type {
 import { NetworkPage } from "./NetworkPage";
 import { networkTabRoutes } from "./network/NetworkRoutes";
 import { NETWORK_TABS, visibleNetworkTabs } from "./network/tabs";
+import { resetPreferencesForTests } from "../ui/preferences";
 
 const NET = "192.168.50.0/24";
 const NOW = Date.now();
@@ -205,6 +206,9 @@ function refused(code: string) {
 }
 
 beforeEach(() => {
+  // Fase 7B.3: columnas, densidad y últimos filtros viven en localStorage; cada test empieza limpio.
+  window.localStorage.clear();
+  resetPreferencesForTests();
   calls = [];
   routes = {
     "GET /assets": () => ({ body: { items: [], total: 0, limit: 50, offset: 0, status_counts: {} } }),
@@ -898,7 +902,7 @@ describe("Red › Dispositivos: la tabla única (Fase 7A.5)", () => {
     expect(await screen.findByText("Ningún dispositivo coincide con los filtros de contexto")).toBeInTheDocument();
   });
 
-  it("muestra Inactivo, Candidato a limpieza y Archivado y abre la ficha al pulsar la fila", async () => {
+  it("muestra Inactivo, Candidato a limpieza y Archivado; la fila abre el panel y el panel la ficha", async () => {
     serveAssets(() => [
       device("viejo", "10.0.0.1", { status: "offline", lifecycle_state: "stale" }),
       device("purgable", "10.0.0.2", { status: "offline", lifecycle_state: "cleanup_candidate" }),
@@ -913,10 +917,13 @@ describe("Red › Dispositivos: la tabla única (Fase 7A.5)", () => {
     const vivo = await rowOf("vivo");
     expect(within(vivo).getByText("En línea")).toBeInTheDocument();
     fireEvent.click(within(vivo).getByText("10.0.0.4"));
+    const panel = await screen.findByRole("dialog", { name: "Detalle de vivo" });
+    expect(currentPath()).toBe("/network/devices");
+    fireEvent.click(within(panel).getByRole("link", { name: "Abrir ficha" }));
     expect(currentPath()).toBe("/assets/33333333-3333-3333-3333-333333333333");
   });
 
-  it("CPU, RAM y disco del agente y puertos en la misma tabla", async () => {
+  it("CPU, RAM, disco y puertos se añaden con el selector de columnas y se recuerdan", async () => {
     serveAssets(() => [
       device("pc-1", "10.0.0.8", {
         monitoring_method: "agent",
@@ -925,12 +932,213 @@ describe("Red › Dispositivos: la tabla única (Fase 7A.5)", () => {
       }),
     ]);
     renderHub("/network/devices");
-    const row = (await screen.findByText("pc-1", { selector: "a" })).closest("tr") as HTMLElement;
-    expect(within(row).getByRole("meter", { name: "CPU" })).toHaveAttribute("aria-valuenow", "42");
-    expect(within(row).getByRole("meter", { name: "RAM" })).toHaveAttribute("aria-valuenow", "61");
-    expect(within(row).getByRole("meter", { name: "Disco" })).toHaveAttribute("aria-valuenow", "77");
-    expect(row).toHaveTextContent("22");
-    expect(row).toHaveTextContent("443");
+    const row = () => screen.getByText("pc-1", { selector: "a" }).closest("tr") as HTMLElement;
+    await screen.findByText("pc-1", { selector: "a" });
+    expect(within(row()).queryByRole("meter", { name: "CPU" })).toBeNull();
+    fireEvent.click(screen.getByLabelText("CPU / RAM / Disco"));
+    fireEvent.click(screen.getByLabelText("Puertos"));
+    expect(within(row()).getByRole("meter", { name: "CPU" })).toHaveAttribute("aria-valuenow", "42");
+    expect(within(row()).getByRole("meter", { name: "RAM" })).toHaveAttribute("aria-valuenow", "61");
+    expect(within(row()).getByRole("meter", { name: "Disco" })).toHaveAttribute("aria-valuenow", "77");
+    expect(row()).toHaveTextContent("443");
+    expect(JSON.parse(window.localStorage.getItem("sentra.ui.table.devices.columns") ?? "[]")).toEqual([
+      "resources",
+      "ports",
+    ]);
+  });
+});
+
+describe("Red › Dispositivos: consola SOC (Fase 7B.3)", () => {
+  const ID = "55555555-5555-5555-5555-555555555555";
+  const LAPTOP = "66666666-6666-6666-6666-666666666666";
+
+  it("columnas básicas en orden, identidad sin resolver y MAC privada", async () => {
+    serveAssets(() => [
+      device("movil", "192.168.50.66", {
+        asset_id: ID,
+        mac_address: "da:a1:19:00:00:66",
+        identity_state: "identity_unresolved",
+        mac_randomized: true,
+      }),
+      device("srv", "10.0.0.9", { identity_state: "confirmed", monitoring_method: "agent" }),
+    ]);
+    renderHub("/network/devices");
+    const table = await screen.findByRole("table");
+    await within(table).findByText("movil", { selector: "a" });
+    expect(within(table).getAllByRole("columnheader").map((h) => h.textContent?.replace(/[▲▼]/g, ""))).toEqual([
+      "Dispositivo",
+      "Identidad",
+      "IP",
+      "Estado",
+      "Riesgo",
+      "Última actividad",
+      "Acciones",
+    ]);
+    const movil = within(table).getByText("movil", { selector: "a" }).closest("tr") as HTMLElement;
+    expect(within(movil).getByText("Sin resolver")).toBeInTheDocument();
+    expect(within(movil).getByText("MAC privada")).toBeInTheDocument();
+    const srv = within(table).getByText("srv", { selector: "a" }).closest("tr") as HTMLElement;
+    expect(within(srv).getByText("Confirmada")).toBeInTheDocument();
+  });
+
+  it("ordena por riesgo en el servidor y la vista compacta se recuerda", async () => {
+    const queries = serveAssets(() => [device("a", "10.0.0.1")]);
+    renderHub("/network/devices");
+    await screen.findByText("a", { selector: "a" });
+    fireEvent.click(screen.getByRole("button", { name: /^Riesgo/ }));
+    await waitFor(() => {
+      expect(queries.at(-1)?.get("sort")).toBe("risk");
+      expect(queries.at(-1)?.get("order")).toBe("desc");
+    });
+    fireEvent.click(screen.getByRole("button", { name: "Compacta" }));
+    expect(screen.getByRole("table")).toHaveClass("table--compact");
+    expect(window.localStorage.getItem("sentra.ui.table.devices.density")).toBe("compact");
+  });
+
+  it("los filtros se restauran al volver sin parámetros y se pueden quitar", async () => {
+    const queries = serveAssets(() => []);
+    renderHub("/network/devices?status=offline&q=srv");
+    await screen.findByText("Ningún dispositivo coincide con el filtro");
+    cleanup();
+    renderHub("/network/devices");
+    await waitFor(() => expect(currentQuery().get("status")).toBe("offline"));
+    await waitFor(() => expect(queries.at(-1)?.get("q")).toBe("srv"));
+    fireEvent.click(await screen.findByRole("button", { name: "Quitar filtros" }));
+    await waitFor(() => expect(currentPath()).toBe("/network/devices"));
+    await waitFor(() => expect(window.localStorage.getItem("sentra.ui.table.devices.filters")).toBeNull());
+  });
+
+  it("teclado: flechas recorren filas, Enter abre el panel y Escape lo cierra devolviendo el foco", async () => {
+    serveAssets(() => [device("uno", "10.0.0.1"), device("dos", "10.0.0.2", { asset_id: ID })]);
+    routes[`GET /assets/${ID}/identity/profile`] = () => ({ body: profile() });
+    routes[`GET /assets/${ID}/identity/candidates`] = () => ({ body: { items: [] } });
+    renderHub("/network/devices");
+    const first = (await screen.findByText("uno", { selector: "a" })).closest("tr") as HTMLElement;
+    const second = screen.getByText("dos", { selector: "a" }).closest("tr") as HTMLElement;
+    first.focus();
+    fireEvent.keyDown(first, { key: "ArrowDown" });
+    expect(second).toHaveFocus();
+    fireEvent.keyDown(second, { key: "Enter" });
+    const panel = await screen.findByRole("dialog", { name: "Detalle de dos" });
+    expect(await within(panel).findByText("No hay otros registros con evidencias de ser el mismo dispositivo.")).toBeInTheDocument();
+    fireEvent.keyDown(document, { key: "Escape" });
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(second).toHaveFocus();
+  });
+
+  function profile(overrides: Record<string, unknown> = {}) {
+    const tier = (value: string | null, source: string | null) => ({
+      value,
+      source,
+      state: value ? "probable" : "unresolved",
+      reasons: [],
+      alternatives: [],
+    });
+    return {
+      asset_id: ID,
+      display_name: "dos",
+      custom_label: null,
+      managed: false,
+      archived: false,
+      state: "identity_unresolved",
+      reasons: ["random_mac"],
+      mac: { mac: "da:a1:19:00:00:66", kind: "local", randomized: true, slap_quadrant: "aai", nic_vendor: null },
+      name: tier("dos", "mdns"),
+      vendor: tier(null, null),
+      device_type: tier("mobile", "classification"),
+      os: tier(null, null),
+      sources: [],
+      addresses: [],
+      links: [],
+      ...overrides,
+    };
+  }
+
+  it("panel: identidad por niveles y asociación manual con vista previa y motivo (admin)", async () => {
+    serveAssets(() => [device("dos", "192.168.50.66", { asset_id: ID, identity_state: "identity_unresolved" })]);
+    routes[`GET /assets/${ID}/identity/profile`] = () => ({ body: profile() });
+    routes[`GET /assets/${ID}/identity/candidates`] = () => ({
+      body: {
+        items: [
+          {
+            asset: {
+              asset_id: LAPTOP,
+              display_name: "portatil",
+              primary_ip: "192.168.50.20",
+              mac_address: "00:11:22:33:44:55",
+              managed: true,
+              archived: false,
+              last_seen_at: iso(0),
+            },
+            strength: "strong",
+            evidence: [{ code: "agent_reported_mac", strength: "strong", detail: "da:a1:19:00:00:66" }],
+          },
+        ],
+      },
+    });
+    const bodies: Record<string, unknown>[] = [];
+    routes["POST /identity/links/preview"] = (init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return {
+        body: {
+          kind: "asset_alias",
+          target: { asset_id: LAPTOP, display_name: "portatil", primary_ip: "192.168.50.20", mac_address: null, managed: true, archived: false, last_seen_at: null },
+          alias: { asset_id: ID, display_name: "dos", primary_ip: "192.168.50.66", mac_address: null, managed: false, archived: false, last_seen_at: null },
+          wlan_client_id: null,
+          mac: "da:a1:19:00:00:66",
+          allowed: true,
+          blockers: [],
+          evidence: [{ code: "agent_reported_mac", strength: "strong", detail: null }],
+          effects: ["map_mac_to_target", "archive_alias", "keep_alias_history"],
+        },
+      };
+    };
+    routes["POST /identity/links"] = (init) => {
+      bodies.push(JSON.parse(String(init.body)));
+      return { status: 201, body: {} };
+    };
+    renderHub("/network/devices");
+    fireEvent.click(await screen.findByRole("button", { name: "Ver detalle de dos" }));
+    const panel = await screen.findByRole("dialog", { name: "Detalle de dos" });
+    const tiers = await within(panel).findByRole("table");
+    expect(within(tiers).getByText("mDNS")).toBeInTheDocument();
+    expect(within(panel).getByText(/MAC privada \(aleatoria\)/)).toBeInTheDocument();
+    expect(within(panel).getByText("El agente informa esta MAC: da:a1:19:00:00:66")).toBeInTheDocument();
+
+    fireEvent.click(within(panel).getByRole("button", { name: "Asociar como el mismo dispositivo…" }));
+    const dialog = await screen.findByRole("dialog", { name: "Asociar registros del mismo dispositivo" });
+    expect(await within(dialog).findByText(/El registro alias se archiva/)).toBeInTheDocument();
+    // La vista previa no lleva motivo: el motivo solo se envía al confirmar.
+    expect(bodies[0]).toEqual({ kind: "asset_alias", target_asset_id: LAPTOP, alias_asset_id: ID });
+    const confirm = within(dialog).getByRole("button", { name: "Confirmar asociación" });
+    expect(confirm).toBeDisabled();
+    fireEvent.change(within(dialog).getByLabelText("Motivo (queda en la auditoría)"), {
+      target: { value: "El agente declara esa MAC privada" },
+    });
+    fireEvent.click(confirm);
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]).toMatchObject({ confirm: true, reason: "El agente declara esa MAC privada", alias_asset_id: ID });
+  });
+
+  it("panel: un analista ve los candidatos pero no puede asociar", async () => {
+    serveAssets(() => [device("dos", "192.168.50.66", { asset_id: ID })]);
+    routes[`GET /assets/${ID}/identity/profile`] = () => ({ body: profile() });
+    routes[`GET /assets/${ID}/identity/candidates`] = () => ({
+      body: {
+        items: [
+          {
+            asset: { asset_id: LAPTOP, display_name: "portatil", primary_ip: "10.0.0.1", mac_address: null, managed: true, archived: false, last_seen_at: null },
+            strength: "medium",
+            evidence: [{ code: "same_device_name", strength: "weak", detail: null }],
+          },
+        ],
+      },
+    });
+    renderHub("/network/devices", null, "analyst");
+    fireEvent.click(await screen.findByRole("button", { name: "Ver detalle de dos" }));
+    const panel = await screen.findByRole("dialog", { name: "Detalle de dos" });
+    expect(await within(panel).findByText("portatil")).toBeInTheDocument();
+    expect(within(panel).queryByRole("button", { name: /Asociar/ })).toBeNull();
   });
 });
 

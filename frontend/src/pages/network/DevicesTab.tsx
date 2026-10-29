@@ -1,10 +1,13 @@
-import { useCallback, useMemo, useState } from "react";
-import { useNavigate, useSearchParams } from "react-router-dom";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { Link, useSearchParams } from "react-router-dom";
 import { sentraApi } from "../../api/sentra";
 import type { Asset, AssetStatus } from "../../api/types";
 import { useAuth } from "../../auth/AuthContext";
 import { AssetLabelDialog } from "../../components/asset/AssetLabelDialog";
 import { ContextFilterBar } from "../../components/asset/ContextFilterBar";
+import { DevicePanel } from "../../components/asset/DevicePanel";
+import { IdentityBadge } from "../../components/asset/IdentityBadge";
+import { ColumnPicker, type ColumnOption } from "../../components/ColumnPicker";
 import { AssetName, DeviceTypeCell } from "../../components/DeviceIdentity";
 import { FilterSelect, Pager, SearchInput, SortHeader, Toolbar } from "../../components/ListControls";
 import { MetricBar } from "../../components/MetricBar";
@@ -25,9 +28,15 @@ import {
   type DeviceSortKey,
 } from "../../lib/deviceFilters";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
-import { DEVICE_TYPE_OPTIONS, osLabel } from "../../lib/identity";
+import { assetTitle, DEVICE_TYPE_OPTIONS, osLabel } from "../../lib/identity";
 import { useDebounced } from "../../lib/useDebounced";
 import { usePolling } from "../../lib/usePolling";
+import {
+  readDevicesFilters,
+  saveDevicesFilters,
+  useDevicesColumns,
+  useDevicesDensity,
+} from "../../ui/preferences";
 import { useNetworkHub } from "./hubContext";
 
 // Fase 4M: el listado se pagina, filtra y ordena en el servidor. Nunca se descargan todos
@@ -50,6 +59,33 @@ const STATUS_OPTIONS = [
   { value: "unknown", label: "Desconocido" },
 ];
 const TYPE_OPTIONS = [...DEVICE_TYPE_OPTIONS, { value: "unknown", label: "Desconocido" }];
+
+// Fase 7B.3: columnas básicas fijas (Dispositivo | Identidad | IP | Estado | Riesgo | Última
+// actividad | Acciones) y el resto opcionales, elegidas por cada analista y guardadas en su
+// navegador. La vista detallada añade debajo del nombre el tipo, el SO y el método, así que
+// por defecto no hace falta ninguna columna opcional (la tabla cabe sin scroll en 1366 px).
+type OptionalColumn = "type" | "method" | "site" | "resources" | "ports" | "first" | "network";
+const OPTIONAL_COLUMNS: (ColumnOption & { id: OptionalColumn })[] = [
+  { id: "type", label: "Tipo / SO" },
+  { id: "method", label: "Método" },
+  { id: "site", label: "Site" },
+  { id: "resources", label: "CPU / RAM / Disco" },
+  { id: "ports", label: "Puertos" },
+  { id: "first", label: "Descubierto" },
+  { id: "network", label: "Visto en red" },
+];
+const OPTIONAL_IDS = OPTIONAL_COLUMNS.map((c) => c.id);
+const DEFAULT_COLUMNS: OptionalColumn[] = ["site"];
+
+/** Fila anterior o siguiente con flechas: la tabla se recorre sin ratón. */
+function moveRowFocus(row: HTMLTableRowElement, delta: 1 | -1) {
+  const next = delta === 1 ? row.nextElementSibling : row.previousElementSibling;
+  if (next instanceof HTMLTableRowElement) next.focus();
+}
+
+function isInteractive(target: EventTarget | null): boolean {
+  return target instanceof Element && target.closest("a, button, input, select, textarea, label, summary") !== null;
+}
 
 /** CPU, RAM y disco del último envío del agente; sin agente no hay telemetría. */
 function ResourcesCell({ asset }: { asset: Asset }) {
@@ -74,7 +110,7 @@ function ResourcesCell({ asset }: { asset: Asset }) {
 }
 
 /**
- * Red › Dispositivos (Fase 7A.5): la tabla única de activos. Reúne lo que ofrecían la tabla
+ * Red › Dispositivos (Fase 7A.5; rediseño SOC en 7B.3): la tabla única de activos. Reúne lo que ofrecían la tabla
  * del dashboard (estado y ciclo de vida, riesgo y criticidad, CPU/RAM/disco, filtros de
  * contexto, archivados) y la de Red (MAC y NIC, tipo, puertos con acceso al servicio, subred,
  * orden por columna, etiquetas en línea). Los filtros viven en la URL para poder enlazarlos.
@@ -82,8 +118,28 @@ function ResourcesCell({ asset }: { asset: Asset }) {
 export function DevicesTab() {
   const hub = useNetworkHub();
   const canLabel = useAuth().can("assets:manage");
-  const navigate = useNavigate();
   const [params, setParams] = useSearchParams();
+  // Filtros persistentes: al volver sin parámetros se restauran los últimos usados (la URL
+  // sigue siendo la fuente de verdad y se puede enlazar). Se avisa para que no sorprenda.
+  const [restored] = useState(() => (params.toString() === "" ? readDevicesFilters() : ""));
+  const restoring = useRef(Boolean(restored));
+  useEffect(() => {
+    if (restored) setParams(restored, { replace: true });
+    // Solo al montar: después manda lo que el usuario cambie.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  useEffect(() => {
+    if (restoring.current) {
+      if (params.toString() === "") return;
+      restoring.current = false;
+    }
+    saveDevicesFilters(params.toString());
+  }, [params]);
+  const [storedColumns, setColumns] = useDevicesColumns(OPTIONAL_IDS);
+  const columns = new Set<string>(storedColumns ?? DEFAULT_COLUMNS);
+  const [density, setDensity] = useDevicesDensity();
+  const detailed = density === "detailed";
+  const [selected, setSelected] = useState<Asset>();
   const filters = useMemo(() => readDeviceFilters(params), [params]);
   const search = deviceSearch(filters);
   // Los campos de texto esperan a que se deje de escribir antes de consultar.
@@ -129,6 +185,22 @@ export function DevicesTab() {
     ...statusCounts,
   };
   const subnets = hub.scope.data?.allowed_networks ?? [];
+  const show = (id: OptionalColumn) => columns.has(id) && (id !== "site" || hub.showSite);
+  const pickerOptions = OPTIONAL_COLUMNS.filter((c) => c.id !== "site" || hub.showSite);
+  const open = (asset: Asset) => setSelected(asset);
+  const onRowClick = (event: MouseEvent<HTMLTableRowElement>, asset: Asset) => {
+    if (!isInteractive(event.target)) open(asset);
+  };
+  const onRowKey = (event: KeyboardEvent<HTMLTableRowElement>, asset: Asset) => {
+    if (event.target !== event.currentTarget) return;
+    if (event.key === "Enter" || event.key === " ") {
+      event.preventDefault();
+      open(asset);
+    } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
+      event.preventDefault();
+      moveRowFocus(event.currentTarget, event.key === "ArrowDown" ? 1 : -1);
+    }
+  };
   const sort = { key: filters.sort, dir: filters.dir };
   const header = (label: string, key: DeviceSortKey, numeric = false) => (
     <SortHeader
@@ -242,7 +314,39 @@ export function DevicesTab() {
             <option value="">Orden: por columna</option>
             <option value="criticality">Orden: criticidad</option>
           </select>
+          <div className="segmented" role="group" aria-label="Densidad de la tabla">
+            {(
+              [
+                ["detailed", "Detallada"],
+                ["compact", "Compacta"],
+              ] as const
+            ).map(([value, label]) => (
+              <button
+                key={value}
+                type="button"
+                className={`segmented__item${density === value ? " segmented__item--active" : ""}`}
+                aria-pressed={density === value}
+                onClick={() => setDensity(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+          <ColumnPicker
+            options={pickerOptions}
+            visible={[...columns]}
+            onChange={(next) => setColumns(next)}
+            onReset={() => setColumns(null)}
+          />
         </Toolbar>
+        {restored && params.toString() === restored && (
+          <p className="small muted" role="status">
+            Se han restaurado los filtros de tu última visita.{" "}
+            <button type="button" className="button button--small" onClick={() => setParams("", { replace: true })}>
+              Quitar filtros
+            </button>
+          </p>
+        )}
         <ContextFilterBar filters={filters} onChange={update} />
 
         {items.length === 0 && contextFilterCount(applied) > 0 ? (
@@ -256,78 +360,123 @@ export function DevicesTab() {
           </EmptyState>
         ) : (
           <div className="table-wrap">
-            <table className="table">
+            <table className={`table table--devices${detailed ? "" : " table--compact"}`}>
               <thead>
                 <tr>
                   {header("Dispositivo", "name")}
+                  <th>Identidad</th>
                   {header("IP", "ip")}
-                  <th className="col-secondary">MAC / NIC</th>
-                  {header("Tipo / SO", "type")}
+                  {show("type") && header("Tipo / SO", "type")}
                   {header("Estado", "status")}
-                  {header("Método", "method")}
-                  {hub.showSite && <th>Site</th>}
-                  <th>Riesgo</th>
-                  <th>CPU / RAM / Disco</th>
-                  {header("Puertos", "ports", true)}
-                  {secondaryHeader("Descubierto", "first")}
-                  {secondaryHeader("Visto en red", "network")}
+                  {show("method") && header("Método", "method")}
+                  {show("site") && <th>Site</th>}
+                  {header("Riesgo", "risk", true)}
+                  {show("resources") && <th>CPU / RAM / Disco</th>}
+                  {show("ports") && header("Puertos", "ports", true)}
+                  {show("first") && secondaryHeader("Descubierto", "first")}
+                  {show("network") && secondaryHeader("Visto en red", "network")}
                   {header("Última actividad", "last")}
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
                 {items.map((asset) => {
                   const os = osLabel(asset);
+                  const title = assetTitle(asset);
                   return (
                     <tr
                       key={asset.asset_id}
-                      className="table__row--link"
-                      onClick={() => navigate(`/assets/${asset.asset_id}`)}
+                      className={`table__row--link${selected?.asset_id === asset.asset_id ? " table__row--selected" : ""}`}
+                      tabIndex={0}
+                      aria-label={`${title}, ${asset.primary_ip}. Enter abre el detalle`}
+                      onClick={(event) => onRowClick(event, asset)}
+                      onKeyDown={(event) => onRowKey(event, asset)}
                     >
                       <td>
                         <AssetName asset={asset} showIp={false} onEditLabel={canLabel ? setLabelAsset : undefined} />
-                      </td>
-                      <td className="mono">{asset.primary_ip}</td>
-                      <td className="small muted col-secondary">
-                        <span className="mono">{asset.mac_address ?? "—"}</span>
-                        {asset.network_adapter_vendor && <div>NIC {asset.network_adapter_vendor}</div>}
+                        {detailed && !show("type") && (
+                          <div className="small muted cell-detail">
+                            <DeviceTypeCell asset={asset} />
+                            {os && <span> · {os}</span>}
+                          </div>
+                        )}
+                        {detailed && !show("method") && (
+                          <div className="small cell-detail">
+                            <MethodBadge method={asset.monitoring_method} />
+                          </div>
+                        )}
                       </td>
                       <td>
-                        <DeviceTypeCell asset={asset} />
-                        {os && <div className="small muted">{os}</div>}
+                        <IdentityBadge asset={asset} showMac={detailed} />
+                        {detailed && asset.network_adapter_vendor && (
+                          <div className="small muted">NIC {asset.network_adapter_vendor}</div>
+                        )}
                       </td>
+                      <td className="mono">{asset.primary_ip}</td>
+                      {show("type") && (
+                        <td>
+                          <DeviceTypeCell asset={asset} />
+                          {os && <div className="small muted">{os}</div>}
+                        </td>
+                      )}
                       <td>
                         {/* Fase 5C.2: Inactivo / Candidato a limpieza / Archivado ganan a En línea / Sin conexión. */}
                         <AssetStateBadge asset={asset} />
                       </td>
-                      <td>
-                        <MethodBadge method={asset.monitoring_method} />
-                      </td>
-                      {hub.showSite && <td className="small">{asset.site_name}</td>}
+                      {show("method") && (
+                        <td>
+                          <MethodBadge method={asset.monitoring_method} />
+                        </td>
+                      )}
+                      {show("site") && <td className="small">{asset.site_name}</td>}
                       <td>
                         <RiskCell score={asset.risk_score} level={asset.risk_level} confidence={asset.risk_confidence} />
                         {/* Fase 4L: criticidad (solo si no es la de por defecto) y rol confirmado. */}
-                        {(asset.criticality !== "medium" || asset.role !== "unknown") && (
+                        {detailed && (asset.criticality !== "medium" || asset.role !== "unknown") && (
                           <div className="small">
                             {asset.criticality !== "medium" && <CriticalityBadge criticality={asset.criticality} />}{" "}
                             {asset.role !== "unknown" && <span className="muted">{ROLE_LABELS[asset.role]}</span>}
                           </div>
                         )}
                       </td>
-                      <td>
-                        <ResourcesCell asset={asset} />
-                      </td>
-                      <td>
-                        <PortList ports={asset.open_ports} address={asset.primary_ip} />
-                      </td>
-                      <td className="muted col-secondary" title={formatDateTime(asset.discovered_at ?? asset.first_seen_at)}>
-                        {formatRelative(asset.discovered_at ?? asset.first_seen_at)}
-                      </td>
-                      <td className="muted col-secondary" title={formatDateTime(asset.last_network_seen_at)}>
-                        {asset.last_network_seen_at ? formatRelative(asset.last_network_seen_at) : "—"}
-                      </td>
+                      {show("resources") && (
+                        <td>
+                          <ResourcesCell asset={asset} />
+                        </td>
+                      )}
+                      {show("ports") && (
+                        <td>
+                          <PortList ports={asset.open_ports} address={asset.primary_ip} />
+                        </td>
+                      )}
+                      {show("first") && (
+                        <td className="muted col-secondary" title={formatDateTime(asset.discovered_at ?? asset.first_seen_at)}>
+                          {formatRelative(asset.discovered_at ?? asset.first_seen_at)}
+                        </td>
+                      )}
+                      {show("network") && (
+                        <td className="muted col-secondary" title={formatDateTime(asset.last_network_seen_at)}>
+                          {asset.last_network_seen_at ? formatRelative(asset.last_network_seen_at) : "—"}
+                        </td>
+                      )}
                       {/* Contacto del agente o, sin agente, el último descubrimiento que lo vio. */}
                       <td title={formatDateTime(asset.last_seen_at ?? asset.last_network_seen_at)}>
                         {formatRelative(asset.last_seen_at ?? asset.last_network_seen_at)}
+                      </td>
+                      <td>
+                        <div className="row-actions">
+                          <button
+                            type="button"
+                            className="button button--small"
+                            aria-label={`Ver detalle de ${title}`}
+                            onClick={() => open(asset)}
+                          >
+                            Detalle
+                          </button>
+                          <Link className="button button--small" to={`/assets/${asset.asset_id}`} aria-label={`Abrir ficha de ${title}`}>
+                            Ficha
+                          </Link>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -339,6 +488,9 @@ export function DevicesTab() {
         {total > 0 && <Pager page={page} pages={pages} total={total} onPage={setPage} noun="dispositivos" />}
       </section>
 
+      {selected && (
+        <DevicePanel asset={selected} onClose={() => setSelected(undefined)} onChanged={() => refresh()} />
+      )}
       {labelAsset && (
         <AssetLabelDialog asset={labelAsset} onClose={() => setLabelAsset(undefined)} onSaved={() => refresh()} />
       )}

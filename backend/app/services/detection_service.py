@@ -247,4 +247,5 @@ def _read(detection: Detection, asset: Asset, alert_id: UUID | None) -> Detectio
         resolved_by=detection.resolved_by,
         resolution_note=detection.resolution_note,
         alert_id=alert_id,
+        attribution_verdict=detection.attribution_verdict,
     )

@@ -111,6 +111,10 @@ _DEFENDER_FIELDS = (
     "Process Name",
 )
 POWERSHELL_CHANNEL = "Microsoft-Windows-PowerShell/Operational"
+# Fase 7B.0 (agente 0.6.1): PowerShell 7 (pwsh.exe) registra sus 4104 en su propio canal. Sin
+# él, un script ejecutado con pwsh no dejaba rastro en Sentra (la auditoría lo encontró).
+POWERSHELL_CORE_CHANNEL = "PowerShellCore/Operational"
+POWERSHELL_CHANNELS = (POWERSHELL_CHANNEL, POWERSHELL_CORE_CHANNEL)
 DATA_FIELDS: dict[str, dict[int, tuple[str, ...]]] = {
     "System": {
         104: ("SubjectUserName", "SubjectDomainName", "Channel"),
@@ -147,6 +151,7 @@ DATA_FIELDS: dict[str, dict[int, tuple[str, ...]]] = {
     # fichero del script (vacío si se tecleó o se pasó con -Command); ScriptBlockId une los
     # trozos de un bloque largo (MessageNumber de MessageTotal).
     POWERSHELL_CHANNEL: {4104: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal")},
+    POWERSHELL_CORE_CHANNEL: {4104: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal")},
 }
 DATA_VALUE_MAX = 512
 
@@ -338,6 +343,8 @@ CHANNELS = (
         query=_LOGON_SUCCESS,
     ),
     Channel(POWERSHELL_CHANNEL, f"({_LEVEL_FILTER})", collect_message=False),
+    # Opcional: solo existe si PowerShell 7 está instalado (si no, se informa no disponible).
+    Channel(POWERSHELL_CORE_CHANNEL, f"({_LEVEL_FILTER})", collect_message=False),
     # Opcional: sin Defender (otro antivirus, Server Core) el canal no existe y se informa
     # una vez como no disponible, igual que Security sin permisos.
     Channel(
@@ -415,7 +422,7 @@ def parse_events(xml_text: str, channel: str | Channel) -> list[dict[str, Any]]:
         computer = (system.findtext("e:Computer", "", _NS) or "").strip()
         fields = DATA_FIELDS.get(spec.name, {}).get(event_code)
         data = _event_data(node, fields) if fields else {}
-        if spec.name == POWERSHELL_CHANNEL and event_code == 4104:
+        if spec.name in POWERSHELL_CHANNELS and event_code == 4104:
             data.update(_script_block_context(node, system))
         events.append(
             {

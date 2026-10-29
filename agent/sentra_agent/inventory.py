@@ -21,7 +21,7 @@ from typing import Any
 
 import psutil
 
-from sentra_agent import macos
+from sentra_agent import macos, service_identity
 from sentra_agent.syscmd import run_bounded
 
 logger = logging.getLogger("sentra_agent")
@@ -181,14 +181,16 @@ def collect_services() -> list[dict[str, Any]]:
     if sys.platform != "win32":
         return _systemd_services()
     services = []
+    details: dict[str, dict[str, Any]] = {}
     for service in psutil.win_service_iter():
         try:
             info = service.as_dict()
         except (psutil.Error, OSError):
             continue  # services can disappear or deny access while iterating
+        name = _clip(info.get("name"), 255) or "unknown"
         services.append(
             {
-                "name": _clip(info.get("name"), 255) or "unknown",
+                "name": name,
                 "display_name": _clip(info.get("display_name"), 512),
                 "status": _clip(info.get("status"), 32) or "unknown",
                 "start_type": _clip(info.get("start_type"), 32),
@@ -196,7 +198,16 @@ def collect_services() -> list[dict[str, Any]]:
                 "pid": info.get("pid") or None,
             }
         )
-    return services[:MAX_SERVICES]
+        details[name] = {"binpath": info.get("binpath"), "username": info.get("username")}
+    services = services[:MAX_SERVICES]
+    # Fase 7B-Fix1 (agente 0.6.2): ruta, cuenta, tipo y firma del ejecutable, para que el
+    # servidor distinga una instancia de servicio por usuario de una instalación nueva sin
+    # fiarse del nombre. Un fallo aquí no debe costar la sección entera.
+    try:
+        service_identity.enrich_windows_services(services, details)
+    except Exception:
+        logger.warning("service identity enrichment failed", exc_info=True)
+    return services
 
 
 def collect_software() -> list[dict[str, Any]]:

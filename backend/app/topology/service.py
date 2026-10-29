@@ -16,7 +16,7 @@ import ipaddress
 import logging
 import re
 import time
-from collections import defaultdict
+from collections import Counter, defaultdict
 from collections.abc import Collection, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -41,6 +41,7 @@ from app.schemas.topology import (
     TopologyBuild as TopologyBuildRead,
 )
 from app.schemas.topology import (
+    TopologyCoverage,
     TopologyEvidence,
     TopologyEvidenceAvailability,
     TopologyGraph,
@@ -293,6 +294,7 @@ def load_snapshot(session: Session, site_id: int) -> Snapshot:
             access_point_id=row.access_point_id,
             ssid=row.ssid,
             mac=row.mac,
+            bssid=row.bssid,
         )
         for row in session.execute(
             select(
@@ -303,11 +305,13 @@ def load_snapshot(session: Session, site_id: int) -> Snapshot:
                 WlanClient.access_point_id,
                 WlanClient.ssid,
                 WlanClient.mac,
+                WlanClient.bssid,
             ).where(
                 WlanClient.site_id == site_id,
                 WlanClient.present.is_(True),
                 WlanClient.asset_id.is_not(None),
-                WlanClient.access_point_id.is_not(None),
+                # Fase 7B-Fix1: también los asociados a un BSS sin AP inventariado.
+                or_(WlanClient.access_point_id.is_not(None), WlanClient.bssid.is_not(None)),
             )
         )
     ]
@@ -337,6 +341,42 @@ def load_snapshot(session: Session, site_id: int) -> Snapshot:
 
 
 # --- lectura de filas -----------------------------------------------------------------------
+
+
+_PHYSICAL_RELATIONS = frozenset({"lldp", "cdp", "fdb"})
+
+
+def coverage(nodes: Sequence[TopologyNode], links: Sequence[TopologyLink]) -> TopologyCoverage:
+    """Qué evidencia hay detrás del grafo y qué falta (Fase 7B-Fix1).
+
+    Sentra no dibuja enlaces al gateway por compartir subred: sin LLDP/CDP, tabla FDB de un
+    switch gestionable, asociación Wi-Fi verificada o gateway informado por un agente, un
+    nodo queda sin enlaces y se dice explícitamente.
+    """
+    by_kind: dict[str, int] = defaultdict(int)
+    for row in links:
+        by_kind[row.kind] += 1
+    unlinked = [n for n in nodes if n.link_count == 0]
+    limitations: list[str] = []
+    if unlinked:
+        limitations.append("nodes_without_link_evidence")
+    if not any(row.relation in _PHYSICAL_RELATIONS for row in links):
+        limitations.append("no_physical_link_evidence")
+    if any(
+        row.relation == "wlan_association" and row.target_node.startswith("external:")
+        for row in links
+    ):
+        limitations.append("access_point_not_inventoried")
+    return TopologyCoverage(
+        nodes=len(nodes),
+        nodes_without_links=len(unlinked),
+        unlinked_by_type={
+            key: count
+            for key, count in sorted(Counter(n.device_type or "unknown" for n in unlinked).items())
+        },
+        links_by_kind=dict(sorted(by_kind.items())),
+        limitations=limitations,
+    )
 
 
 def build_read(build: TopologyBuild, site_public: UUID) -> TopologyBuildRead:
@@ -663,7 +703,8 @@ class _Catalog:
                 "ip": None,
                 "mac": None,
                 "vendor": None,
-                "device_type": None,
+                # Fase 7B-Fix1: un BSS lo sirve un punto de acceso (aunque no esté inventariado).
+                "device_type": "access_point" if row.relation == "wlan_association" else None,
                 "role": "unknown",
                 "status": None,
                 "managed": None,
@@ -671,7 +712,13 @@ class _Catalog:
                 "risk_level": None,
                 "criticality": None,
                 "groups": [],
-                "sources": [row.relation if row.relation in ("lldp", "cdp") else "lldp"],
+                "sources": [
+                    row.relation
+                    if row.relation in ("lldp", "cdp")
+                    else "wlan"
+                    if row.relation == "wlan_association"
+                    else "lldp"
+                ],
                 "identity_confidence": "none",
                 "link_count": 0,
             }
@@ -1124,6 +1171,7 @@ class TopologyService:
             nodes=out_nodes,
             links=sorted((link_read(r) for r in links), key=lambda link: str(link.id)),
             groups=groups_out,
+            coverage=coverage(out_nodes, links),
         )
 
     def list_links(

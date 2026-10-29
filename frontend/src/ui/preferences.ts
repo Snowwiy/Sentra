@@ -28,6 +28,10 @@ export const STORAGE_KEYS = {
   navigation: "sentra.ui.navigation",
   sidebarCompact: "sentra.ui.sidebarCompact",
   collapsedGroups: "sentra.ui.collapsedGroups",
+  // Fase 7B.3: tabla de dispositivos (columnas visibles, densidad y últimos filtros).
+  devicesColumns: "sentra.ui.table.devices.columns",
+  devicesDensity: "sentra.ui.table.devices.density",
+  devicesFilters: "sentra.ui.table.devices.filters",
 } as const;
 
 type Key = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];
@@ -124,6 +128,53 @@ export function useSidebarCompact(): [boolean, (value: boolean) => void] {
 export function useCollapsedGroups(): [string[], (groups: string[]) => void] {
   const raw = useRaw(STORAGE_KEYS.collapsedGroups);
   return [parseCollapsedGroups(raw), (groups) => void writeRaw(STORAGE_KEYS.collapsedGroups, JSON.stringify(groups))];
+}
+
+export type TableDensity = "compact" | "detailed";
+
+export function parseDensity(raw: string | null): TableDensity {
+  return raw === "compact" ? "compact" : "detailed";
+}
+
+/** Lista de ids guardada; solo se aceptan los de `allowed` (una columna retirada se ignora). */
+export function parseColumns(raw: string | null, allowed: readonly string[]): string[] | null {
+  if (!raw) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (!Array.isArray(value)) return null;
+    return value.filter((item): item is string => typeof item === "string" && allowed.includes(item));
+  } catch {
+    return null;
+  }
+}
+
+export function useDevicesDensity(): [TableDensity, (value: TableDensity) => void] {
+  const density = parseDensity(useRaw(STORAGE_KEYS.devicesDensity));
+  return [density, (value) => void writeRaw(STORAGE_KEYS.devicesDensity, value)];
+}
+
+/** Columnas opcionales visibles; null = las de por defecto de la tabla. */
+export function useDevicesColumns(allowed: readonly string[]): [string[] | null, (columns: string[] | null) => void] {
+  const columns = parseColumns(useRaw(STORAGE_KEYS.devicesColumns), allowed);
+  return [
+    columns,
+    (next) => void writeRaw(STORAGE_KEYS.devicesColumns, next === null ? null : JSON.stringify(next)),
+  ];
+}
+
+// Los filtros se guardan como la query de la URL (la fuente de verdad sigue siendo la URL,
+// que se puede enlazar); solo se usan para restaurar al volver a la pestaña sin parámetros.
+// Limitado a 1 KB: un valor manipulado no puede inflar la URL.
+export function readDevicesFilters(): string {
+  const raw = readRaw(STORAGE_KEYS.devicesFilters);
+  return raw && raw.length <= 1024 && !raw.includes("#") ? raw : "";
+}
+
+export function saveDevicesFilters(search: string): void {
+  const value = search.startsWith("?") ? search.slice(1) : search;
+  if (value.length > 1024) return;
+  if (readRaw(STORAGE_KEYS.devicesFilters) === (value || null)) return;
+  writeRaw(STORAGE_KEYS.devicesFilters, value || null);
 }
 
 /** Solo para tests: olvida la copia en memoria. */

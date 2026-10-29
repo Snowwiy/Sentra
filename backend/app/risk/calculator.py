@@ -35,13 +35,24 @@ Fase 5C (fórmula v4): inteligencia de amenazas, siempre como contexto acotado:
   del mismo indicador forman UN grupo, y la detección TI-001 que generaron va en ese grupo
   (el mismo hecho no cuenta dos veces). Un IOC sin match local no aporta nada.
 
+Fase 7B.1 (fórmula v6, docs/risk-attribution.md): precisión cuando una misma operación
+genera varias representaciones (PowerShell, servicio, persistencia, correlación, alerta):
+- claves causales: detecciones del mismo script (hash o ruta) o de la misma instalación de
+  servicio forman UN grupo aunque no compartan señales guardadas;
+- una detección verificada como mantenimiento autorizado no suma riesgo activo (aparece en
+  el ledger con 0 puntos y lo que habría sumado); una detección de exposición (NET-001)
+  sigue sumando aunque el proceso que escucha esté verificado;
+- una detección que un analista confirma como maliciosa cuenta con confianza alta;
+- componentes separados: inherente, activo, residual y sin atribución.
+Sin veredictos ni claves causales, el resultado es idéntico a v5.
+
 El ledger de contribuciones suma exactamente el score antes de redondear: cada factor que
 sube o baja la puntuación aparece con sus puntos.
 """
 
 import math
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
@@ -85,6 +96,22 @@ ASSET_TYPE = "asset_type"
 # Fase 4L: un factor de contexto de negocio (entorno, sensibilidad, exposición confirmada)
 # y el tope que los limita.
 BUSINESS_CONTEXT = "business_context"
+# Fase 7B.1: detección verificada como mantenimiento autorizado (0 puntos, con su motivo).
+ATTRIBUTION = "attribution"
+VERIFIED_BENIGN = "verified_benign"
+CONFIRMED_MALICIOUS = "confirmed_malicious"
+# Reglas de exposición: un puerto expuesto suma riesgo aunque el proceso esté verificado.
+EXPOSURE_RULES = frozenset({"NET-001", "NET-002"})
+# Fase 7B-Fix1 (v7): reglas que abren una detección por artefacto (SCR-001: una por script).
+# Varias detecciones de la misma regla en un activo son UN grupo: cuenta la más fuerte con
+# un factor de repetición acotado, no N grupos que amplifican el score.
+FAMILY_RULES = frozenset({"SCR-001"})
+REPETITION = "repetition"
+# Clase de cada contribución: directa (una evidencia propia), correlacionada (una cadena de
+# varias señales) o contextual (modificadores del activo).
+DIRECT = "direct"
+CORRELATED = "correlated"
+CONTEXTUAL = "contextual"
 SATURATION = "saturation"
 
 CRITICALITY_LABELS = {
@@ -121,6 +148,11 @@ class DetectionInput:
     # Solo correlaciones: ids de las detecciones simples del mismo activo que comparten
     # señales de evidencia con ella (las que la correlación ya incluye).
     members: frozenset[int] = frozenset()
+    # Fase 7B.1: veredicto de atribución (docs/detection-attribution.md) y claves causales
+    # (mismo script por hash o ruta, misma instalación de servicio). Dos detecciones con una
+    # clave en común son representaciones del MISMO comportamiento y forman un grupo.
+    attribution_verdict: str | None = None
+    causal_keys: frozenset[str] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -131,6 +163,11 @@ class ExposureInput:
     opened_at: datetime
     protocol: str = "tcp"
     service_hint: str | None = None
+    # Fase 7B-Fix1: desde dónde se comprobó ("self": el propio equipo, sin atravesar su
+    # firewall; "remote": otro equipo; None: sin dato) y en qué direcciones escucha según el
+    # inventario del agente ("all_interfaces", "specific", "loopback" o None).
+    observed_from: str | None = None
+    listen_scope: str | None = None
 
 
 @dataclass(frozen=True)
@@ -393,6 +430,11 @@ def _exposure_item(e: ExposureInput, config: RiskConfig, now: datetime) -> _Item
         points = config.exposure_data_points
     recent = now - e.opened_at <= config.exposure_recent
     effective = points * (config.exposure_recent_factor if recent else 1.0)
+    if e.observed_from == "self":
+        # Fase 7B-Fix1: solo se vio abierto desde el propio equipo (el servidor de Sentra
+        # sondeando su propia IP no pasa por el firewall). Sigue contando, con menos peso,
+        # hasta que otro equipo o un sensor confirme que es accesible desde la LAN.
+        effective *= config.exposure_self_vantage_factor
     return _Item(
         key=f"p:{e.port}",
         effective=effective,
@@ -547,26 +589,8 @@ def _linux_completeness(asset: AssetContext, config: RiskConfig, now: datetime) 
     return FULL, "Agente activo con journal (sin auditd), inventario y procesos"
 
 
-def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResult:
-    items: list[_Item] = []
-    for detection in inputs.detections:
-        item = _detection_item(detection, config, now)
-        if item is not None:
-            items.append(item)
-    for port in inputs.exposure:
-        item = _exposure_item(port, config, now)
-        if item is not None:
-            items.append(item)
-    for vulnerability in inputs.vulnerabilities[: config.max_vulnerabilities]:
-        item = _vulnerability_item(vulnerability, config)
-        if item is not None:
-            items.append(item)
-    for match in inputs.threat_matches[: config.max_threat_matches]:
-        item = _threat_item(match, config, now)
-        if item is not None:
-            items.append(item)
-
-    # --- Agrupación (sin doble conteo) ----------------------------------------------------
+def _group(items: Sequence[_Item]) -> list[list[_Item]]:
+    """Grupos de evidencia relacionada (sin doble conteo), ordenados por valor."""
     groups = _Groups()
     present = {item.key for item in items}
     for item in items:
@@ -596,6 +620,13 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         for member in d.members:
             if f"d:{member}" in present:
                 groups.union(item.key, f"d:{member}")
+        # Fase 7B.1: misma secuencia causal demostrada (mismo script por hash o ruta, misma
+        # instalación de servicio): PowerShell, servicio, persistencia y correlación de UNA
+        # operación cuentan una vez, aunque no compartan señales guardadas.
+        for causal in d.causal_keys:
+            groups.union(item.key, f"k:{causal}")
+        if d.rule_id in FAMILY_RULES and d.kind != "correlation":
+            groups.union(item.key, f"r:{d.rule_id}")
         if d.port is not None:
             # Detección de puerto + exposición del mismo puerto (o NET-001 y NET-002 del
             # mismo puerto): es el mismo hecho visto desde dos sitios.
@@ -608,6 +639,133 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         members.sort(key=lambda i: (-i.effective, i.order))
         ranked_groups.append(members)
     ranked_groups.sort(key=lambda g: (-g[0].effective, g[0].order))
+    return ranked_groups
+
+
+def _quick_score(items: Sequence[_Item], asset: "AssetContext", config: RiskConfig) -> int:
+    """Puntuación de un subconjunto de la evidencia, con la misma fórmula y sin ledger.
+
+    Sirve para separar componentes (inherente, activo, sin atribución). No son sumables:
+    los rendimientos decrecientes y la saturación no son lineales.
+    """
+    base = sum(
+        group[0].effective * config.diminishing_beta**rank * _repetition(group, config)
+        for rank, group in enumerate(_group(items))
+    )
+    if base <= 0:
+        return 0
+    criticality = config.criticality_factor[asset.criticality]
+    type_factor = INFRASTRUCTURE_FACTOR if asset.device_type in INFRASTRUCTURE_TYPES else 1.0
+    raw = base * criticality * type_factor
+    raw, _ = _business_context(asset, config, base, raw, [])
+    return max(0, min(100, round(saturate(raw, config.saturation_knee))))
+
+
+def _repetition(members: Sequence[_Item], config: RiskConfig) -> float:
+    """Factor de repetición de un grupo de la misma regla por artefacto (Fase 7B-Fix1).
+
+    Solo si el representante es de FAMILY_RULES: 1 detección = 1,0; crece como las
+    ocurrencias (logarítmico y con el mismo tope), nunca como N grupos independientes.
+    """
+    lead = members[0].detection
+    if lead is None or lead.rule_id not in FAMILY_RULES:
+        return 1.0
+    same = sum(
+        1 for m in members if m.detection is not None and m.detection.rule_id == lead.rule_id
+    )
+    return _occurrence_factor(same, config)
+
+
+def _absorbed_reason(item: _Item, lead: _Item) -> str:
+    """Por qué un miembro no suma: qué lo une con el representante del grupo."""
+    a, b = item.detection, lead.detection
+    if a is not None and b is not None:
+        if a.causal_keys & b.causal_keys:
+            return "same_causal_chain"
+        if a.id in b.members or b.id in a.members:
+            return "shared_signals"
+        if a.rule_id == b.rule_id and a.rule_id in FAMILY_RULES:
+            return "same_rule_repetition"
+    port = (item.detection.port if item.detection else None) or (
+        item.exposure.port if item.exposure else None
+    )
+    lead_port = (lead.detection.port if lead.detection else None) or (
+        lead.exposure.port if lead.exposure else None
+    )
+    if port is not None and port == lead_port:
+        return "same_port"
+    if item.vulnerability is not None or lead.vulnerability is not None:
+        return "same_vulnerability_or_port"
+    if item.threat is not None or lead.threat is not None:
+        return "same_indicator"
+    return "same_group"
+
+
+def _risk_class(item: _Item) -> str:
+    if item.detection is not None and item.detection.kind == "correlation":
+        return CORRELATED
+    return DIRECT
+
+
+def _verified_contribution(d: DetectionInput, item: _Item | None) -> RiskContribution:
+    return RiskContribution(
+        factor=ATTRIBUTION,
+        category=d.category,
+        label=f"{d.rule_id} · {d.title} (mantenimiento verificado)",
+        points=0.0,
+        nominal_points=_round(item.nominal) if item else 0.0,
+        detection_id=d.id,
+        detection_public_id=d.public_id,
+        rule_id=d.rule_id,
+        port=d.port,
+        details={
+            "verdict": VERIFIED_BENIGN,
+            "avoided_points": _round(item.effective) if item else 0.0,
+            "reason": (
+                "Toda su evidencia casa con una operación de mantenimiento aprobada (hash,"
+                " ruta, cuenta y ventana): no suma riesgo activo. Se conserva en el historial."
+            ),
+            "severity": d.severity.value,
+            "status": d.status.value,
+            "last_seen_at": d.last_seen_at.isoformat(),
+        },
+    )
+
+
+def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResult:
+    items: list[_Item] = []
+    verified: list[tuple[DetectionInput, _Item | None]] = []
+    for detection in inputs.detections:
+        if detection.attribution_verdict == CONFIRMED_MALICIOUS:
+            # Un analista confirmó el compromiso: la evidencia ya no es una sospecha. Se
+            # cuenta con confianza alta (nunca baja su severidad).
+            detection = replace(detection, confidence=DetectionConfidence.HIGH)
+        item = _detection_item(detection, config, now)
+        if (
+            detection.attribution_verdict == VERIFIED_BENIGN
+            and detection.rule_id not in EXPOSURE_RULES
+        ):
+            # Fase 7B.1: mantenimiento verificado. No suma riesgo activo, pero aparece en el
+            # ledger con lo que habría sumado (motivo explícito de la reducción).
+            verified.append((detection, item))
+            continue
+        if item is not None:
+            items.append(item)
+    for port in inputs.exposure:
+        item = _exposure_item(port, config, now)
+        if item is not None:
+            items.append(item)
+    for vulnerability in inputs.vulnerabilities[: config.max_vulnerabilities]:
+        item = _vulnerability_item(vulnerability, config)
+        if item is not None:
+            items.append(item)
+    for match in inputs.threat_matches[: config.max_threat_matches]:
+        item = _threat_item(match, config, now)
+        if item is not None:
+            items.append(item)
+
+    # --- Agrupación (sin doble conteo) ----------------------------------------------------
+    ranked_groups = _group(items)
 
     # --- Rendimientos decrecientes y ledger ---------------------------------------------
     contributions: list[RiskContribution] = []
@@ -617,17 +775,22 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         "resolved": 0.0,
         "absorbed": 0.0,
         "diminishing": 0.0,
+        "verified_benign": 0.0,
     }
     base = 0.0
     weighted_conf = 0.0
     weighted_recency = 0.0
     categories: set[str] = set()
     has_correlation = False
+    by_class = {DIRECT: 0.0, CORRELATED: 0.0, CONTEXTUAL: 0.0}
     for rank, members in enumerate(ranked_groups):
         lead = members[0]
         position = config.diminishing_beta**rank
         points = lead.effective * position
-        base += points
+        repetition = _repetition(members, config)
+        extra = points * (repetition - 1.0)
+        base += points + extra
+        by_class[_risk_class(lead)] += points + extra
         reductions["decay"] += lead.nominal * (1.0 - lead.recency)
         status_loss = lead.nominal * lead.recency * (1.0 - lead.status_factor)
         if lead.detection is not None and lead.detection.status == DetectionStatus.RESOLVED:
@@ -645,7 +808,37 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
             if any(m.detection is not None and m.detection.kind == "correlation" for m in members):
                 has_correlation = True
         contributions.append(_lead_contribution(lead, members[1:], points, position))
+        if extra > 0:
+            assert lead.detection is not None  # noqa: S101  (solo reglas de FAMILY_RULES)
+            same = [
+                m for m in members if m.detection and m.detection.rule_id == lead.detection.rule_id
+            ]
+            contributions.append(
+                RiskContribution(
+                    factor=REPETITION,
+                    category=lead.category,
+                    label=(
+                        f"{lead.detection.rule_id} repetida: {len(same)} detecciones agrupadas"
+                        f" (x{_num(round(repetition, 3))})"
+                    ),
+                    points=_round(extra),
+                    rule_id=lead.detection.rule_id,
+                    details={
+                        "risk_class": _risk_class(lead),
+                        "detections": len(same),
+                        "factor": round(repetition, 4),
+                        "reason": (
+                            "Varias detecciones de la misma regla por artefacto cuentan como un"
+                            " grupo con un factor logarítmico y acotado, no como señales"
+                            " independientes."
+                        ),
+                    },
+                )
+            )
         contributions.extend(_absorbed_contribution(m, lead) for m in members[1:])
+    for detection, item in verified:
+        reductions["verified_benign"] += item.effective if item else 0.0
+        contributions.append(_verified_contribution(detection, item))
 
     # --- Modificadores del activo ---------------------------------------------------------
     asset = inputs.asset
@@ -676,6 +869,7 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
             )
         )
     raw, context_factor = _business_context(asset, config, base, raw, contributions)
+    by_class[CONTEXTUAL] = raw - base
     saturated = saturate(raw, config.saturation_knee)
     if saturated < raw:
         contributions.append(
@@ -738,8 +932,34 @@ def calculate(inputs: RiskInputs, config: RiskConfig, now: datetime) -> RiskResu
         kept = set(map(id, keep))
         contributions = [c for c in contributions if id(c) in kept]
 
+    # Fase 7B.1: componentes separados. Inherente = exposición y vulnerabilidades (lo que el
+    # activo es); activo = detecciones e inteligencia de amenazas sin verificar (lo que está
+    # pasando); residual = el score (tras las decisiones del analista y las verificaciones);
+    # sin atribución = lo que daría si nada estuviera verificado. No son sumables.
+    verified_items = [item for _, item in verified if item is not None]
+    components = {
+        "inherent": _quick_score(
+            [i for i in items if i.exposure is not None or i.vulnerability is not None],
+            asset,
+            config,
+        ),
+        "active": _quick_score(
+            [i for i in items if i.detection is not None or i.threat is not None], asset, config
+        ),
+        "residual": score,
+        "without_attribution": (
+            _quick_score([*items, *verified_items], asset, config) if verified_items else score
+        ),
+        "confidence": confidence.value,
+        "verified_detections": len(verified),
+    }
+
     breakdown = {
         "formula_version": FORMULA_VERSION,
+        "components": components,
+        # Fase 7B-Fix1: puntos (antes de saturar) por clase de riesgo: evidencia directa,
+        # cadenas correlacionadas y modificadores contextuales del activo.
+        "by_class": {key: _round(value) for key, value in by_class.items()},
         "base_points": _round(base),
         "criticality": asset.criticality.value,
         "criticality_factor": criticality,
@@ -873,6 +1093,7 @@ def _lead_contribution(
         "status_factor": round(lead.status_factor, 3),
         "position_factor": round(position, 3),
         "absorbed": absorbed_refs,
+        "risk_class": _risk_class(lead),
     }
     d = lead.detection
     if d is not None:
@@ -911,7 +1132,9 @@ def _lead_contribution(
         points=_round(points),
         nominal_points=_round(lead.nominal),
         port=e.port,
-        details=common | {"opened_at": e.opened_at.isoformat(), "protocol": e.protocol},
+        details=common
+        | {"opened_at": e.opened_at.isoformat(), "protocol": e.protocol}
+        | _exposure_evidence(e),
     )
 
 
@@ -932,6 +1155,7 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
             port=d.port,
             details={
                 "absorbed_by": ref,
+                "absorbed_reason": _absorbed_reason(item, lead),
                 "kind": d.kind,
                 "severity": d.severity.value,
                 "confidence": d.confidence.value,
@@ -955,7 +1179,12 @@ def _absorbed_contribution(item: _Item, lead: _Item) -> RiskContribution:
         points=0.0,
         nominal_points=_round(item.nominal),
         port=e.port,
-        details={"absorbed_by": ref, "opened_at": e.opened_at.isoformat()},
+        details={
+            "absorbed_by": ref,
+            "absorbed_reason": _absorbed_reason(item, lead),
+            "opened_at": e.opened_at.isoformat(),
+        }
+        | _exposure_evidence(e),
     )
 
 
@@ -1067,6 +1296,44 @@ def _ref(item: _Item) -> dict[str, Any]:
         }
     assert item.exposure is not None  # noqa: S101
     return {"port": item.exposure.port}
+
+
+_REACHABILITY = {
+    "remote": "lan_confirmed",
+    "self": "self_only",
+}
+_LISTEN_LABELS = {
+    "all_interfaces": "escucha en todas las interfaces",
+    "specific": "escucha en una dirección concreta",
+    "loopback": "el agente solo lo ve en loopback",
+}
+
+
+def _exposure_evidence(e: ExposureInput) -> dict[str, Any]:
+    """Qué se sabe de la exposición de un puerto (Fase 7B-Fix1): escucha, accesibilidad y lo
+    que falta para afirmar una exposición real."""
+    reachability = _REACHABILITY.get(e.observed_from or "", "unknown")
+    explanation = []
+    if reachability == "lan_confirmed":
+        explanation.append("Accesible desde otro equipo (discovery del servidor o de un sensor).")
+    elif reachability == "self_only":
+        explanation.append(
+            "Solo se comprobó desde el propio equipo: el servidor de Sentra sondea su propia IP"
+            " y ese tráfico no atraviesa el firewall. Confírmelo desde otro equipo de la LAN o"
+            " con un sensor; mientras tanto cuenta con menos peso."
+        )
+    else:
+        explanation.append("Sin dato de desde dónde se comprobó (anterior a 7B-Fix1).")
+    if e.listen_scope in _LISTEN_LABELS:
+        explanation.append(_LISTEN_LABELS[e.listen_scope].capitalize() + ".")
+    return {
+        "reachability": reachability,
+        "listen_scope": e.listen_scope,
+        # Sentra no lee las reglas del firewall del equipo: nunca se da por cerrado un
+        # puerto que discovery ve abierto.
+        "missing": ["firewall_rules"],
+        "exposure_explanation": explanation,
+    }
 
 
 def _exposure_label(e: ExposureInput) -> str:

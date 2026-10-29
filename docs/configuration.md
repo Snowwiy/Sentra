@@ -48,5 +48,6 @@ Root `.env` (template: `.env.example`, never committed):
 | `METRICS_ENABLED`, `METRICS_ALLOWED_NETWORKS`, `METRICS_TOKEN` | `/api/v1/metrics` Prometheus, apagado por defecto ([docs/observability.md](observability.md)) |
 | `BACKUP_DIR`, `BACKUP_RETENTION_DAYS`, `PG_BIN_DIR`, `FRONTEND_DIST_DIR` | Copias de seguridad ([docs/backup-restore.md](backup-restore.md)) y build publicado |
 | `DISCOVERY_ALLOWED_NETWORKS` | Networks agentless discovery may probe (empty = discovery off, the default). Internet space and huge ranges are refused. All `DISCOVERY_*` settings: [docs/discovery.md](discovery.md) |
+| `MAINTENANCE_AUTO_RECOGNITION` | `true` (por defecto): una operación de mantenimiento aprobada reconoce sola las detecciones nuevas cuya evidencia casa exactamente; las anteriores a la aprobación solo cambian con vista previa y aplicar. `false`: toda reclasificación pasa por revisión explícita. [docs/detection-attribution.md](detection-attribution.md) |
 
 Frontend variables are documented in `frontend/.env.example`.

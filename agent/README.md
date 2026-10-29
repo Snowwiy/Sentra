@@ -114,6 +114,15 @@ Wi-Fi pasivo en Windows, Linux y macOS (campo `wireless` del inventario, sin esc
 contraseñas). Guía completa, decisiones de seguridad y lo que falta validar en un Mac físico:
 [docs/agent-macos-installation.md](../docs/agent-macos-installation.md).
 
+## Agente 0.6.1 (Fase 7B.0): 4104 de PowerShell 7
+
+- Lee también el canal `PowerShellCore/Operational` (PowerShell 7, `pwsh.exe`) con el mismo
+  contexto que el 4104 de Windows PowerShell. Es opcional: si PowerShell 7 no está instalado
+  el canal se informa como no disponible, como Defender.
+- Sin cambios de configuración. Recordatorio: el servicio usa su propio runtime en
+  `C:\Program Files\Sentra Agent`; actualizar el `.venv` del repositorio no actualiza el
+  servicio.
+
 ## Agente 0.6.0 (Fase 7A.8): contexto del evento 4104 de PowerShell
 
 - En los 4104 de nivel Warning envía la ruta del script, `ScriptBlockId`, el trozo

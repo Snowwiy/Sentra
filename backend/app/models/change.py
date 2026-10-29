@@ -39,6 +39,8 @@ class ChangeKind(enum.StrEnum):
     DISAPPEARED = "disappeared"
     # El tipo deducido cambió (p. ej. de desconocido a móvil). Solo historial: no es alerta.
     RECLASSIFIED = "reclassified"
+    # Fase 7B-Fix1: el ejecutable (ImagePath) de un servicio existente cambió.
+    IMAGE_CHANGED = "image_changed"
 
 
 def _enum(enum_cls: type[enum.Enum], name: str) -> Enum:

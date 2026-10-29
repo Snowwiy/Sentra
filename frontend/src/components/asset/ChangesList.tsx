@@ -25,6 +25,7 @@ const KIND_LABELS: Record<ChangeKind, string> = {
   appeared: "Visible de nuevo",
   disappeared: "Desaparecido",
   reclassified: "Reclasificado",
+  image_changed: "Ejecutable cambiado",
 };
 
 const CATEGORY_LABELS: Record<ChangeCategory, string> = {
@@ -43,6 +44,7 @@ const ATTENTION: ChangeKind[] = [
   "disabled",
   "port_opened",
   "disappeared",
+  "image_changed",
 ];
 
 function show(value: unknown): string {

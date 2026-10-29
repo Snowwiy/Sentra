@@ -38,6 +38,8 @@ class SignalKind(enum.StrEnum):
     LOG_CLEARED = "log_cleared"
     SERVICE_INSTALLED = "service_installed"
     SERVICE_ADDED = "service_added"
+    # Fase 7B-Fix1: el ejecutable de un servicio existente cambió entre dos inventarios.
+    SERVICE_MODIFIED = "service_modified"
     SECURITY_SERVICE_DOWN = "security_service_down"
     SERVICE_CRASHED = "service_crashed"
     UNEXPECTED_SHUTDOWN = "unexpected_shutdown"
@@ -92,6 +94,8 @@ class SignalDraft:
 SECURITY = "Security"
 SYSTEM = "System"
 POWERSHELL = "Microsoft-Windows-PowerShell/Operational"
+# Fase 7B.0: PowerShell 7 (pwsh) escribe sus 4104 en otro canal; el agente 0.6.1 lo recoge.
+POWERSHELL_CORE = "PowerShellCore/Operational"
 DEFENDER = "Microsoft-Windows-Windows Defender/Operational"
 # Fase 5C.1: eventos del journal de systemd que envía el agente Linux (linux_events.py).
 LINUX_JOURNAL = "linux_journal"
@@ -466,7 +470,7 @@ def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> 
         elif event.channel == DEFENDER:
             signal = _defender_signal(event)
         elif (
-            event.channel == POWERSHELL
+            event.channel in (POWERSHELL, POWERSHELL_CORE)
             and event.event_code == 4104
             and event.level != EventLevel.INFO
         ):
@@ -474,6 +478,7 @@ def signals_from_events(events: Iterable[SystemEvent], not_before: datetime) -> 
             # marca el bloque como sospechoso. El agente no envía el contenido; desde 0.6.0
             # (Fase 7A.8) sí la ruta, el hash, el PID y las palabras que lo dispararon.
             values = powershell_values(event.data or {})
+            values["powershell"] = "core" if event.channel == POWERSHELL_CORE else "windows"
             subject = values["script_path"] or values["script_block_id"]
             signal = _draft_factory(event)(SignalKind.POWERSHELL_SUSPICIOUS, subject, values)
         if signal is not None:
@@ -554,7 +559,13 @@ def signals_from_inventory_changes(
                 occurred_at=occurred_at,
                 source_type=SourceType.INVENTORY,
                 subject=subject.lower()[:255],
-                data=text.bounded_data(values),
+                # Fase 7B-Fix1: la clasificación del servicio es un documento anidado
+                # (comprobaciones); bounded_data lo aplanaría a texto.
+                data=(
+                    text.bounded_tree(values)
+                    if kind in (SignalKind.SERVICE_ADDED, SignalKind.SERVICE_MODIFIED)
+                    else text.bounded_data(values)
+                ),
             )
         )
 
@@ -562,14 +573,27 @@ def signals_from_inventory_changes(
         details = change.details or {}
         name = text.clean(change.item, 255)
         if change.category is ChangeCategory.SERVICE:
-            if change.kind is ChangeKind.ADDED:
+            if change.kind in (ChangeKind.ADDED, ChangeKind.IMAGE_CHANGED):
+                image = text.clean_or_none(details.get("image"), 1024)
                 add(
-                    SignalKind.SERVICE_ADDED,
+                    SignalKind.SERVICE_ADDED
+                    if change.kind is ChangeKind.ADDED
+                    else SignalKind.SERVICE_MODIFIED,
                     name,
                     {
                         "service": name,
+                        "display_name": text.clean_or_none(details.get("display_name"), 255),
                         "status": details.get("status"),
                         "start_type": details.get("start_type"),
+                        # Fase 7B-Fix1 (agente 0.6.2): identidad verificable y clasificación.
+                        "image_path": image,
+                        "binpath": text.clean_or_none(details.get("binpath"), 1024),
+                        "previous_binpath": text.clean_or_none(details.get("before"), 1024),
+                        "account": text.clean_or_none(details.get("username"), 255),
+                        "service_type": details.get("service_type"),
+                        "image_signature": details.get("image_signature"),
+                        "unusual_location": unusual_location(image) if image else None,
+                        "classification": details.get("classification"),
                     },
                 )
             elif name.lower() in security_services and (

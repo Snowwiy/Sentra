@@ -185,8 +185,14 @@ def _rx(pattern: str) -> re.Pattern[str]:
 _NAME_HINTS: tuple[tuple[re.Pattern[str], _Hint], ...] = (
     # Códigos de modelo de Huawei/Honor que el móvil usa como hostname DHCP:
     # tres letras, guion, prefijo de región/red y dígitos (MNA-LX9, VOG-L29, ANE-LX1, ELS-NX9).
+    # Fase 7B-Fix1: algunos equipos lo publican con espacio o guion bajo ("MNA LX9"), y la
+    # "W" (solo Wi-Fi) es la línea de tabletas MatePad/MediaPad (MRO-W09, AGS3-W09, BAH3-W09).
     (
-        _rx(r"^[a-z]{3}-(l|lx|nx|al|tl|an|cl|dl|w)\d{1,2}[a-z]?$"),
+        _rx(r"^[a-z]{3}[a-z0-9]?[-_ ]w\d{2}[a-z]?$"),
+        _Hint(T.TABLET, 2, "Huawei", None, True),
+    ),
+    (
+        _rx(r"^[a-z]{3}[-_ ](l|lx|nx|al|tl|an|cl|dl)\d{1,2}[a-z]?$"),
         _Hint(T.MOBILE, 2, "Huawei", None, True),
     ),
     (_rx(r"^(huawei|honor)[-_ ]"), _Hint(T.MOBILE, 2, "Huawei")),
@@ -285,7 +291,11 @@ _GENERIC_NAMES = _rx(r"^(localhost|unknown|\*|dhcp[-_.]?\d.*|host[-_]?\d.*|clien
 _DEFAULT_OS_NAMES = _rx(
     r"^(linux|android|ubuntu|debian|fedora|centos|rhel|raspberrypi|kali|archlinux|alpine|"
     r"espressif|esp|busybox|openembedded|poky|yocto|buildroot|localdomain|none|null|default|"
-    r"device|my-?device|generic)$"
+    r"device|my-?device|generic|"
+    # Fase 7B-Fix1: el nombre del fabricante del chip de red como hostname (lo hacen algunos
+    # adaptadores USB-Ethernet, p. ej. el del dock de una consola): no identifica al equipo.
+    r"realtek[a-z0-9._-]*|realteksemi[a-z0-9._-]*|intel(corporate)?|mediatek[a-z0-9._-]*|"
+    r"broadcom[a-z0-9._-]*|qualcomm[a-z0-9._-]*)$"
 )
 # Puertos que solo apoyan un tipo que ya sugiere otra fuente: un puerto suelto no basta para
 # deducir el tipo (RTSP lo abren cámaras, pero también NAS y PCs con software de vídeo).
@@ -505,7 +515,8 @@ def _identify_auto(data: IdentityInput) -> Identification:
             if hint.os:
                 vote(oses, hint.os, 2, source)
             if hint.model_code and vendor:
-                model_codes.append((name.upper(), vendor))
+                # Forma canónica del código: "MNA LX9" y "MNA_LX9" son MNA-LX9.
+                model_codes.append((re.sub(r"[ _]", "-", name.upper()), vendor))
     if data.netbios_name:
         # NetBIOS lo anuncian Windows y Samba: insinúa Windows, no lo demuestra.
         vote(oses, "Windows", 1, NETBIOS)

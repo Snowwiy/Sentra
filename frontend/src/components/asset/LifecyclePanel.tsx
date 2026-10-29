@@ -20,6 +20,7 @@ import {
   blockerLabel,
   lifecycleError,
   reasonLabel,
+  hypothesisText,
   reasonsText,
   warningLabel,
 } from "../../lib/lifecycle";
@@ -352,6 +353,9 @@ function DuplicateCandidates({
                     ) : (
                       <span className="small">{reasonsText(candidate.reasons)}</span>
                     )}
+                    {hypothesisText(candidate.hypothesis) && (
+                      <div className="small muted">Hipótesis: {hypothesisText(candidate.hypothesis)}</div>
+                    )}
                     {conflicts.length > 0 && (
                       <span className="badge badge--warn" title="Identidades contradictorias">
                         Conflicto: {conflicts.map((c) => CONFLICT_LABELS[c] ?? c).join(", ")}
@@ -493,6 +497,7 @@ export function DuplicatePairsPanel() {
               </>
             )}{" "}
             · {reasonsText(pair.reasons)} <ConfidenceBadge confidence={pair.confidence} />
+            {hypothesisText(pair.hypothesis) && <span className="small muted"> · {hypothesisText(pair.hypothesis)}</span>}
             {(pair.conflicts ?? []).length > 0 && (
               <>
                 {" "}

@@ -308,6 +308,11 @@ los hostnames, pero:
 No se ha verificado si el firmware del Archer GX90 permite exportar la lista de clientes DHCP a
 un fichero. Las dos vías están pendientes de verificar en el equipo real.
 
+Fase 7B-Fix1 (evaluación): se mantiene la importación como única fuente de solo lectura para el
+GX90. No se añade API, SNMP ni lectura del panel web porque ninguno está verificado en ese
+firmware. Los nombres importados alimentan el nivel "nombre" de la identidad con fuente DHCP;
+el nombre asignado por el admin sigue ganando.
+
 ## Pruebas
 
 `tests/test_dhcp_identity.py`: parsers de los cinco formatos, huella del client id igual a la

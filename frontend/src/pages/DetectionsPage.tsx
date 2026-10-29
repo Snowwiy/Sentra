@@ -26,6 +26,8 @@ import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
 import { useAssetOptions } from "../lib/useAssetOptions";
 import { useDebounced } from "../lib/useDebounced";
 import { usePolling } from "../lib/usePolling";
+import { VERDICT_CLASS, VERDICT_LABELS } from "../lib/attribution";
+import { CorrelationReviewPanel } from "../components/detections/CorrelationReviewPanel";
 
 const PAGE_SIZE = 50;
 
@@ -242,6 +244,14 @@ export function DetectionsPage() {
                       <td className="mono">{d.occurrence_count}</td>
                       <td>
                         <DetectionStatusBadge status={d.status} />
+                        {/* Fase 7B.1: veredicto de atribución, si la regla lo evalúa. */}
+                        {d.attribution_verdict && (
+                          <div>
+                            <span className={`badge ${VERDICT_CLASS[d.attribution_verdict]}`}>
+                              {VERDICT_LABELS[d.attribution_verdict]}
+                            </span>
+                          </div>
+                        )}
                       </td>
                     </tr>
                   ))}
@@ -252,6 +262,7 @@ export function DetectionsPage() {
           </>
         )}
       </section>
+      <CorrelationReviewPanel assetId={assetId || undefined} />
     </div>
   );
 }

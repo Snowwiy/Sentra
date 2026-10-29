@@ -7,11 +7,14 @@ from app.api.v1.routes import (
     ai_local,
     alerts,
     assets,
+    attribution,
     audit,
     auth,
     case_operations,
     console,
     console_discovery,
+    console_search,
+    correlation_review,
     dashboard,
     detection_rules,
     detections,
@@ -22,6 +25,7 @@ from app.api.v1.routes import (
     events,
     forensics,
     health,
+    identity,
     incidents,
     inventory,
     isolation,
@@ -63,8 +67,12 @@ api_router.include_router(agents.router, responses=_COMMON)
 api_router.include_router(assets.router, responses=_COMMON)
 api_router.include_router(telemetry.router, responses=_COMMON)
 api_router.include_router(alerts.router, responses=_COMMON)
+api_router.include_router(correlation_review.router, responses=_COMMON)
 api_router.include_router(detections.router, responses=_COMMON)
 api_router.include_router(detection_rules.router, responses=_COMMON)
+api_router.include_router(attribution.router, responses=_COMMON)
+api_router.include_router(identity.router, responses=_COMMON)
+api_router.include_router(console_search.router, responses=_COMMON)
 api_router.include_router(risk.router, responses=_COMMON)
 api_router.include_router(incidents.router, responses=_COMMON)
 api_router.include_router(case_operations.router, responses=_COMMON)

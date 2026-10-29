@@ -18,7 +18,14 @@ histórica, que traduce únicamente campos de esta allowlist a SQL parametrizado
 import enum
 from dataclasses import dataclass, field
 
-from app.detection.signals import DEFENDER, POWERSHELL, SECURITY, SYSTEM, SignalKind
+from app.detection.signals import (
+    DEFENDER,
+    POWERSHELL,
+    POWERSHELL_CORE,
+    SECURITY,
+    SYSTEM,
+    SignalKind,
+)
 from app.models.asset_context import AssetEnvironment, AssetRole, NetworkZone
 from app.models.event import EventLevel
 
@@ -171,11 +178,15 @@ AGENT_DATA_FIELDS: dict[str, tuple[str, ...]] = {
     ),
     # Fase 7A.8 (agente 0.6.0): contexto del 4104, nunca ScriptBlockText.
     POWERSHELL: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal"),
+    # Fase 7B.0 (agente 0.6.1): PowerShell 7 escribe el mismo 4104 en su propio canal. Las
+    # reglas personalizadas siguen sin logsource para él (solo las built-in lo leen).
+    POWERSHELL_CORE: ("ScriptBlockId", "Path", "MessageNumber", "MessageTotal"),
 }
 # Campos del 4104 que el agente 0.6.0 deriva (no están en EventData): copia de
 # SCRIPT_BLOCK_CONTEXT_FIELDS del agente, comprobada por el mismo test.
 AGENT_COMPUTED_FIELDS: dict[str, tuple[str, ...]] = {
     POWERSHELL: ("ProcessID", "UserID", "ScriptSha256", "SuspiciousKeywords"),
+    POWERSHELL_CORE: ("ProcessID", "UserID", "ScriptSha256", "SuspiciousKeywords"),
 }
 AGENT_EVENT_CODES: dict[str, tuple[int, ...]] = {
     SECURITY: (
@@ -257,6 +268,8 @@ _ACCOUNT_KINDS = _kinds(
 _SERVICE_KINDS = _kinds(
     SignalKind.SERVICE_INSTALLED,
     SignalKind.SERVICE_ADDED,
+    # Fase 7B-Fix1: cambio del ejecutable de un servicio existente entre inventarios.
+    SignalKind.SERVICE_MODIFIED,
     SignalKind.SECURITY_SERVICE_DOWN,
     SignalKind.SERVICE_CRASHED,
 )

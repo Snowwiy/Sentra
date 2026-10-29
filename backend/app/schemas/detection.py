@@ -43,6 +43,9 @@ class DetectionRead(ResponseModel):
     resolution_note: str | None
     # Alerta security_detection asociada, si la detección fue lo bastante grave.
     alert_id: UUID | None
+    # Fase 7B.1: veredicto de atribución vigente (el del analista si lo fijó). None si la regla
+    # no evalúa atribución o la detección es anterior a 7B.
+    attribution_verdict: str | None = None
 
 
 class DetectionList(ResponseModel):

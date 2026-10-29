@@ -99,6 +99,23 @@ def _is_stale(seen: dict[str, Any], key: str, now: datetime) -> bool:
     return when is not None and now - when > timedelta(days=NAME_STALE_DAYS)
 
 
+def source_seen_times(asset: Asset) -> dict[str, datetime]:
+    """Fuente de identidad de classify -> última vez que el discovery la vio (Fase 7B.2).
+
+    Para la ficha de identidad: la vigencia de cada nivel sale de la misma marca que usa la
+    selección de nombres, así la UI y el motor nunca discrepan sobre qué es antiguo.
+    """
+    seen = (asset.identity_observations or {}).get("seen_at")
+    found: dict[str, datetime] = {}
+    if not isinstance(seen, dict):
+        return found
+    for key, source in _SEEN_KEYS.items():
+        when = _parse_time(seen.get(key))
+        if when is not None and (source not in found or when > found[source]):
+            found[source] = when
+    return found
+
+
 def _weaker_name(new: str, old: Any) -> bool:
     """¿El nombre nuevo es un valor por defecto que vendría a tapar uno que sí identifica?"""
     return isinstance(old, str) and bool(old) and is_default_name(new) and not is_default_name(old)

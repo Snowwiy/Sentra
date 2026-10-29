@@ -32,7 +32,17 @@ from app.models.risk import RiskLevel
 # v5 (Fase 6C.4): varios findings del MISMO CVE sobre el MISMO componente (el CVE descrito
 # por NVD, por OSV y por un catálogo local) son un único hecho: se agrupan y cuenta el más
 # fuerte (los demás quedan como "absorbed"). Sin duplicados el resultado es idéntico a v4.
-FORMULA_VERSION = 5
+# v6 (Fase 7B.1): claves causales (mismo script o misma instalación = un grupo), detecciones
+# verificadas como mantenimiento autorizado sin riesgo activo (salvo exposición), confianza
+# alta en lo confirmado por un analista y componentes inherente/activo/residual. Sin
+# veredictos ni claves causales el resultado es idéntico a v5.
+# v7 (Fase 7B-Fix1): (a) las repeticiones de SCR-001 (200 bloques 4104 parecidos) forman una
+# familia con un factor de repetición acotado en lugar de un grupo por bloque; (b) cada
+# aportación lleva su clase (directa, correlacionada, contextual) y el desglose la suma;
+# (c) un puerto visto abierto solo desde el propio equipo ("self") aporta con
+# exposure_self_vantage_factor: escuchar no demuestra acceso desde la LAN. Sin repeticiones
+# ni puertos "self" el resultado es idéntico a v6.
+FORMULA_VERSION = 7
 
 
 # Puntos base por severidad: impacto si la detección es cierta, en la escala 0-100. No es
@@ -220,6 +230,9 @@ class RiskConfig:
     exposure_cleartext_admin_points: float = 12.0
     exposure_data_points: float = 7.0
     exposure_recent_factor: float = 1.3
+    # Fase 7B-Fix1: puerto visto abierto solo desde el propio equipo (sin atravesar su
+    # firewall). Cuenta, con menos peso, hasta que otro equipo confirme el acceso.
+    exposure_self_vantage_factor: float = 0.6
     exposure_recent: timedelta = timedelta(hours=24)
 
     # Datos del agente más antiguos que esto: evaluación incompleta (menos confianza).

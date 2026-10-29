@@ -33,6 +33,7 @@ function graph(overrides: Partial<TopologyGraph> = {}): TopologyGraph {
       topoLink({ id: CAND, source: ROUTER, target: PC, kind: "candidate", relation: "fdb_shared", confidence: "low" }),
     ],
     groups: [{ id: "network:192.0.2.0/24", kind: "network", cidr: "192.0.2.0/24", name: "LAN", node_count: 3 }],
+    coverage: { nodes: 3, nodes_without_links: 0, unlinked_by_type: {}, links_by_kind: { observed: 1, candidate: 1 }, limitations: [] },
     ...overrides,
   };
 }

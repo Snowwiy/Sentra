@@ -7,7 +7,9 @@ import pytest
 
 from sentra_agent import events as events_module
 from sentra_agent.events import (
+    CHANNELS,
     POWERSHELL_CHANNEL,
+    POWERSHELL_CORE_CHANNEL,
     parse_events,
     script_sha256,
     suspicious_keywords,
@@ -50,6 +52,17 @@ def test_context_is_sent_without_the_script_text() -> None:
     }
     assert "hunter2" not in str(event) and "SecureString" not in str(event)
     assert event["message"].endswith("event 4104 (content not collected)")
+
+
+def test_powershell_7_blocks_get_the_same_context() -> None:
+    """Fase 7B.0 (0.6.1): pwsh registra en PowerShellCore/Operational; mismo trato."""
+    assert POWERSHELL_CORE_CHANNEL in {c.name for c in CHANNELS}
+    xml = _block(r"C:\Tools\deploy.ps1").replace("Microsoft-Windows-PowerShell", "PowerShellCore")
+    (event,) = parse_events(xml, POWERSHELL_CORE_CHANNEL)
+    assert event["channel"] == POWERSHELL_CORE_CHANNEL
+    assert event["data"]["Path"] == r"C:\Tools\deploy.ps1"
+    assert event["data"]["SuspiciousKeywords"] == "InteropServices,Marshal"
+    assert "hunter2" not in str(event)
 
 
 def test_inline_blocks_have_no_path_and_bad_pids_are_dropped() -> None:
