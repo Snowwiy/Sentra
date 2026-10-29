@@ -73,6 +73,10 @@ const STATIC_ROUTES = [
   "/settings/ai",
   "/admin/users",
   "/admin/lifecycle",
+  // Fase 7B: tabla SOC de dispositivos, Analyst Console y operaciones de mantenimiento.
+  "/network/devices",
+  "/console",
+  "/admin/maintenance",
 ];
 
 async function detailRoutes(page) {

@@ -60,6 +60,13 @@ class ProcessInfo(_Item):
     started_at: AwareDatetime | None = None
 
 
+class ServiceSignature(_Item):
+    """Firma Authenticode del ejecutable del servicio, tal como la informa el agente."""
+
+    status: str = Field(min_length=1, max_length=32)
+    signer: str | None = Field(default=None, max_length=512)
+
+
 class ServiceInfo(_Item):
     name: str = Field(min_length=1, max_length=255)
     display_name: str | None = Field(default=None, max_length=512)
@@ -67,6 +74,14 @@ class ServiceInfo(_Item):
     start_type: str | None = Field(default=None, max_length=32)
     # Process id while running (Windows services; newer agents).
     pid: int | None = Field(default=None, ge=0, le=BIGINT_MAX)
+    # Fase 7B-Fix1 (agente 0.6.2, Windows): línea de comandos, cuenta, tipo del registro,
+    # ejecutable y firma. Con ellos el servidor distingue una instancia de servicio por
+    # usuario de una instalación sin fiarse del nombre (app/detection/service_identity.py).
+    binpath: str | None = Field(default=None, max_length=MAX_PATH)
+    username: str | None = Field(default=None, max_length=255)
+    service_type: int | None = Field(default=None, ge=0, le=0xFFFFFFFF)
+    image: str | None = Field(default=None, max_length=MAX_PATH)
+    image_signature: ServiceSignature | None = None
 
 
 class SoftwareInfo(_Item):

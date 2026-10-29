@@ -480,6 +480,10 @@ class WlanBssNotFoundError(NotFoundError):
     code = "wlan_bss_not_found"
 
 
+class WlanClientNotFoundError(NotFoundError):
+    code = "wlan_client_not_found"
+
+
 class SecretStoreUnavailableError(SentraError):
     # Sin fichero de claves (SNMP_CREDENTIAL_KEY_FILE) o ilegible: no se puede cifrar ni
     # descifrar. 503 y no 500: es configuración del servidor, no un fallo de la petición. El

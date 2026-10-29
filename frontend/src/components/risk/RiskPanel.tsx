@@ -55,6 +55,69 @@ function absorbedBy(item: RiskContribution): string | null {
   return null;
 }
 
+// Fase 7B-Fix1: por qué una contribución no suma, clase de riesgo y accesibilidad del puerto.
+const ABSORBED_REASON_LABELS: Record<string, string> = {
+  same_causal_chain: "misma cadena causal",
+  shared_signals: "comparte evidencia",
+  same_rule_repetition: "repetición de la misma regla",
+  same_port: "mismo puerto",
+  same_vulnerability_or_port: "misma vulnerabilidad o puerto",
+  same_indicator: "mismo indicador",
+  same_group: "mismo grupo",
+};
+
+const RISK_CLASS_LABELS: Record<string, string> = {
+  direct: "Directo",
+  correlated: "Correlacionado",
+  contextual: "Contextual",
+};
+
+const REACHABILITY_LABELS: Record<string, string> = {
+  lan_confirmed: "accesible desde otro equipo",
+  self_only: "visto solo desde el propio equipo (peso reducido)",
+  unknown: "accesibilidad sin dato",
+};
+
+function text(value: unknown): string | null {
+  return typeof value === "string" && value !== "" ? value : null;
+}
+
+/** Texto de la columna Detalle: nunca "undefined" ni "NaN" (los campos pueden faltar). */
+export function contributionDetail(item: RiskContribution): string {
+  const absorbed = absorbedBy(item);
+  const parts: string[] = [];
+  if (absorbed) {
+    const reason = text(item.details["absorbed_reason"]);
+    parts.push(
+      `Incluida en ${absorbed} (sin doble conteo${reason ? `: ${ABSORBED_REASON_LABELS[reason] ?? reason}` : ""})`,
+    );
+  } else if (text(item.details["status"])) {
+    parts.push([text(item.details["severity"]), text(item.details["status"])].filter(Boolean).join(" · "));
+  }
+  const riskClass = text(item.details["risk_class"]);
+  if (riskClass && !absorbed) parts.push(RISK_CLASS_LABELS[riskClass] ?? riskClass);
+  if (item.factor === "repetition") {
+    const count = item.details["detections"];
+    if (typeof count === "number" && Number.isFinite(count)) parts.push(`${count} detecciones agrupadas`);
+  }
+  if (item.factor === "exposure") {
+    const reachability = text(item.details["reachability"]);
+    if (reachability) parts.push(REACHABILITY_LABELS[reachability] ?? reachability);
+    const explanation = text(item.details["exposure_explanation"]);
+    if (explanation) parts.push(explanation);
+  }
+  return parts.join(" · ");
+}
+
+/** Reparto del riesgo por clase (breakdown.by_class, desde la fórmula v7). */
+export function riskByClass(breakdown: Record<string, unknown> | null): [string, number][] {
+  const raw = breakdown?.["by_class"];
+  if (!raw || typeof raw !== "object") return [];
+  return Object.entries(raw as Record<string, unknown>)
+    .filter((entry): entry is [string, number] => typeof entry[1] === "number" && Number.isFinite(entry[1]))
+    .map(([key, value]): [string, number] => [RISK_CLASS_LABELS[key] ?? key, value]);
+}
+
 /**
  * Criticidad del activo: solo admin (assets:manage) la cambia. Para el resto es un dato de
  * solo lectura; el backend rechaza el cambio con 403 igualmente.
@@ -302,6 +365,13 @@ export function RiskPanel({ assetId }: { assetId: string }) {
           <h3>Principales contribuciones</h3>
           <span className="muted small">La suma de los puntos es el score (antes de redondear).</span>
         </div>
+        {riskByClass(risk.breakdown).length > 0 && (
+          <p className="small risk-classes" aria-label="Riesgo por clase">
+            {riskByClass(risk.breakdown)
+              .map(([label, points]) => `${label}: ${formatPoints(points)}`)
+              .join(" · ")}
+          </p>
+        )}
         {risk.contributions.length === 0 ? (
           <p className="muted small risk-empty">Ninguna: sin detecciones ni exposición sensible.</p>
         ) : (
@@ -317,7 +387,6 @@ export function RiskPanel({ assetId }: { assetId: string }) {
               </thead>
               <tbody>
                 {risk.contributions.map((item, index) => {
-                  const absorbed = absorbedBy(item);
                   return (
                     <tr key={`${item.factor}-${item.detection_id ?? item.port ?? item.label}-${index}`}>
                       <td>
@@ -327,13 +396,7 @@ export function RiskPanel({ assetId }: { assetId: string }) {
                       <td className={`mono risk-points${item.points < 0 ? " risk-points--down" : " risk-points--up"}`}>
                         {formatPoints(item.points)}
                       </td>
-                      <td className="muted small">
-                        {absorbed
-                          ? `Incluida en ${absorbed} (sin doble conteo)`
-                          : typeof item.details["status"] === "string"
-                            ? `${String(item.details["severity"])} · ${String(item.details["status"])}`
-                            : ""}
-                      </td>
+                      <td className="muted small">{contributionDetail(item)}</td>
                     </tr>
                   );
                 })}

@@ -504,7 +504,8 @@ def test_asset_list_sorting_and_pagination(client: TestClient, db: Session) -> N
     # Sin limit: todos (contrato anterior a 4L).
     assert _ok(client.get(f"{API}/assets"))["total"] == 4
     assert _error(client.get(f"{API}/assets", params={"limit": 0}), 422, "validation_error")
-    assert _error(client.get(f"{API}/assets", params={"sort": "risk"}), 422, "validation_error")
+    # Desde 7B.3 "risk" es un orden válido (tests/test_console_7b.py); uno inventado no.
+    assert _error(client.get(f"{API}/assets", params={"sort": "bogus"}), 422, "validation_error")
 
 
 def test_options_list_enums_limits_and_used_values(client: TestClient, db: Session) -> None:
@@ -534,8 +535,9 @@ def test_asset_list_with_context_uses_a_bounded_number_of_queries(
         _ok(client.get(f"{API}/assets", params={"tag": "soc", "environment": "lab"}))
     finally:
         event.remove(engine, "before_cursor_execute", count)
-    # Sesión + activos + telemetría + puertos + riesgo + roles (sin una consulta por activo).
-    assert len(statements) <= 10, statements
+    # Sesión + activos + telemetría + puertos + riesgo + roles + alias de identidad (7B.2),
+    # cada uno una consulta para toda la página (sin una consulta por activo).
+    assert len(statements) <= 11, statements
 
 
 # --- Risk Engine ------------------------------------------------------------------------------

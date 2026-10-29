@@ -342,7 +342,8 @@ class WlanClientRead(ResponseModel):
     source: WlanSource
     identity_confidence: IdentityConfidence
     asset: WlanAssetRef | None
-    correlation_basis: Literal["agent_self", "mac_match", "agent_reported_mac"] | None
+    # "manual": un admin lo asoció (Fase 7B.2, asset_identity_links).
+    correlation_basis: Literal["agent_self", "mac_match", "agent_reported_mac", "manual"] | None
     reported_by: WlanDeviceRef | None
     present: bool
     freshness: WlanFreshness

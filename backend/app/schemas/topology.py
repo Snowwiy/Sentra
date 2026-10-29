@@ -143,6 +143,21 @@ class TopologyGroup(ResponseModel):
     node_count: int
 
 
+TopologyLimitation = Literal[
+    "nodes_without_link_evidence", "no_physical_link_evidence", "access_point_not_inventoried"
+]
+
+
+class TopologyCoverage(ResponseModel):
+    """Fase 7B-Fix1: cuántos nodos tienen evidencia de conexión y qué limita el grafo."""
+
+    nodes: int
+    nodes_without_links: int
+    unlinked_by_type: dict[str, int]
+    links_by_kind: dict[str, int]
+    limitations: list[TopologyLimitation]
+
+
 class TopologyGraph(ResponseModel):
     site: TopologySiteRef
     generated_at: datetime
@@ -152,6 +167,7 @@ class TopologyGraph(ResponseModel):
     nodes: list[TopologyNode]
     links: list[TopologyLink]
     groups: list[TopologyGroup]
+    coverage: TopologyCoverage
 
 
 class TopologyNodeDetail(ResponseModel):

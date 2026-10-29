@@ -706,6 +706,8 @@ def _concrete(path: str) -> str:
         "artifact_id", "package_id", "note_id", "isolation_id", "exclusion_id",
         # Fase 7A.6: tareas de caso y solicitudes de control de red.
         "task_id", "control_id",
+        # Fase 7B: operaciones de mantenimiento, clientes Wi-Fi y observaciones de identidad.
+        "operation_id", "client_id", "observation_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 7A: herramientas del registro por identificador estable.

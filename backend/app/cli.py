@@ -48,7 +48,7 @@ from app.risk.engine import RiskEngine, RiskRun
 from app.risk.queue import request_recalculation
 from app.schemas.auth import UserCreate
 from app.schemas.enrollment import EnrollmentTokenCreate
-from app.services import audit_service
+from app.services import audit_7b, audit_service
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import open_ports_by_asset
@@ -138,6 +138,23 @@ def _detections(session: Session, reevaluate_hours: int | None) -> int:
         f" {total.updated} updated, {total.rule_errors} rule errors"
     )
     return 1 if total.rule_errors else 0
+
+
+def _audit_7b(
+    session: Session, refs: list[str], ip: str | None, days: int, output: Path | None
+) -> int:
+    """Fase 7B.0: informe de solo lectura (no escribe en la base ni recalcula nada)."""
+    if not refs and not ip:
+        print("give at least one --asset or --ip", file=sys.stderr)
+        return 2
+    timeout = timedelta(seconds=get_settings().heartbeat_timeout_seconds)
+    report = audit_7b.collect(session, refs, ip, max(1, min(days, 365)), timeout)
+    for line in audit_7b.summary_lines(report):
+        print(line)
+    if output is not None:
+        output.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
+        print(f"report written to {output}")
+    return 0
 
 
 def _risk(session: Session, everything: bool) -> int:
@@ -1074,6 +1091,13 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "snmp-rekey", help="re-encrypt every SNMP profile with the active key (Fase 6B)"
     )
+    audit = commands.add_parser(
+        "audit-7b", help="read-only audit of risk, detections, events and identity (Fase 7B.0)"
+    )
+    audit.add_argument("--asset", action="append", default=[], help="hostname or asset UUID")
+    audit.add_argument("--ip", help="also compare every record with this IP")
+    audit.add_argument("--days", type=int, default=30)
+    audit.add_argument("--output", type=Path, help="write the full JSON report here")
     args = parser.parse_args(argv)
 
     if args.command == "production-check":
@@ -1138,6 +1162,8 @@ def main(argv: list[str] | None = None) -> int:
             return _threat_intel_status(session)
         if args.command == "snmp-rekey":
             return _snmp_rekey(session)
+        if args.command == "audit-7b":
+            return _audit_7b(session, args.asset, args.ip, args.days, args.output)
         if args.command in (
             "create-enrollment-token",
             "list-enrollment-tokens",

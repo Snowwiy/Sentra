@@ -23,6 +23,7 @@ from typing import Any, Protocol
 from app.detection import text
 from app.detection.config import DetectionConfig
 from app.detection.script_context import COMMON_ADMIN_KEYWORDS, SENTRA_SERVICES
+from app.detection.service_identity import normalize_image
 from app.detection.signals import SignalKind
 from app.models.detection import (
     CONFIDENCE_RANK,
@@ -450,6 +451,7 @@ def script_details(s: DetectionSignal) -> dict[str, Any]:
                 "script_part",
                 "script_parts",
                 "script_origin",
+                "powershell",
             )
             if _get(s, key) is not None
         },
@@ -473,6 +475,15 @@ def _script_label(s: DetectionSignal) -> str:
 
 def _powershell(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     details = script_details(s)
+    # Fase 7B-Fix1: servicios nuevos cercanos en el tiempo, como CONTEXTO. Que estén cerca no
+    # demuestra que el script los creara; esa relación la decide CORR-002 con evidencia.
+    context = temporal_service_context(ctx, s)
+    if context:
+        details["temporal_context"] = context
+        details["explanation"].append(
+            f"{len(context)} servicio(s) nuevo(s) en la ventana de correlación, sin relación"
+            " causal demostrada con este script: es solo contexto temporal."
+        )
     if not _get(s, "script_block_id") and not _get(s, "script_path"):
         # Agente anterior a 0.6.0: misma detección agregada que antes.
         summary = (
@@ -494,25 +505,160 @@ def _powershell(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     return _single(s, _key(key, "powershell"), summary, details=details)
 
 
-def _service(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+def service_names(s: DetectionSignal) -> set[str]:
+    """Nombres (clave y visible, en minúsculas) con los que una señal nombra un servicio."""
+    names = {str(v).strip().casefold() for v in (_get(s, "service"), _get(s, "display_name")) if v}
+    if s.subject:
+        names.add(s.subject.strip().casefold())
+    return names
+
+
+def same_install(
+    signals: Sequence[DetectionSignal], anchor: DetectionSignal
+) -> list[DetectionSignal]:
+    """Señales de servicio que describen la misma instalación que `anchor`.
+
+    Fase 7B.1: el 7045 y el inventario ven la misma instalación por dos caminos, y el 7045
+    puede usar el nombre visible ("Sentra Agent") donde el inventario usa la clave
+    ("SentraAgent"). Antes contaban como dos ocurrencias (o dos detecciones) de PER-001.
+    """
+    names = service_names(anchor)
+    return [t for t in signals if service_names(t) & names]
+
+
+def _install_key(group: Sequence[DetectionSignal], fallback: str) -> str:
+    # Clave de la PRIMERA señal registrada (id menor) del grupo: el orden en que llegan el
+    # 7045 y el inventario varía, y la detección debe ser la misma en los dos casos.
+    first = min(group, key=lambda t: t.id or 0)
+    return _key(first.subject, fallback)
+
+
+SERVICE_SIGNALS = (
+    SignalKind.SERVICE_INSTALLED,
+    SignalKind.SERVICE_ADDED,
+    SignalKind.SERVICE_MODIFIED,
+)
+# Estados de firma que indican un fichero alterado o una cadena no confiable: con ellos el
+# servicio es sospechoso aunque su nombre y su ruta parezcan normales.
+BAD_SIGNATURES = frozenset({"hashmismatch", "nottrusted", "notsupportedfileformat"})
+
+
+def service_class(s: DetectionSignal) -> dict[str, Any]:
+    """Clasificación del servicio de una señal (app/detection/service_identity.py).
+
+    El 7045 es una instalación registrada por el SCM. Las señales de inventario traen la
+    clasificación calculada con el inventario completo; las anteriores a 7B-Fix1 no la
+    tienen y cuentan como servicio descubierto sin verificar.
+    """
+    if s.kind == SignalKind.SERVICE_INSTALLED:
+        return {"kind": "installed", "verification": "verified", "explanation": None}
+    found = _get(s, "classification")
+    if isinstance(found, dict) and found.get("kind"):
+        return found
+    if s.kind == SignalKind.SERVICE_MODIFIED:
+        return {"kind": "modified", "verification": "unverified", "explanation": None}
+    return {"kind": "discovered", "verification": "unverified", "explanation": None}
+
+
+def legitimate_user_instance(s: DetectionSignal) -> bool:
+    found = service_class(s)
+    return found.get("kind") == "user_service_instance" and found.get("verification") in (
+        "verified",
+        "probable",
+    )
+
+
+def bad_signature(s: DetectionSignal) -> str | None:
+    signature = _get(s, "image_signature")
+    if not isinstance(signature, dict):
+        return None
+    status = str(signature.get("status") or "")
+    return status if status.lower() in BAD_SIGNATURES else None
+
+
+def _service(ctx: RuleContext, s: DetectionSignal) -> RuleResult | None:
     name = str(_get(s, "service") or s.subject or "desconocido")
     from_event = s.kind == SignalKind.SERVICE_INSTALLED
+    found = service_class(s)
+    kind, verification = found.get("kind"), found.get("verification")
+    if kind == "user_service_instance" and verification == "verified":
+        # Fase 7B-Fix1 (PER-001 v3): instancia por usuario demostrada (tipo de instancia,
+        # svchost.exe de System32, firma de Microsoft y plantilla en el inventario). Windows
+        # la crea en cada inicio de sesión: no es una instalación y no abre detección. La
+        # señal se conserva con su clasificación.
+        return None
+    window = ctx.config.correlation_window
+    nearby = ctx.signals(
+        s.asset_id,
+        [SignalKind.SERVICE_INSTALLED, SignalKind.SERVICE_ADDED],
+        s.occurred_at - window,
+        s.occurred_at + window,
+        limit=50,
+    )
+    group = same_install([*nearby, s], s)
+    twins = [t for t in group if t.kind != s.kind]
     unusual = _get(s, "unusual_location")
     image = _get(s, "image_path")
-    summary = f"Servicio nuevo: {name}" + (f" ({image})" if image else "") + "."
+    signature = bad_signature(s)
     severity = Sev.MEDIUM if from_event else Sev.LOW
+    confidence = Conf.HIGH if from_event else Conf.MEDIUM
+    explanation: list[str] = [str(found["explanation"])] if found.get("explanation") else []
+    key = _install_key(group, name.lower())
+    if s.kind == SignalKind.SERVICE_MODIFIED:
+        summary = f"Servicio modificado: {name}. Su ejecutable cambió" + (
+            f" a {image}." if image else "."
+        )
+        severity = Sev.MEDIUM
+        key = f"modified:{name.lower()}"[:255]
+    elif kind == "user_service_instance" and verification == "probable":
+        template = str(found.get("template") or name)
+        summary = (
+            f"Instancia de servicio por usuario (probable): {name}. Sin datos del agente para"
+            " verificarla."
+        )
+        severity, confidence = Sev.LOW, Conf.LOW
+        # Cada inicio de sesión crea la instancia con otro sufijo: misma detección.
+        key = f"user_service:{template.lower()}"[:255]
+    else:
+        summary = f"Servicio nuevo: {name}" + (f" ({image})" if image else "") + "."
+    if verification == "suspicious":
+        severity, confidence = Sev.HIGH, Conf.HIGH
+        summary += " Lo que se pudo comprobar no casa con lo que dice ser: posible suplantación."
     if unusual:
         severity = Sev.HIGH
         summary += f" El ejecutable está en una ubicación inusual: {unusual}."
+    if signature:
+        severity = Sev.HIGH
+        summary += f" La firma del ejecutable no es válida ({signature})."
     linux = "linux" in ctx.asset_os(s.asset_id)
     mitre = Mitre("TA0003", "T1543", "T1543.002" if linux else "T1543.003")
+    event = (
+        s
+        if from_event
+        else next((t for t in twins if t.kind == SignalKind.SERVICE_INSTALLED), None)
+    )
+    if event is not None and not from_event:
+        # El inventario solo corrobora: con el 7045 de la misma instalación, la severidad y
+        # la confianza son las del evento (la detección ya existe y solo crecen).
+        confidence = Conf.HIGH
     return _single(
         s,
-        _key(s.subject, name.lower()),
+        key,
         summary,
         severity=severity,
-        confidence=Conf.HIGH if from_event else Conf.MEDIUM,
-        details={"service": name, "image_path": image, "unusual_location": unusual},
+        confidence=confidence,
+        details={
+            "service": name,
+            "image_path": image or (_get(event, "image_path") if event else None),
+            "binpath": _get(s, "binpath"),
+            "previous_binpath": _get(s, "previous_binpath"),
+            "account": (_get(event, "account") if event else None) or _get(s, "account"),
+            "unusual_location": unusual,
+            "image_signature": _get(s, "image_signature"),
+            "classification": found,
+            "sources": sorted({t.kind for t in group} | {s.kind}),
+            "explanation": explanation,
+        },
         mitre=mitre,
     )
 
@@ -909,14 +1055,19 @@ class FailedThenSuccess:
 CORR_002 = RuleMeta(
     id="CORR-002",
     # v3 (Fase 7A.8): contexto de cada script y del servicio, secuencia y excepciones exactas.
-    version=3,
+    # v4 (Fase 7B.1): misma clave para el 7045 y el inventario de una instalación.
+    # v5 (Fase 7B-Fix1): exige relación causal demostrable, no solo coincidencia en el tiempo.
+    version=5,
     kind=CORRELATION,
     category="persistence",
     title="PowerShell sospechoso seguido de persistencia",
     description=(
-        "Un bloque de PowerShell marcado como sospechoso y un servicio nuevo en el mismo activo"
-        " dentro de DETECTION_CORRELATION_WINDOW_MINUTES. Un proceso nuevo en esa ventana"
-        " aumenta la confianza."
+        "Un bloque de PowerShell marcado como sospechoso y un servicio nuevo o modificado en el"
+        " mismo activo dentro de DETECTION_CORRELATION_WINDOW_MINUTES, con una relación causal"
+        " demostrable: instalación registrada (7045) después del script, el script lanzó el"
+        " ejecutable del servicio, o un servicio sospechoso (suplantación, ruta inusual, firma"
+        " inválida) o modificado aparecido después del script. Coincidir en el tiempo no basta:"
+        " sin relación se muestra como contexto en SCR-001."
     ),
     why=(
         "Ejecutar un script y dejar un servicio instalado es una forma habitual de mantener"
@@ -926,17 +1077,13 @@ CORR_002 = RuleMeta(
     severity=Sev.HIGH,
     confidence=Conf.MEDIUM,
     triggers=frozenset(
-        {
-            SignalKind.POWERSHELL_SUSPICIOUS,
-            SignalKind.SERVICE_INSTALLED,
-            SignalKind.SERVICE_ADDED,
-            SignalKind.PROCESS_NEW,
-        }
+        {SignalKind.POWERSHELL_SUSPICIOUS, *SERVICE_SIGNALS, SignalKind.PROCESS_NEW}
     ),
     required_data=(
         "PowerShell/Operational 4104 (nivel Warning)",
         "System 7045 o servicios del inventario",
-        "Opcional: snapshots de procesos",
+        "Opcional: snapshots de procesos (proceso padre del ejecutable del servicio)",
+        "Opcional (agente 0.6.2): ruta, tipo y firma de los servicios",
     ),
     recommendations=(
         "Identificar quién instaló el servicio y si corresponde a un cambio planificado.",
@@ -953,6 +1100,124 @@ CORR_002 = RuleMeta(
 )
 
 
+# Máximo de claves de script que guarda una correlación para que el riesgo una todas sus
+# detecciones SCR-001 (Fase 7B-Fix1): son hashes o rutas, acotados.
+MAX_SCRIPT_KEYS = 200
+
+
+def script_key(s: DetectionSignal) -> str | None:
+    """Clave del script de una señal 4104 (la misma de la detección SCR-001)."""
+    sha = _get(s, "script_sha256")
+    if sha:
+        return f"script:{str(sha).lower()}"
+    path = _get(s, "script_path")
+    return f"script:{str(path).strip().lower()}" if path else None
+
+
+def causal_links(
+    scripts: Sequence[DetectionSignal],
+    service: DetectionSignal,
+    processes: Sequence[DetectionSignal],
+) -> list[dict[str, Any]]:
+    """Evidencia de que el script y el servicio son la MISMA cadena (Fase 7B-Fix1).
+
+    Solo hechos comprobables; la proximidad en el tiempo no aparece aquí:
+    - `install_event_after_script`: el SCM registró la instalación (7045) después del script;
+    - `script_started_service_binary`: un proceso hijo del PowerShell (ppid = pid del 4104)
+      ejecutó el mismo fichero que el servicio;
+    - `suspicious_service_after_script`: el servicio es sospechoso (suplantación, ruta
+      inusual o firma inválida) y se vio después del script;
+    - `service_modified_after_script`: se cambió el ejecutable de un servicio existente
+      después del script.
+    El inventario acota el momento por arriba (se ve en el siguiente snapshot), así que "se vio
+    después" no prueba que se creara después: por eso un servicio descubierto normal nunca
+    basta por sí solo.
+    """
+    links: list[dict[str, Any]] = []
+    first_script = min(s.occurred_at for s in scripts)
+    after = service.occurred_at >= first_script
+    name = str(_get(service, "service") or service.subject or "")
+    if service.kind == SignalKind.SERVICE_INSTALLED and after:
+        links.append(
+            {
+                "code": "install_event_after_script",
+                "strength": "strong",
+                "detail": f"7045 de {name} posterior al primer script.",
+            }
+        )
+    image = normalize_image(_get(service, "image_path"))
+    pids = {_get(s, "pid") for s in scripts if _get(s, "pid") is not None}
+    if image and pids:
+        child = next(
+            (
+                p
+                for p in processes
+                if _get(p, "ppid") in pids and normalize_image(_get(p, "exe")) == image
+            ),
+            None,
+        )
+        if child is not None:
+            links.append(
+                {
+                    "code": "script_started_service_binary",
+                    "strength": "strong",
+                    "detail": f"El proceso {_get(child, 'pid')} ({_get(child, 'exe')}) es hijo"
+                    f" del PowerShell {_get(child, 'ppid')}.",
+                }
+            )
+    found = service_class(service)
+    suspicious = (
+        found.get("verification") == "suspicious"
+        or bool(_get(service, "unusual_location"))
+        or bad_signature(service) is not None
+    )
+    if suspicious and after:
+        links.append(
+            {
+                "code": "suspicious_service_after_script",
+                "strength": "medium",
+                "detail": f"{name} es sospechoso y se vio después del script.",
+            }
+        )
+    if service.kind == SignalKind.SERVICE_MODIFIED and after:
+        links.append(
+            {
+                "code": "service_modified_after_script",
+                "strength": "medium",
+                "detail": f"El ejecutable de {name} cambió después del script.",
+            }
+        )
+    return links
+
+
+def temporal_service_context(
+    ctx: RuleContext, s: DetectionSignal, limit: int = 5
+) -> list[dict[str, Any]]:
+    """Servicios nuevos cerca de un script, sin relación causal (Fase 7B-Fix1, SCR-001)."""
+    window = ctx.config.correlation_window
+    nearby = ctx.signals(
+        s.asset_id, list(SERVICE_SIGNALS), s.occurred_at - window, s.occurred_at + window, limit=50
+    )
+    items = []
+    for service in nearby[-limit:]:
+        found = service_class(service)
+        items.append(
+            {
+                "service": _get(service, "service") or service.subject,
+                "source": "event_7045"
+                if service.kind == SignalKind.SERVICE_INSTALLED
+                else "inventory",
+                "classification": found.get("kind"),
+                "verification": found.get("verification"),
+                "position": "before_script"
+                if service.occurred_at < s.occurred_at
+                else "after_script",
+                "minutes": round(abs((service.occurred_at - s.occurred_at).total_seconds()) / 60),
+            }
+        )
+    return items
+
+
 class PowerShellPersistence:
     meta = CORR_002
 
@@ -965,24 +1230,42 @@ class PowerShellPersistence:
         scripts = [s for s in found if not ctx.excluded(self.meta.id, s)]
         if not scripts:
             return []
-        services = ctx.signals(
-            signal.asset_id, [SignalKind.SERVICE_INSTALLED, SignalKind.SERVICE_ADDED], start, end
-        )
+        services = ctx.signals(signal.asset_id, list(SERVICE_SIGNALS), start, end)
         if not services:
             return []
         processes = ctx.signals(signal.asset_id, [SignalKind.PROCESS_NEW], start, end, limit=50)
         unusual = [p for p in processes if _get(p, "unusual_location")]
-        service = services[-1]
+        # Fase 7B-Fix1 (v5): el servicio más reciente CON relación causal demostrable. Sin
+        # ninguno no hay correlación: la coincidencia en el tiempo queda como contexto de
+        # SCR-001, que sigue activa y auditable.
+        chosen: tuple[DetectionSignal, list[dict[str, Any]]] | None = None
+        for candidate in reversed(services):
+            links = causal_links(scripts, candidate, processes)
+            if links:
+                chosen = (candidate, links)
+                break
+        if chosen is None:
+            return []
+        candidate, links = chosen
+        # Fase 7B.1 (v4): la instalación con su 7045 si lo hay (trae ruta y cuenta) y con la
+        # clave de su primera señal: el 7045 y el inventario de la misma instalación ya no
+        # abren dos CORR-002.
+        install = same_install(services, candidate)
+        events = [t for t in install if t.kind == SignalKind.SERVICE_INSTALLED]
+        service = events[-1] if events else candidate
         name = str(_get(service, "service") or service.subject)
+        scripts_keys = sorted({k for k in (script_key(s) for s in scripts) if k})
+        change = "modificado" if service.kind == SignalKind.SERVICE_MODIFIED else "nuevo"
         summary = (
-            f"PowerShell sospechoso y servicio nuevo ({name}) en menos de"
-            f" {int(window.total_seconds() // 60)} min"
-            + (f", con {len(processes)} proceso(s) nuevo(s)" if processes else "")
+            f"PowerShell sospechoso y servicio {change}"
+            f" ({name}) en menos de {int(window.total_seconds() // 60)} min, con relación"
+            " causal demostrable"
+            + (f" y {len(processes)} proceso(s) nuevo(s)" if processes else "")
             + "."
         )
         evidence = (
             _tail(scripts, "powershell")
-            + _tail(services, "persistence")
+            + _tail(install, "persistence")
             + _tail(unusual or processes, "process")
         )
         first_script = min(s.occurred_at for s in scripts)
@@ -995,20 +1278,18 @@ class PowerShellPersistence:
             "source": "event_7045" if service.kind == SignalKind.SERVICE_INSTALLED else "inventory",
             "unusual_location": _get(service, "unusual_location"),
             "sentra_service_name": sentra_service,
+            "classification": service_class(service),
         }
         explanation = [
-            f"{len(scripts)} bloque(s) de PowerShell marcados como sospechosos y el servicio"
-            f" {name} en el mismo activo dentro de {int(window.total_seconds() // 60)} min.",
-            (
-                "El script fue anterior a la instalación del servicio."
-                if first_script <= service.occurred_at
-                else "El servicio apareció antes que el script: la relación es más débil."
-            ),
+            f"{len(scripts)} bloque(s) de PowerShell marcados como sospechosos"
+            f" ({len(scripts_keys)} script(s) distintos) y el servicio {name} en el mismo"
+            f" activo dentro de {int(window.total_seconds() // 60)} min.",
+            "Relación causal: " + " ".join(str(link["detail"]) for link in links),
         ]
         if persistence["source"] == "inventory":
             explanation.append(
-                "El servicio se vio en el inventario, no en el evento 7045: no hay ruta ni"
-                " cuenta de instalación."
+                "El servicio se vio en el inventario, no en el evento 7045: no hay cuenta de"
+                " instalación y el momento solo está acotado por el inventario."
             )
         if sentra_service:
             explanation.append(
@@ -1022,19 +1303,27 @@ class PowerShellPersistence:
             )
         return [
             RuleResult(
-                key=_key(service.subject, name.lower()),
+                key=_install_key(install, name.lower()),
                 summary=summary,
                 evidence=evidence,
                 occurred_at=max(e.signal.occurred_at for e in evidence),
-                confidence=Conf.HIGH if processes else Conf.MEDIUM,
+                confidence=Conf.HIGH
+                if any(link["strength"] == "strong" for link in links)
+                else Conf.MEDIUM,
                 details={
                     "service": name,
                     "powershell_events": len(scripts),
+                    "distinct_scripts": len(scripts_keys),
                     "excluded_powershell_events": len(found) - len(scripts),
                     "new_processes": len(processes),
                     "unusual_processes": len(unusual),
                     "scripts": [script_details(s) for s in scripts[-3:]],
+                    # Todas las claves de script de la cadena (acotadas): el riesgo une con
+                    # esta correlación cada SCR-001 de la misma oleada, no solo los 3 últimos.
+                    "script_keys": scripts_keys[:MAX_SCRIPT_KEYS],
                     "persistence": persistence,
+                    "relation": "causal",
+                    "causal_links": links,
                     "sequence": (
                         "powershell_first"
                         if first_script <= service.occurred_at
@@ -1805,7 +2094,8 @@ RULES: tuple[DetectionRule, ...] = (
             confidence=Conf.MEDIUM,
             triggers=frozenset({SignalKind.POWERSHELL_SUSPICIOUS}),
             required_data=(
-                "Microsoft-Windows-PowerShell/Operational 4104 (nivel Warning)",
+                "Microsoft-Windows-PowerShell/Operational 4104 (nivel Warning) y, con PowerShell 7,"
+                " PowerShellCore/Operational 4104 (agente 0.6.1)",
                 "Agente 0.6.0 para ruta, hash, PID y causa; telemetría de procesos (6E.4) para"
                 " el árbol de procesos",
             ),
@@ -1824,11 +2114,22 @@ RULES: tuple[DetectionRule, ...] = (
     SimpleRule(
         _meta(
             id="PER-001",
+            # v2 (Fase 7B.1): 7045 + inventario de la misma instalación = una detección y una
+            # ocurrencia; detalles con cuenta y fuentes.
+            # v3 (Fase 7B-Fix1): clasificación verificable del servicio. Una instancia por
+            # usuario demostrada no abre detección; una probable (agente antiguo) es baja y
+            # agrupa todas las sesiones; la suplantación, la ruta inusual y la firma
+            # inválida son altas; un ejecutable cambiado (servicio modificado) también cuenta.
+            version=3,
             category="persistence",
             title="Servicio nuevo",
             description=(
-                "Se instaló un servicio (System 7045) o apareció uno nuevo en el inventario."
-                " Severidad alta si el ejecutable está en una ubicación inusual."
+                "Se instaló un servicio (System 7045), apareció uno nuevo en el inventario o"
+                " cambió el ejecutable de uno existente. Severidad alta si el ejecutable está"
+                " en una ubicación inusual, su firma no es válida o el servicio aparenta ser"
+                " una instancia por usuario de Windows sin serlo. Las instancias por usuario"
+                " verificadas (tipo, svchost.exe de System32 y firma de Microsoft) no abren"
+                " detección."
             ),
             why=(
                 "Un servicio arranca con el sistema y suele tener privilegios elevados: es un"
@@ -1836,13 +2137,19 @@ RULES: tuple[DetectionRule, ...] = (
             ),
             severity=Sev.MEDIUM,
             confidence=Conf.HIGH,
-            triggers=frozenset({SignalKind.SERVICE_INSTALLED, SignalKind.SERVICE_ADDED}),
-            required_data=("System 7045 o servicios del inventario",),
+            triggers=frozenset(SERVICE_SIGNALS),
+            required_data=(
+                "System 7045 o servicios del inventario",
+                "Opcional (agente 0.6.2): ruta, tipo y firma de los servicios",
+            ),
             recommendations=(
                 "Identificar el software que instaló el servicio.",
                 "Revisar la ruta del ejecutable, su firma y la cuenta con la que corre.",
             ),
             mitre=Mitre("TA0003", "T1543"),
+            # Fase 7B.1 (v2): el 7045 y el inventario de la misma instalación son UNA
+            # ocurrencia (antes, cooldown 0: cada señal sumaba otra e inflaba el riesgo).
+            cooldown_setting="correlation_window",
         ),
         _service,
     ),

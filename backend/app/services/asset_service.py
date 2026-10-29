@@ -34,6 +34,7 @@ from app.schemas.telemetry import TelemetrySnapshot
 from app.services.asset_context_service import filter_statement
 from app.services.asset_lifecycle_policy import LifecyclePolicy, evaluate, stale_condition
 from app.services.identification import network_adapter_vendor, refresh_identity
+from app.services.identity_rules import identity_state, linked_aliases, mac_profile
 from app.services.site_service import SiteRef, site_refs
 
 AssetSort = Literal[
@@ -47,6 +48,7 @@ AssetSort = Literal[
     "last_seen",
     "network_seen",
     "ports",
+    "risk",
 ]
 # Página por defecto de GET /assets cuando el cliente no pide limit (Fase 4M).
 DEFAULT_PAGE_SIZE = 100
@@ -325,6 +327,7 @@ class AssetService:
         ports = open_ports_by_asset(self._session, (asset.id for asset in assets))
         risks = risk_by_asset(self._session, [asset.id for asset in assets])
         roles = context_roles(self._session, [asset.id for asset in assets])
+        linked = linked_aliases(self._session, [asset.id for asset in assets])
         items = [
             self._to_read(
                 asset,
@@ -333,6 +336,7 @@ class AssetService:
                 ports.get(asset.id, []),
                 risks.get(asset.id),
                 roles.get(asset.id, AssetRole.UNKNOWN),
+                asset.id in linked,
             )
             for asset in assets
         ]
@@ -352,7 +356,8 @@ class AssetService:
         ports = open_ports_by_asset(self._session, [asset.id]).get(asset.id, [])
         risk = risk_by_asset(self._session, [asset.id]).get(asset.id)
         role = context_roles(self._session, [asset.id]).get(asset.id, AssetRole.UNKNOWN)
-        return self._to_read(asset, latest, datetime.now(UTC), ports, risk, role)
+        linked = asset.id in linked_aliases(self._session, [asset.id])
+        return self._to_read(asset, latest, datetime.now(UTC), ports, risk, role, linked)
 
     def set_label(
         self, public_id: UUID, label: str | None, version: int, actor_name: str
@@ -428,8 +433,14 @@ class AssetService:
         open_ports: list[int],
         risk: AssetRisk | None = None,
         role: AssetRole = AssetRole.UNKNOWN,
+        linked: bool = False,
     ) -> AssetRead:
         agent_status = effective_status(asset, now, self._timeout) if asset.is_managed else None
+        mac = mac_profile(asset.mac_address)
+        identity, _ = identity_state(asset, mac, ())
+        if identity == "identity_unresolved" and linked:
+            # Un admin lo asoció a un dispositivo conocido (asset_identity_links).
+            identity = "probable"
         current = effective_status(asset, now, self._timeout)
         names = observed_name_items(asset.observed_names)
         lifecycle = evaluate(asset, now, self._lifecycle, online=current == AssetStatus.ONLINE)
@@ -471,6 +482,8 @@ class AssetService:
             classification_evidence=evidence_items(asset.classification_evidence),
             observed_names=names,
             name_status=name_status(asset, names),
+            identity_state=identity,
+            mac_randomized=mac.randomized,
             discovery_sources=asset.discovery_sources or [],
             discovery_network=asset.discovery_network,
             discovered_at=asset.discovered_at,

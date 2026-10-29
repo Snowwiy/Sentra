@@ -160,6 +160,15 @@ class Permission(enum.StrEnum):
     # dirección, dominio, sitio o subida). Solo admin: decide qué se bloquearía. Proponerla y
     # trabajar las tareas de un caso es incidents:manage.
     NETWORK_CONTROLS_APPROVE = "network_controls:approve"
+    # Fase 7B.1: crear, aprobar, revocar y aplicar operaciones de mantenimiento autorizadas
+    # (docs/detection-attribution.md). Solo admin: una operación aprobada cierra como
+    # mantenimiento verificado las detecciones cuya evidencia describe. Leerlas es
+    # monitoring:read y dar un veredicto de analista es detections:manage.
+    MAINTENANCE_MANAGE = "maintenance:manage"
+    # Fase 7B.2: asociar a mano una observación (MAC, cliente Wi-Fi) a un activo y deshacerlo.
+    # Solo admin: cambia la identidad de un dispositivo; las sugerencias se leen con
+    # monitoring:read y nunca se aplican solas.
+    IDENTITY_MANAGE = "identity:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {

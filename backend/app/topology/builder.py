@@ -129,6 +129,8 @@ class ClientIn:
     access_point_id: int | None = None
     ssid: str | None = None
     mac: str | None = None
+    # Fase 7B-Fix1: BSSID al que está asociado (el agente lo informa de su propia interfaz).
+    bssid: str | None = None
 
 
 @dataclass(frozen=True)
@@ -672,9 +674,60 @@ def _derive_fdb_unmapped(
 _WLAN_CONFIDENCE = {"confirmed": "high", "probable": "medium"}
 
 
+def _bss_link(index: _Index, client: ClientIn, out: _Collector) -> None:
+    """Asociación Wi-Fi a un BSS sin AP inventariado (Fase 7B-Fix1).
+
+    El agente informa del BSSID al que está asociado su propia interfaz: es una asociación
+    verificada, pero el AP no está en Sentra (p. ej. un router doméstico sin SNMP). Se dibuja
+    hacia un nodo externo "BSS", nunca hacia el gateway por estar en la misma subred.
+    """
+    asset = index.assets.get(client.asset_id) if client.asset_id is not None else None
+    confidence = _WLAN_CONFIDENCE.get(client.identity_confidence)
+    bssid = (client.bssid or "").strip().lower()
+    if asset is None or confidence is None or not bssid:
+        return
+    host = index.asset_ep(asset)
+    node = external_key(None, None, f"bss:{bssid}")
+    label = _clip(f"Wi-Fi {client.ssid}" if client.ssid else f"BSS {bssid}", MAX_LABEL)
+    out.add(
+        DerivedLink(
+            link_key=link_key("observed", "wlan_association", (node, ""), (host.node, "")),
+            kind="observed",
+            medium="wireless",
+            relation="wlan_association",
+            confidence=confidence,
+            source=host,
+            target=Endpoint(node, "external", None),
+            source_port=None,
+            target_port=None,
+            evidence=[
+                _evidence(
+                    "wlan",
+                    f"Agent reports association to BSSID {bssid}"
+                    + (f" (SSID {client.ssid})" if client.ssid else "")
+                    + "; access point not inventoried",
+                    client.last_seen_at,
+                )
+            ],
+            evidence_sources=["wlan"],
+            last_evidence_at=client.last_seen_at,
+            target_external_label=label,
+            target_external={"protocol": "wlan", "bssid": bssid, "ssid": client.ssid},
+        )
+    )
+
+
 def _derive_wlan(index: _Index, snap: Snapshot, out: _Collector, cross: list[int]) -> None:
     for client in sorted(snap.clients, key=lambda c: c.id):
-        if client.asset_id is None or client.access_point_id is None:
+        if client.asset_id is None:
+            continue
+        if client.access_point_id is None:
+            if client.asset_id in index.all_assets and client.asset_id not in index.assets:
+                continue
+            if client.asset_id not in index.all_assets:
+                cross.append(client.id)
+                continue
+            _bss_link(index, client, out)
             continue
         if client.asset_id not in index.all_assets or client.access_point_id not in index.aps:
             cross.append(client.id)

@@ -330,7 +330,9 @@ export type AssetSortKey =
   | "first_seen"
   | "last_seen"
   | "network_seen"
-  | "ports";
+  | "ports"
+  /** Fase 7B.3: puntuación de riesgo calculada (sin cálculo, al final). */
+  | "risk";
 
 export interface EventQuery {
   assetId?: string;

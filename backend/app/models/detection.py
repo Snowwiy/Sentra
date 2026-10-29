@@ -107,6 +107,14 @@ class Detection(Base):
         ),
         # FK hacia alerts (ON DELETE SET NULL al purgar alertas).
         Index("ix_detections_alert", "alert_id", postgresql_where=text("alert_id IS NOT NULL")),
+        # Fase 7B.1: detecciones verificadas por una operación (FK con índice) y filtro por
+        # veredicto en la cola del analista.
+        Index(
+            "ix_detections_attribution_operation",
+            "attribution_operation_id",
+            postgresql_where=text("attribution_operation_id IS NOT NULL"),
+        ),
+        Index("ix_detections_attribution_verdict", "attribution_verdict"),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -168,6 +176,16 @@ class Detection(Base):
 
     # Alerta operacional asociada (solo detecciones graves, ver DETECTION_ALERT_MIN_SEVERITY).
     alert_id: Mapped[int | None] = mapped_column(ForeignKey("alerts.id", ondelete="SET NULL"))
+
+    # Fase 7B.1 (docs/detection-attribution.md): último veredicto de atribución y su
+    # justificación. Null = la regla no es atribuible o aún no se evaluó. El historial
+    # completo, inmutable, está en detection_attribution_events.
+    attribution_verdict: Mapped[str | None] = mapped_column(String(32))
+    attribution: Mapped[dict[str, Any] | None] = mapped_column(JSONB)
+    attribution_operation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("maintenance_operations.id", ondelete="SET NULL")
+    )
+    attribution_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class DetectionEvidence(Base):

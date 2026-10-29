@@ -131,6 +131,19 @@ class DuplicateAsset(ResponseModel):
     version: int
 
 
+# Fase 7B-Fix1: causa más probable del duplicado, para que el admin decida con contexto.
+# Es una hipótesis explicada, nunca una decisión: la reconciliación sigue siendo manual.
+DuplicateHypothesis = Literal[
+    "re_enrollment",
+    "reinstall",
+    "agent_identity_change",
+    "discovered_record",
+    "platform_mismatch",
+    "historical_record",
+    "unknown",
+]
+
+
 class DuplicateCandidate(ResponseModel):
     asset: DuplicateAsset
     reasons: list[DuplicateReason]
@@ -144,6 +157,7 @@ class DuplicateCandidate(ResponseModel):
     reconcile_warnings: list[ReconcileWarning] = Field(default_factory=list)
     # Reconciliable solo si un admin acepta los avisos de forma explícita.
     requires_acknowledgement: bool = False
+    hypothesis: DuplicateHypothesis = "unknown"
 
 
 class DuplicateCandidateList(ResponseModel):
@@ -163,6 +177,7 @@ class DuplicatePair(ResponseModel):
     conflicts: list[DuplicateConflict] = Field(default_factory=list)
     reconcile_warnings: list[ReconcileWarning] = Field(default_factory=list)
     requires_acknowledgement: bool = False
+    hypothesis: DuplicateHypothesis = "unknown"
 
 
 class DuplicatePairList(ResponseModel):

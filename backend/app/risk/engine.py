@@ -18,6 +18,7 @@ solo lo suyo, se cuenta en `error_count` y se reintenta en otra vuelta. Un fallo
 nunca afecta a la API: las lecturas sirven el último valor guardado.
 """
 
+import ipaddress
 import logging
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
@@ -35,6 +36,7 @@ from app.models.asset import Asset
 from app.models.asset_context import AssetBusinessContext
 from app.models.detection import Detection, DetectionEvidence, DetectionStatus
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.inventory import AssetInventory
 from app.models.risk import (
     RISK_LEVEL_RANK,
     AssetRisk,
@@ -254,6 +256,13 @@ class RiskEngine:
                 Detection.last_seen_at,
                 Detection.resolved_at,
                 Detection.details["port"].astext.label("port"),
+                # Fase 7B.1: veredicto de atribución y lo necesario para las claves causales
+                # (solo las rutas de details que hacen falta, no el documento entero).
+                Detection.attribution_verdict,
+                Detection.dedup_key,
+                Detection.details["script"].label("script"),
+                Detection.details["scripts"].label("scripts"),
+                Detection.details["script_keys"].label("script_keys"),
                 func.row_number()
                 .over(
                     partition_by=Detection.asset_id,
@@ -300,24 +309,34 @@ class RiskEngine:
                     resolved_at=row.resolved_at,
                     port=_port(row.port),
                     members=frozenset(members.get(row.id, ())),
+                    attribution_verdict=row.attribution_verdict,
+                    causal_keys=causal_keys(
+                        row.rule_id, row.dedup_key, row.script, row.scripts, row.script_keys
+                    ),
                 )
             )
 
         exposure: dict[int, list[ExposureInput]] = {asset_id: [] for asset_id in ids}
-        for port in self._session.scalars(
-            select(AssetPort).where(
-                AssetPort.asset_id.in_(ids),
-                AssetPort.state == PortStateValue.OPEN,
-                AssetPort.protocol == "tcp",
-                AssetPort.port.in_(sorted(SENSITIVE_PORTS)),
+        open_ports = list(
+            self._session.scalars(
+                select(AssetPort).where(
+                    AssetPort.asset_id.in_(ids),
+                    AssetPort.state == PortStateValue.OPEN,
+                    AssetPort.protocol == "tcp",
+                    AssetPort.port.in_(sorted(SENSITIVE_PORTS)),
+                )
             )
-        ):
+        )
+        scopes = self._listen_scopes({port.asset_id for port in open_ports})
+        for port in open_ports:
             exposure[port.asset_id].append(
                 ExposureInput(
                     port=port.port,
                     opened_at=port.opened_at,
                     protocol=port.protocol,
                     service_hint=port.service_hint,
+                    observed_from=port.observed_from,
+                    listen_scope=scopes.get((port.asset_id, port.port)),
                 )
             )
 
@@ -471,6 +490,34 @@ class RiskEngine:
                 )
             )
         return result
+
+    def _listen_scopes(self, asset_ids: set[int]) -> dict[tuple[int, int], str]:
+        """Dirección de escucha de los puertos TCP según el último inventario del agente
+        (Fase 7B-Fix1). Solo se lee la lista de conexiones de los activos con puertos
+        sensibles abiertos: es evidencia del propio equipo, no de su accesibilidad."""
+        if not asset_ids:
+            return {}
+        scopes: dict[tuple[int, int], str] = {}
+        rows = self._session.execute(
+            select(AssetInventory.asset_id, AssetInventory.data["connections"]).where(
+                AssetInventory.asset_id.in_(asset_ids)
+            )
+        ).all()
+        for asset_id, connections in rows:
+            for item in connections if isinstance(connections, list) else ():
+                if not isinstance(item, dict) or item.get("status") != "listen":
+                    continue
+                if (item.get("protocol") or "tcp") != "tcp":
+                    continue
+                port = item.get("local_port")
+                if not isinstance(port, int):
+                    continue
+                scope = listen_scope(item.get("local_address"))
+                previous = scopes.get((asset_id, port))
+                # Un mismo puerto en varias direcciones: cuenta la más amplia.
+                if previous is None or _SCOPE_RANK[scope] > _SCOPE_RANK[previous]:
+                    scopes[(asset_id, port)] = scope
+        return scopes
 
     def _correlation_members(
         self, correlations: Sequence[int], singles: Sequence[int]
@@ -654,6 +701,70 @@ class RiskEngine:
         )
         row.last_alert_at = now
         run.alerts += 1
+
+
+def _script_key(script: Any) -> str | None:
+    if not isinstance(script, dict):
+        return None
+    digest = script.get("script_sha256")
+    if isinstance(digest, str) and digest:
+        return f"script:{digest.lower()}"
+    path = script.get("script_path")
+    if isinstance(path, str) and path:
+        return f"script:{path.strip().lower()}"
+    return None
+
+
+_SCOPE_RANK = {"loopback": 0, "specific": 1, "all_interfaces": 2}
+
+
+def listen_scope(address: Any) -> str:
+    """all_interfaces (0.0.0.0, ::), loopback (127.0.0.0/8, ::1) o specific."""
+    text = str(address or "").strip()
+    try:
+        ip = ipaddress.ip_address(text)
+    except ValueError:
+        return "all_interfaces" if text in ("", "*") else "specific"
+    if ip.is_unspecified:
+        return "all_interfaces"
+    return "loopback" if ip.is_loopback else "specific"
+
+
+def causal_keys(
+    rule_id: str,
+    dedup_key: str | None,
+    script: Any,
+    scripts: Any,
+    script_keys: Any = None,
+) -> frozenset[str]:
+    """Claves de la secuencia causal de una detección (Fase 7B.1).
+
+    Solo hechos demostrados por su propia evidencia: el script (por hash o, sin hash, por
+    ruta) de SCR-001; la instalación de servicio de PER-001 (su clave ya une 7045 e
+    inventario); y en CORR-002 los dos lados de la secuencia. Un bloque en línea no tiene
+    clave: dos bloques tecleados no son "el mismo comportamiento".
+    """
+    keys: set[str] = set()
+    if rule_id == "SCR-001":
+        key = _script_key(script)
+        if key:
+            keys.add(key)
+    elif rule_id == "PER-001" and dedup_key:
+        keys.add(f"service:{dedup_key.lower()}")
+    elif rule_id == "CORR-002":
+        if dedup_key:
+            keys.add(f"service:{dedup_key.lower()}")
+        for item in scripts if isinstance(scripts, list) else ():
+            key = _script_key(item.get("script") if isinstance(item, dict) else None)
+            if key:
+                keys.add(key)
+        # Fase 7B-Fix1: CORR-002 v5 guarda las claves de TODOS los scripts distintos de la
+        # ventana (hasta 200), no solo los tres que muestra: así sus SCR-001 se agrupan con
+        # la correlación en lugar de contar cada uno aparte.
+        for key in script_keys if isinstance(script_keys, list) else ():
+            if isinstance(key, str) and key.startswith("script:"):
+                keys.add(key[:300])
+    return frozenset(keys)
 
 
 def _port(value: Any) -> int | None:

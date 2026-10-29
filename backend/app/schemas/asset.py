@@ -157,6 +157,11 @@ class AssetRead(ResponseModel):
     # (nombre automático con evidencia), generic_only (solo nombres genéricos de SO como
     # "linux.local", que nunca se eligen) o unnamed (ninguna fuente lo nombró).
     name_status: Literal["labelled", "named", "generic_only", "unnamed"] = "unnamed"
+    # Fase 7B.2: ¿se puede afirmar qué dispositivo es? confirmed (agente), probable (MAC
+    # universal o asociación manual) o identity_unresolved (MAC privada sin agente, sin MAC).
+    # Misma regla que la ficha (app/services/identity_rules.py).
+    identity_state: Literal["confirmed", "probable", "identity_unresolved"] = "probable"
+    mac_randomized: bool = False
     discovery_sources: list[str]
     discovery_network: str | None
     discovered_at: datetime | None

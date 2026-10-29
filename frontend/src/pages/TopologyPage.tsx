@@ -7,7 +7,7 @@ import { FilterSelect, SearchInput } from "../components/ListControls";
 import { ErrorState, LoadingState } from "../components/StateViews";
 import { TopologyCanvas, type CanvasHandle } from "../components/topology/TopologyCanvas";
 import { LinkDetails, NodeDetails } from "../components/topology/TopologyDetails";
-import { TopologyLegend } from "../components/topology/TopologyLegend";
+import { TopologyCoverageNotice, TopologyLegend } from "../components/topology/TopologyLegend";
 import { config } from "../config";
 import { describeDownloadError } from "../lib/download";
 import { errorMessage, formatDateTime, formatRelative } from "../lib/format";
@@ -346,6 +346,7 @@ export function TopologyPage({ embedded = false }: { embedded?: boolean }) {
           primero la infraestructura y los nodos con enlaces. Usa la búsqueda o los filtros para acotar.
         </div>
       )}
+      {data?.coverage && <TopologyCoverageNotice coverage={data.coverage} />}
       {graph.error && data && (
         <div className="banner banner--warn" role="alert">
           Fallo al actualizar: {errorMessage(graph.error)}. Se muestran los últimos datos recibidos.

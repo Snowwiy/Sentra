@@ -195,6 +195,16 @@ Query `site_id`. `{"site": {...}, "last_build": TopologyBuild|null, "links_prese
 "links_by_kind": {"physical": 0, ...}, "evidence_available": {"lldp_cdp": bool, "fdb": bool,
 "wlan": bool, "agent_gateways": bool}}` para que la UI explique por qué el grafo está vacío.
 
+### Cobertura y enlaces Wi-Fi (Fase 7B-Fix1)
+
+`GET /topology/graph` devuelve `coverage`: `nodes`, `nodes_without_links`,
+`unlinked_by_type`, `links_by_kind` y `limitations` (`nodes_without_link_evidence`,
+`no_physical_link_evidence`, `access_point_not_inventoried`). Un grafo con pocos enlaces no
+es un fallo: solo se dibujan relaciones con evidencia y la UI lo dice. Un cliente Wi-Fi con
+BSSID observado y sin AP inventariado enlaza con un nodo externo `bss:<bssid>` ("Wi-Fi
+<ssid>", `wlan_association`). Nunca se crea un enlace a la puerta de enlace por estar en la
+misma subred.
+
 ## Configuración (opcional, fijada en `tests/conftest.py`)
 
 - `TOPOLOGY_REBUILD_INTERVAL_MINUTES` (15; 0 desactiva la reconstrucción periódica).

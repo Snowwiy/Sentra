@@ -291,6 +291,9 @@ export function AssetDetailPage() {
             </button>
           )}
           <GenerateReportLink type="asset" ids={{ asset_id: asset.asset_id }} />
+          <Link className="button" to={`/console?asset=${encodeURIComponent(asset.asset_id)}`}>
+            Abrir en consola
+          </Link>
         </div>
       </div>
 

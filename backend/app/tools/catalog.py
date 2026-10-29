@@ -19,12 +19,13 @@ Ninguna herramienta acepta comandos, scripts, rutas de ejecutable, URLs ni SQL
 (registry.validate_registry lo comprueba al importar).
 """
 
+import re
 from datetime import datetime, timedelta
 from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import func, or_, select
 
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.core.permissions import Permission
@@ -50,7 +51,9 @@ from app.repositories.asset_repository import AssetRepository
 from app.response.catalog import ACTIONS, FORENSIC_ACTIONS, LookbackParams
 from app.response.handlers import ActionContext, collect_response_bundle, collect_timeline
 from app.risk.config import RiskConfig
+from app.risk.engine import causal_keys
 from app.schemas.asset import AssetList, AssetRead
+from app.schemas.attribution import DetectionAttributionRead
 from app.schemas.change import ChangeList
 from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.detection import DetectionDetail, DetectionList
@@ -58,6 +61,7 @@ from app.schemas.dhcp import AssetIdentityHistory, AssetIdentityRead
 from app.schemas.discovery import ExposureRead
 from app.schemas.endpoint import ProcessInstanceDetail, ProcessTree
 from app.schemas.event import EventList, EventRead
+from app.schemas.identity import AssetIdentityProfile, IdentityCandidate
 from app.schemas.incident import IncidentAssign, IncidentCreate, IncidentPromote
 from app.schemas.response import ExecutionList, ExecutionOut, ExecutionRequest, PreviewOut
 from app.schemas.risk import RiskAssetDetail
@@ -67,7 +71,9 @@ from app.schemas.vulnerability import FindingList
 from app.services.alert_service import AlertThresholds
 from app.services.asset_lifecycle_policy import LifecyclePolicy
 from app.services.asset_service import AssetFilter, AssetService
+from app.services.attribution_service import AttributionService
 from app.services.detection_service import DetectionFilter, DetectionService
+from app.services.device_identity import DeviceIdentityService
 from app.services.exposure_service import ExposureService
 from app.services.incident_service import IncidentService
 from app.services.incident_service import Operator as IncidentOperator
@@ -1188,6 +1194,138 @@ def operations_history(ctx: ToolContext, params: OperationsIn) -> ToolOutput:
     )
 
 
+# --- 7B.4. Atribución, relaciones e identidad (Analyst Console) -----------------------------
+
+
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+def _detection_in_scope(ctx: ToolContext, public_id: UUID) -> Detection:
+    detection = ctx.session.scalar(select(Detection).where(Detection.public_id == public_id))
+    if detection is None:
+        raise NotFoundError("Detection not found")
+    asset = ctx.session.get(Asset, detection.asset_id)
+    if asset is None or (ctx.site_id is not None and asset.site_id != ctx.site_id):
+        raise NotFoundError("Detection not found")
+    return detection
+
+
+def attribution_explain(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
+    detection = _detection_in_scope(ctx, params.detection_id)
+    out = AttributionService(ctx.session).detection_attribution(detection.public_id)
+    verdict = out.verdict or "sin evaluar"
+    missing = len((out.attribution or {}).get("missing_evidence") or [])
+    return ToolOutput(
+        f"{detection.rule_id}: veredicto {verdict}, {missing} evidencias pendientes,"
+        f" {len(out.history)} cambios en el historial",
+        out,
+        [_ref("detection", detection.public_id, detection.rule_id, detection.last_seen_at)],
+        {"sources": ["detections.attribution", "detection_attribution_events"]},
+    )
+
+
+class RelatedDetection(ResponseModel):
+    detection_id: UUID
+    asset_id: UUID
+    asset_name: str
+    rule_id: str
+    status: str
+    severity: str
+    attribution_verdict: str | None
+    shared: list[str]
+    last_seen_at: datetime
+
+
+class RelatedDetectionsOut(ResponseModel):
+    keys: list[str]
+    items: list[RelatedDetection]
+
+
+def detections_related(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
+    """Otras detecciones con la misma clave causal: el mismo script (hash o ruta) o el mismo
+    servicio, en este u otros equipos del site. Responde a "¿dónde más ha pasado esto?"."""
+    detection = _detection_in_scope(ctx, params.detection_id)
+    details = detection.details or {}
+    keys = sorted(
+        causal_keys(
+            detection.rule_id, detection.dedup_key, details.get("script"), details.get("scripts")
+        )
+    )
+    conditions: list[Any] = []
+    for key in keys:
+        kind, value = key.split(":", 1)
+        if kind == "script":
+            field = "script_sha256" if _SHA256.fullmatch(value) else "script_path"
+            conditions.append(func.lower(Detection.details["script"][field].astext) == value)
+            conditions.append(Detection.details["scripts"].contains([{"script": {field: value}}]))
+        else:
+            conditions.append(
+                (Detection.rule_id.in_(("PER-001", "CORR-002")))
+                & (func.lower(Detection.dedup_key) == value)
+            )
+    items: list[RelatedDetection] = []
+    if conditions:
+        stmt = (
+            select(Detection, Asset)
+            .join(Asset, Asset.id == Detection.asset_id)
+            .where(Detection.id != detection.id, or_(*conditions))
+            .order_by(Detection.last_seen_at.desc())
+            .limit(100)
+        )
+        if ctx.site_id is not None:
+            stmt = stmt.where(Asset.site_id == ctx.site_id)
+        for row, asset in ctx.session.execute(stmt).all():
+            other = row.details or {}
+            mine = causal_keys(
+                row.rule_id, row.dedup_key, other.get("script"), other.get("scripts")
+            )
+            items.append(
+                RelatedDetection(
+                    detection_id=row.public_id,
+                    asset_id=asset.public_id,
+                    asset_name=asset.display_name,
+                    rule_id=row.rule_id,
+                    status=row.status.value,
+                    severity=row.severity.value,
+                    attribution_verdict=row.attribution_verdict,
+                    shared=sorted(mine & set(keys)),
+                    last_seen_at=row.last_seen_at,
+                )
+            )
+    assets = {i.asset_id for i in items}
+    return ToolOutput(
+        f"{len(items)} detecciones relacionadas en {len(assets)} activos"
+        if keys
+        else "La detección no tiene claves causales (bloque en línea o regla sin secuencia)",
+        RelatedDetectionsOut(keys=keys, items=items),
+        [_ref("detection", detection.public_id, detection.rule_id, detection.last_seen_at)]
+        + [_ref("detection", i.detection_id, i.rule_id, i.last_seen_at) for i in items[:20]],
+        {"sources": ["detections"], "keys": keys, "limit": 100},
+    )
+
+
+class IdentityCandidatesOut(ResponseModel):
+    profile: AssetIdentityProfile
+    candidates: list[IdentityCandidate]
+
+
+def identity_candidates(ctx: ToolContext, params: AssetTarget) -> ToolOutput:
+    asset = load_asset(ctx, params.asset_id)
+    service = DeviceIdentityService(ctx.session, _heartbeat(ctx))
+    out = IdentityCandidatesOut(
+        profile=service.profile(asset.public_id),
+        candidates=service.candidates(asset.public_id).items,
+    )
+    return ToolOutput(
+        f"{asset.display_name}: identidad {out.profile.state},"
+        f" {len(out.candidates)} posibles registros del mismo dispositivo",
+        out,
+        [_asset_ref(asset)]
+        + [_ref("asset", c.asset.asset_id, c.asset.display_name) for c in out.candidates],
+        {"sources": ["assets", "asset_identity_history", "asset_identity_links", "wlan"]},
+    )
+
+
 # --- Registro ------------------------------------------------------------------------------------
 
 _T = Permission.TELEMETRY_READ
@@ -1539,6 +1677,52 @@ TOOLS: dict[str, ToolDefinition] = {
             policy="preview_confirm",
             preview=case_link_preview,
             sources=("incidents",),
+        ),
+        ToolDefinition(
+            id="attribution.explain",
+            version=1,
+            name="Explicar la atribución",
+            description="Veredicto de una detección frente a las operaciones de mantenimiento"
+            " aprobadas: comprobaciones, evidencia que falta y cómo obtenerla, e historial.",
+            category="read",
+            scope="asset",
+            risk_level="none",
+            permissions=(READ,),
+            input_model=DetectionRef,
+            output_model=DetectionAttributionRead,
+            handler=attribution_explain,
+            sources=("detections", "detection_attribution_events", "maintenance_operations"),
+        ),
+        ToolDefinition(
+            id="detections.related",
+            version=1,
+            name="Detecciones relacionadas",
+            description="Otras detecciones con el mismo script (hash o ruta) o servicio, en"
+            " este u otros equipos del site.",
+            category="investigation",
+            scope="site",
+            risk_level="none",
+            permissions=(READ,),
+            input_model=DetectionRef,
+            output_model=RelatedDetectionsOut,
+            handler=detections_related,
+            max_rows=100,
+            sources=("detections",),
+        ),
+        ToolDefinition(
+            id="identity.candidates",
+            version=1,
+            name="Identidad y posibles duplicados",
+            description="Ficha de identidad por niveles y registros que podrían ser el mismo"
+            " dispositivo, con la evidencia y su fuerza. Solo sugiere: no asocia nada.",
+            category="read",
+            scope="asset",
+            risk_level="none",
+            permissions=(READ,),
+            input_model=AssetTarget,
+            output_model=IdentityCandidatesOut,
+            handler=identity_candidates,
+            sources=("assets", "asset_identity_history", "asset_identity_links", "wlan"),
         ),
     )
 }

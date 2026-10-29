@@ -45,6 +45,7 @@ import {
 import { FilterSelect, Pager, SearchInput, Toolbar } from "../ListControls";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 import { AuthorizationModal } from "./WlanActions";
+import { WlanClientPanel } from "./WlanClientPanel";
 import {
   ApStatusBadge,
   AuthorizationBadge,
@@ -734,6 +735,8 @@ export function ClientsTab({ scope }: { scope: WlanListScope }) {
     [scope.siteId, term, byBssid, filters.identity, filters.state, filters.freshness, filters.present, list.page],
   );
   const clients = usePolling(fetchClients, config.refreshIntervalMs * 2, true, true);
+  // Fase 7B.2: detalle del cliente (observaciones y asociación manual) en un panel lateral.
+  const [openClient, setOpenClient] = useState<string>();
   const filtered = Boolean(list.query.trim() || Object.values(filters).some(Boolean));
 
   return (
@@ -805,6 +808,7 @@ export function ClientsTab({ scope }: { scope: WlanListScope }) {
                   <th className="col-secondary">Fuente</th>
                   <th>Evidencia</th>
                   <th>Última vez visto</th>
+                  <th>Acciones</th>
                 </tr>
               </thead>
               <tbody>
@@ -846,6 +850,16 @@ export function ClientsTab({ scope }: { scope: WlanListScope }) {
                     <td className="nowrap">
                       <When iso={client.last_seen_at} />
                     </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="button button--small"
+                        aria-label={`Ver detalle del cliente ${client.mac ?? client.client_id}`}
+                        onClick={() => setOpenClient(client.client_id)}
+                      >
+                        Detalle
+                      </button>
+                    </td>
                   </tr>
                 ))}
               </tbody>
@@ -853,6 +867,9 @@ export function ClientsTab({ scope }: { scope: WlanListScope }) {
           </div>
         )}
       </ListBody>
+      {openClient && (
+        <WlanClientPanel clientId={openClient} onClose={() => setOpenClient(undefined)} onChanged={clients.refresh} />
+      )}
     </section>
   );
 }

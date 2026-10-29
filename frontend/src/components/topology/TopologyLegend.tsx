@@ -1,3 +1,5 @@
+import type { TopologyCoverage } from "../../api/types";
+import { deviceTypeLabel } from "../../lib/identity";
 import {
   CONFIDENCE_LABELS,
   CONFIDENCE_OPACITY,
@@ -62,6 +64,41 @@ export function TopologyLegend() {
         fuera de línea, ámbar sin datos recientes, gris desconocido. Compartir red no es un enlace: las cajas solo
         agrupan.
       </p>
+      <p className="muted small">
+        Wi-Fi: asociación verificada (el agente informa del BSSID o un controlador lista el cliente). Va al punto de
+        acceso si está inventariado; si no (p. ej. un router doméstico sin SNMP), a un nodo externo «Wi-Fi &lt;SSID&gt;».
+        Un cliente con MAC privada sin correlacionar no se enlaza.
+      </p>
     </section>
+  );
+}
+
+const LIMITATION_TEXT: Record<string, string> = {
+  nodes_without_link_evidence:
+    "Hay nodos sin ninguna evidencia de conexión. Sentra no los une al gateway por estar en la misma subred: solo dibuja enlaces con LLDP/CDP, la tabla FDB de un switch gestionable, una asociación Wi-Fi verificada o el gateway que informa un agente.",
+  no_physical_link_evidence:
+    "No hay enlaces físicos confirmados: ningún switch gestionable aporta LLDP/CDP ni tabla FDB (un router doméstico como el Archer GX90 no los ofrece sin SNMP).",
+  access_point_not_inventoried:
+    "Algunas asociaciones Wi-Fi apuntan a un BSS cuyo punto de acceso no está inventariado: el enlace es verificado, el AP no.",
+};
+
+/** Fase 7B-Fix1: cobertura del grafo y sus límites, explícitos y sin enlaces inventados. */
+export function TopologyCoverageNotice({ coverage }: { coverage: TopologyCoverage }) {
+  if (coverage.limitations.length === 0) return null;
+  const byType = Object.entries(coverage.unlinked_by_type ?? {})
+    .map(([type, count]) => `${count} ${type === "unknown" ? "sin tipo" : deviceTypeLabel(type)}`)
+    .join(", ");
+  return (
+    <div className="banner" role="note" aria-label="Cobertura de la topología">
+      <strong>
+        {coverage.nodes_without_links} de {coverage.nodes} nodos sin enlace
+      </strong>
+      {byType && <span className="small"> ({byType})</span>}
+      <ul className="plain-list small">
+        {coverage.limitations.map((code) => (
+          <li key={code}>{LIMITATION_TEXT[code] ?? code}</li>
+        ))}
+      </ul>
+    </div>
   );
 }

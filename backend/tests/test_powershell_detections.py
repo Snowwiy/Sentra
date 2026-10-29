@@ -226,6 +226,20 @@ def test_scr_001_explains_script_process_and_cause(
     assert detection["severity"] == "medium"
 
 
+def test_powershell_7_channel_is_detected_too(
+    client: TestClient, engine: Engine, db: Session
+) -> None:
+    """Fase 7B.0: un 4104 de pwsh (PowerShellCore/Operational, agente 0.6.1) da SCR-001."""
+    agent, _ = _agent(client, db)
+    block = _block(_ago(2))
+    block["channel"] = "PowerShellCore/Operational"
+    block["provider"] = "PowerShellCore"
+    _send(client, agent, [block])
+    _run(engine)
+    (detection,) = _detections(client, "SCR-001")
+    assert _details(client, detection)["script"]["powershell"] == "core"
+
+
 def test_missing_context_is_reported_not_invented(
     client: TestClient, engine: Engine, db: Session
 ) -> None:
@@ -323,7 +337,8 @@ def test_corr_002_ignores_excepted_scripts_but_keeps_the_rest(
     assert _detections(client, "CORR-002") == []
 
     other = "C:\\Users\\Public\\x.ps1"
-    _send(client, agent, [_block(_ago(3), path=other, sha=OTHER_SHA)])
+    # Fase 7B-Fix1 (CORR-002 v5): solo un script ANTERIOR a la instalación puede causarla.
+    _send(client, agent, [_block(_ago(6), path=other, sha=OTHER_SHA)])
     _run(engine)
     (corr,) = _detections(client, "CORR-002")
     details = _details(client, corr)
@@ -334,6 +349,7 @@ def test_corr_002_ignores_excepted_scripts_but_keeps_the_rest(
     assert details["persistence"]["account"] == "LocalSystem"
     assert "servicio de Sentra" in " ".join(details["explanation"])
     assert corr["severity"] == "high"
+    assert [link["code"] for link in details["causal_links"]] == ["install_event_after_script"]
 
 
 # --- NET-001 con el proceso que escucha ---------------------------------------------------------

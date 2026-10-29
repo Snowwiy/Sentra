@@ -101,6 +101,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "tools:execute",
     "tools:manage",
     "network_controls:approve",
+    // Fase 7B: operaciones de mantenimiento y asociaciones manuales de identidad (solo admin).
+    "maintenance:manage",
+    "identity:manage",
   ],
 };
 

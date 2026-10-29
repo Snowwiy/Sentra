@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from app.models.asset import Asset, AssetCriticality
 from app.models.exposure import AssetPort, PortStateValue
+from app.models.risk import AssetRisk
 
 
 def display_name_expr() -> ColumnElement[str]:
@@ -78,6 +79,17 @@ def open_tcp_ports_count() -> ColumnElement[Any]:
     )
 
 
+def risk_score_expr() -> ColumnElement[Any]:
+    """Puntuación ya calculada (Fase 7B.3: orden por riesgo en el servidor). Sin cálculo es
+    NULL y va al final en ambas direcciones, como el resto de valores ausentes."""
+    return (
+        select(AssetRisk.score)
+        .where(AssetRisk.asset_id == Asset.id, AssetRisk.calculated_at.is_not(None))
+        .correlate(Asset)
+        .scalar_subquery()
+    )
+
+
 def sort_columns(sort: str, descending: bool, status: ColumnElement[Any]) -> list[Any]:
     """ORDER BY de los listados de activos. Siempre termina en el orden por nombre e id para
     que la paginación sea estable (sin filas repetidas ni saltadas entre páginas)."""
@@ -102,6 +114,8 @@ def sort_columns(sort: str, descending: bool, status: ColumnElement[Any]) -> lis
             key = Asset.last_network_seen_at
         case "ports":
             key = open_tcp_ports_count()
+        case "risk":
+            key = risk_score_expr()
         case _:
             if descending:
                 return [

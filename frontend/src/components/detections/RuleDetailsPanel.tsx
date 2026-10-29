@@ -1,5 +1,9 @@
 import {
+  type CausalLink,
   correlationInfo,
+  type ServiceClassInfo,
+  serviceDetectionInfo,
+  temporalContext,
   MISSING_CONTEXT_LABELS,
   portExposureInfo,
   scriptInfo,
@@ -63,6 +67,42 @@ function MissingContext({ items }: { items: string[] }) {
   );
 }
 
+function ServiceClass({ info }: { info: ServiceClassInfo | null }) {
+  if (!info) return null;
+  return (
+    <div className="stack" aria-label="Clasificación del servicio">
+      <h3>Clasificación del servicio</h3>
+      <FieldList
+        items={[
+          ["Tipo", info.kind],
+          ["Verificación", info.verification],
+        ]}
+        label="Clasificación"
+      />
+      {info.checks.length > 0 && <FieldList items={info.checks} label="Comprobaciones" />}
+      {info.explanation && <p className="small">{info.explanation}</p>}
+    </div>
+  );
+}
+
+function CausalLinks({ links }: { links: CausalLink[] }) {
+  if (links.length === 0) return null;
+  return (
+    <>
+      <h3>Relación causal</h3>
+      <ul className="plain-list small" aria-label="Relación causal">
+        {links.map((link) => (
+          <li key={link.code}>
+            <strong>{link.label}</strong>
+            {link.strength === "strong" ? " (evidencia fuerte)" : " (evidencia media)"}
+            {link.detail && `: ${link.detail}`}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 function ScriptBlock({ info, title }: { info: ScriptInfo; title?: string }) {
   const process = [...info.process];
   if (info.pid) process.push(["PID", info.pid]);
@@ -99,6 +139,25 @@ function ScriptBlock({ info, title }: { info: ScriptInfo; title?: string }) {
   );
 }
 
+/** Servicios cerca del script sin relación causal: contexto, no causa (Fase 7B-Fix1). */
+function TemporalContext({ raw }: { raw: unknown }) {
+  const items = temporalContext(raw);
+  if (items.length === 0) return null;
+  return (
+    <>
+      <h3>Contexto temporal (sin relación causal)</h3>
+      <ul className="plain-list small" aria-label="Contexto temporal">
+        {items.map((item, index) => (
+          <li key={`${item.service}-${index}`}>
+            <span className="mono">{item.service}</span>: {item.source}, {item.minutes} min {item.position}
+            {item.verification && ` · ${item.verification}`}
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 /**
  * Detalle estructurado de SCR-001, CORR-002 y NET-001 (Fase 7A.8): qué script o puerto, qué
  * proceso, por qué saltó y qué contexto faltó. Solo lectura y como texto plano.
@@ -111,6 +170,18 @@ export function RuleDetailsPanel({ ruleId, details }: { ruleId: string; details:
       <section className="panel panel--padded stack" aria-label="Detalle del script">
         <h2>Detalle del script</h2>
         <ScriptBlock info={info} />
+        <TemporalContext raw={details.temporal_context} />
+        <Explanation items={info.explanation} />
+      </section>
+    );
+  }
+  if (ruleId === "PER-001") {
+    const info = serviceDetectionInfo(details);
+    return (
+      <section className="panel panel--padded stack" aria-label="Detalle del servicio">
+        <h2>Servicio</h2>
+        <FieldList items={info.service} label="Servicio" />
+        <ServiceClass info={info.classification} />
         <Explanation items={info.explanation} />
       </section>
     );
@@ -125,9 +196,17 @@ export function RuleDetailsPanel({ ruleId, details }: { ruleId: string; details:
             <strong>Secuencia:</strong> {SEQUENCE_LABELS[info.sequence] ?? info.sequence}
           </p>
         )}
+        {info.review && (
+          <div className="banner" role="note" aria-label="Revisión de la correlación">
+            <strong>Revisada:</strong> {info.review.verdict}
+            {info.review.actor && ` · ${info.review.actor}`}. {info.review.explanation.join(" ")}
+          </div>
+        )}
         <FieldList items={info.counts} label="Recuentos" />
+        <CausalLinks links={info.links} />
         <h3>Persistencia</h3>
         <FieldList items={info.persistence} label="Persistencia" />
+        <ServiceClass info={info.classification} />
         {info.sentraServiceName && (
           <div className="banner banner--warn" role="note">
             El servicio se llama como uno de Sentra. El nombre no prueba el origen: compare la ruta del ejecutable con la de

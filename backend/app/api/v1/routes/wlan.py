@@ -33,6 +33,7 @@ from app.schemas.wlan import (
     WlanBssList,
     WlanBssRead,
     WlanClientList,
+    WlanClientRead,
     WlanConfidence,
     WlanFreshness,
     WlanLinkRequest,
@@ -280,3 +281,26 @@ def list_clients(
         limit=limit,
         offset=offset,
     )
+
+
+@router.get(
+    "/clients/{client_id}",
+    response_model=WlanClientRead,
+    dependencies=[READ],
+    responses=error_responses(404),
+)
+def get_client(client_id: UUID, service: Wlan) -> WlanClientRead:
+    return service.get_client(client_id)
+
+
+@router.get(
+    "/clients/{client_id}/observations",
+    response_model=WlanObservationList,
+    dependencies=[READ],
+    responses=error_responses(404),
+)
+def client_observations(
+    client_id: UUID, service: Wlan, limit: Limit = 50, offset: Offset = 0
+) -> WlanObservationList:
+    """Historial del cliente: dónde y con qué fuente se vio (MAC privada incluida)."""
+    return service.client_observations(client_id, limit, offset)

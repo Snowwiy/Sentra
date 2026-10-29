@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
+Last updated: 2026-10-27 (Fase 7B-Fix1: CORR-002 v5 con relación causal demostrable, PER-001 v3 con instancias de servicio por usuario verificables, riesgo v7, identidad y topología con lo que falta explícito, hipótesis de duplicados, consola con contexto; migración 0050, agente 0.6.2). Anterior: 2026-10-26 (Fase 7B: atribución verificable de detecciones con operaciones de mantenimiento autorizadas, riesgo v6 sin doble conteo causal, identidad de dispositivos por niveles con MAC privadas y asociación manual auditada, tabla SOC de dispositivos con panel lateral, Analyst Console sobre el motor 7A; servidor y frontend 0.5.0, agente 0.6.1, sensor 0.7.0). Anterior: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0047 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0050 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -437,6 +437,36 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   the dashboard shows its metrics as "—". On-demand: `python -m app.cli purge-old-data`.
 
 ## Recommended next phase
+
+Fase 7B-Fix1 implementada sobre la 7B final (servidor y frontend 0.5.0, agente 0.6.2, sensor
+sin cambios, migración 0050, sin dependencias ni ajustes nuevos): servicios por usuario
+clasificados con evidencia verificable, CORR-002 v5 causal y revisión explícita de las v4,
+riesgo v7 (familia SCR-001, clases de riesgo, puertos vistos solo desde el propio equipo),
+identidad con modelo, nombre asignado y datos que faltan, cobertura de la topología y enlaces
+Wi-Fi por BSSID, hipótesis de duplicados y consola con contexto (docs/fase-7b-fix1.md).
+Validar en el PC: docs/fase-7b-fix1-windows-qa.md. Siguiente migración libre: 0051.
+
+Fase 7B implementada (servidor y frontend 0.5.0, agente 0.6.1, sensor sin cambios, migraciones
+0048-0049, sin dependencias nuevas; un ajuste nuevo, `MAINTENANCE_AUTO_RECOGNITION`, activo por
+defecto). Qué contiene y dónde está:
+
+- 7B.0 auditoría del riesgo 99 de ravenslg con causa raíz, `python -m app.cli audit-7b` (solo
+  lectura) y `scripts/collect_7b_evidence.ps1` (docs/fase-7b-auditoria.md).
+- 7B.1 operaciones de mantenimiento autorizadas (permiso `maintenance:manage`), veredictos
+  `verified_benign` / `suspicious_unverified` / `insufficient_evidence` / `confirmed_malicious`,
+  PER-001 v2, CORR-002 v4, fórmula de riesgo v6 (docs/detection-attribution.md,
+  docs/risk-attribution.md). Política de autorización: aprobación humana inicial y después
+  reconocimiento automático solo de detecciones nuevas cuya evidencia casa exactamente; las
+  históricas solo con vista previa y aplicar; si la evidencia deja de casar, la detección se
+  reabre; NET-001 nunca se cierra por atribución.
+- 7B.2 identidad por niveles con procedencia, MAC privadas, candidatos sin fusión automática,
+  comparación de registros, asociación manual auditada (`identity:manage`), ficha de cliente
+  Wi-Fi (docs/device-identity-wifi.md).
+- 7B.3 Red → Dispositivos con columnas esenciales, selector de columnas, vista compacta,
+  filtros persistentes, orden por riesgo en el servidor y panel lateral.
+- 7B.4 Analyst Console en Seguridad → Consola (docs/analyst-console.md).
+
+Validar en el PC: guía docs/fase-7b-windows-qa.md. Siguiente migración libre: 0050.
 
 Fase 7A implementada (servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0, migraciones
 0044-0047). Qué contiene y dónde está documentado:

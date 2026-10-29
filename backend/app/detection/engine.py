@@ -554,6 +554,8 @@ class DetectionEngine:
                 )
                 .with_for_update()
             )
+            if existing is None:
+                existing = self._recently_attributed(meta, asset_id, key, result.occurred_at)
             if existing is not None:
                 updated = self._update(existing, rule, result, severity, confidence, now)
                 if updated is not None:
@@ -590,6 +592,7 @@ class DetectionEngine:
                 continue
             self._add_evidence(detection, result, now)
             self._maybe_alert(detection, None)
+            self._attribute(detection, now)
             self._touched.add(asset_id)
             logger.info(
                 "detection created",
@@ -602,6 +605,34 @@ class DetectionEngine:
             )
             return True
         return None
+
+    def _recently_attributed(
+        self, meta: Any, asset_id: int, key: str, occurred_at: datetime
+    ) -> Detection | None:
+        """Fase 7B.1: detección de la misma oleada cerrada como mantenimiento verificado.
+
+        Sin esto, la evidencia que llega justo después del cierre automático (el inventario
+        tras el 7045) abriría otra detección por la misma actividad. Se le añade la evidencia
+        y se reevalúa: si ya no casa con la operación, la atribución la reabre.
+        """
+        from app.services.attribution_service import SYSTEM_ACTOR
+
+        wave = max(meta.cooldown_for(self._config), timedelta(hours=1))
+        found: Detection | None = self._session.scalar(
+            select(Detection)
+            .where(
+                Detection.asset_id == asset_id,
+                Detection.rule_id == meta.id,
+                Detection.dedup_key == key,
+                Detection.status == DetectionStatus.RESOLVED,
+                Detection.resolved_by == SYSTEM_ACTOR,
+                Detection.last_seen_at >= occurred_at - wave,
+            )
+            .order_by(Detection.last_seen_at.desc())
+            .limit(1)
+            .with_for_update()
+        )
+        return found
 
     def _update(
         self,
@@ -638,7 +669,24 @@ class DetectionEngine:
         # en details.rule_version.
         detection.updated_at = now
         self._maybe_alert(detection, previous_severity)
+        self._attribute(detection, now)
         return False
+
+    def _attribute(self, detection: Detection, now: datetime) -> None:
+        """Fase 7B.1: veredicto de atribución con la evidencia ya guardada.
+
+        Después de la alerta a propósito: la detección se registra y alerta igual que antes;
+        si una operación aprobada la verifica, la atribución la cierra y resuelve su alerta
+        dejando constancia. Import diferido: attribution_service usa este módulo.
+        """
+        from app.detection.attribution import ATTRIBUTABLE_RULES
+
+        if detection.rule_id not in ATTRIBUTABLE_RULES:
+            return
+        from app.services.attribution_service import evaluate_detection
+
+        self._session.flush()
+        evaluate_detection(self._session, detection, now)
 
     def _add_evidence(self, detection: Detection, result: RuleResult, now: datetime) -> int:
         """Inserta la evidencia nueva (idempotente por señal). Devuelve cuántas añadió."""

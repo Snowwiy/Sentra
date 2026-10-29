@@ -137,6 +137,11 @@ export interface Asset {
   /** Fase 5F: site al que pertenece el activo. */
   site_id: string;
   site_name: string;
+  /** Fase 7B.2: confirmada (agente), probable o sin resolver (MAC privada o sin identificador
+   * estable). Opcional: backends anteriores no lo envían. */
+  identity_state?: IdentityState;
+  /** La MAC tiene el bit de administración local (aleatoria o privada). */
+  mac_randomized?: boolean;
 }
 
 // --- Ciclo de vida de activos (Fase 5C.1) -----------------------------------------------------
@@ -245,7 +250,18 @@ export interface DuplicateCandidate {
   reconcile_warnings: ReconcileWarning[];
   /** Reconciliable, pero solo si un admin acepta explícitamente los avisos. */
   requires_acknowledgement: boolean;
+  /** Fase 7B-Fix1: causa más probable del duplicado (explicación, no decisión). */
+  hypothesis: DuplicateHypothesis;
 }
+
+export type DuplicateHypothesis =
+  | "re_enrollment"
+  | "reinstall"
+  | "agent_identity_change"
+  | "discovered_record"
+  | "platform_mismatch"
+  | "historical_record"
+  | "unknown";
 
 export interface DuplicateCandidateList {
   asset_id: string;
@@ -265,6 +281,7 @@ export interface DuplicatePair {
   conflicts: DuplicateConflict[];
   reconcile_warnings: ReconcileWarning[];
   requires_acknowledgement: boolean;
+  hypothesis: DuplicateHypothesis;
 }
 
 export interface DuplicatePairList {
@@ -740,6 +757,17 @@ export interface ServiceInfo {
   status: string;
   start_type: string | null;
   pid?: number | null;
+  // Fase 7B-Fix1 (agente 0.6.2, Windows): identidad verificable del servicio.
+  binpath?: string | null;
+  username?: string | null;
+  service_type?: number | null;
+  image?: string | null;
+  image_signature?: ServiceSignature | null;
+}
+
+export interface ServiceSignature {
+  status: string;
+  signer: string | null;
 }
 
 export interface SoftwareInfo {
@@ -842,7 +870,8 @@ export type ChangeKind =
   | "port_closed"
   | "appeared"
   | "disappeared"
-  | "reclassified";
+  | "reclassified"
+  | "image_changed";
 
 /** A difference Sentra found between two inventory snapshots. */
 export interface AssetChange {
@@ -1335,7 +1364,9 @@ export type Permission =
   | "tools:read"
   | "tools:execute"
   | "tools:manage"
-  | "network_controls:approve";
+  | "network_controls:approve"
+  | "maintenance:manage"
+  | "identity:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -1424,6 +1455,8 @@ export interface Detection {
   resolved_by: string | null;
   resolution_note: string | null;
   alert_id: string | null;
+  /** Fase 7B.1: veredicto de atribución vigente; null si la regla no lo evalúa. */
+  attribution_verdict?: AttributionVerdict | null;
 }
 
 export interface DetectionList {
@@ -4515,7 +4548,8 @@ export type WlanClientState =
   | "unknown";
 export type WlanFindingCode = "open_network" | "wep" | "wpa1" | "wpa1_allowed" | "legacy_privacy" | "tkip_allowed";
 export type WlanSourceAvailability = "available" | "partial" | "unavailable" | "not_configured";
-export type WlanCorrelationBasis = "agent_self" | "mac_match" | "agent_reported_mac";
+/** Fase 7B.2: "manual" = asociado a mano por un admin (identity:manage), con auditoría. */
+export type WlanCorrelationBasis = "agent_self" | "mac_match" | "agent_reported_mac" | "manual";
 export type WlanUnlinkTarget = "asset" | "network_device" | "all";
 
 export interface WlanDeviceRef {
@@ -4946,6 +4980,21 @@ export interface TopologyGraph {
   nodes: TopologyNode[];
   links: TopologyLink[];
   groups: TopologyGroup[];
+  /** Fase 7B-Fix1: evidencia detrás del grafo y lo que lo limita. */
+  coverage: TopologyCoverage;
+}
+
+export type TopologyLimitation =
+  | "nodes_without_link_evidence"
+  | "no_physical_link_evidence"
+  | "access_point_not_inventoried";
+
+export interface TopologyCoverage {
+  nodes: number;
+  nodes_without_links: number;
+  unlinked_by_type: Record<string, number>;
+  links_by_kind: Record<string, number>;
+  limitations: TopologyLimitation[];
 }
 
 export interface TopologyLinkList {
@@ -5843,4 +5892,509 @@ export interface SecurityOverview {
   risk_history: RiskHistoryPoint[];
   new_devices: NewDevices;
   exposed_ports: ExposedPortSummary;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fase 7B: atribución de mantenimiento, identidad de dispositivos y Analyst Console.
+// ---------------------------------------------------------------------------------------------
+
+/** Veredicto de atribución: el sistema solo emite los tres primeros; confirmed_malicious lo
+ * fija siempre un analista. */
+export type AttributionVerdict =
+  | "verified_benign"
+  | "suspicious_unverified"
+  | "insufficient_evidence"
+  | "confirmed_malicious";
+
+export type MaintenanceKind =
+  | "agent_install"
+  | "agent_upgrade"
+  | "sensor_install"
+  | "database_init"
+  | "server_setup"
+  | "software_install"
+  | "other";
+
+export type MaintenanceStatus = "pending_review" | "approved" | "revoked" | "superseded";
+
+export interface MaintenanceArtifactRead {
+  kind: "script" | "binary" | "service";
+  path: string | null;
+  sha256: string | null;
+  signer: string | null;
+  reference_source: "manual" | "server_distribution";
+  service_name: string | null;
+  service_display_name: string | null;
+  image_path: string | null;
+  service_account: string | null;
+}
+
+export interface MaintenanceOperationRead {
+  id: string;
+  operation_key: string;
+  version: number;
+  supersedes: string | null;
+  asset_id: string;
+  asset_name: string;
+  kind: MaintenanceKind;
+  title: string;
+  reason: string;
+  status: MaintenanceStatus;
+  active: boolean;
+  window_start: IsoDateTime;
+  window_end: IsoDateTime;
+  expires_at: IsoDateTime;
+  accounts: string[];
+  interpreters: string[];
+  parents: string[];
+  signer: string | null;
+  artifacts: MaintenanceArtifactRead[];
+  created_by: string;
+  created_at: IsoDateTime;
+  approved_by: string | null;
+  approved_at: IsoDateTime | null;
+  approval_note: string | null;
+  revoked_by: string | null;
+  revoked_at: IsoDateTime | null;
+  revoke_reason: string | null;
+  matches: number;
+  last_match_at: IsoDateTime | null;
+}
+
+export interface MaintenanceOperationList {
+  items: MaintenanceOperationRead[];
+  total: number;
+}
+
+export interface MaintenanceArtifactIn {
+  kind: "script" | "binary" | "service";
+  path?: string | null;
+  sha256?: string | null;
+  signer?: string | null;
+  reference_source?: "manual" | "server_distribution";
+  service_name?: string | null;
+  service_display_name?: string | null;
+  image_path?: string | null;
+  service_account?: string | null;
+}
+
+export interface MaintenanceOperationCreate {
+  asset_id: string;
+  kind: MaintenanceKind;
+  title: string;
+  reason: string;
+  window_start: IsoDateTime;
+  window_end: IsoDateTime;
+  expires_at: IsoDateTime;
+  accounts?: string[];
+  interpreters?: string[];
+  parents?: string[];
+  signer?: string | null;
+  artifacts: MaintenanceArtifactIn[];
+  supersedes?: string | null;
+}
+
+/** Script que distribuye este servidor, con su SHA-256 calculado en el servidor. */
+export interface ReferenceArtifact {
+  name: string;
+  relative_path: string;
+  sha256: string;
+  size: number;
+}
+
+export interface ReferenceArtifactList {
+  root_available: boolean;
+  items: ReferenceArtifact[];
+}
+
+export interface AttributionPreviewItem {
+  detection_id: string;
+  rule_id: string;
+  title: string;
+  status: string;
+  current_verdict: AttributionVerdict | null;
+  verdict: AttributionVerdict;
+  would_resolve: boolean;
+  attribution: Record<string, unknown>;
+}
+
+export interface AttributionPreview {
+  operation_id: string;
+  items: AttributionPreviewItem[];
+  verified: number;
+  not_verified: number;
+}
+
+export interface AttributionApplyResult {
+  operation_id: string;
+  evaluated: number;
+  verified: number;
+  resolved: number;
+}
+
+export interface AttributionEventRead {
+  id: string;
+  verdict: AttributionVerdict;
+  previous_verdict: AttributionVerdict | null;
+  source: "system" | "analyst";
+  actor: string;
+  reason: string | null;
+  operation_id: string | null;
+  created_at: IsoDateTime;
+  evidence: Record<string, unknown> | null;
+}
+
+export interface DetectionAttributionRead {
+  detection_id: string;
+  rule_id: string;
+  /** false: la regla no evalúa atribución (no hay artefacto que comparar). */
+  attributable: boolean;
+  verdict: AttributionVerdict | null;
+  /** Detalle del cálculo: comprobaciones, operación coincidente y evidencia que falta. */
+  attribution: Record<string, unknown> | null;
+  evaluated_at: IsoDateTime | null;
+  history: AttributionEventRead[];
+}
+
+export type AnalystVerdict = Exclude<AttributionVerdict, "verified_benign">;
+
+export type IdentityState = "confirmed" | "probable" | "identity_unresolved";
+export type IdentityStrength = "strong" | "medium" | "weak";
+export type IdentityLinkKind = "asset_alias" | "wlan_client";
+export type IdentityEvidenceCode =
+  | "same_machine_id"
+  | "same_agent_lineage"
+  | "manual_link"
+  | "agent_reported_mac"
+  | "same_universal_mac"
+  | "mac_in_history"
+  | "same_device_name"
+  | "same_ip"
+  | "same_vendor"
+  | "same_os";
+
+export interface MacProfile {
+  mac: string | null;
+  kind: "universal" | "local" | "multicast" | "virtual" | "none";
+  randomized: boolean;
+  /** IEEE 802c: eli/sai/aai/reserved; null si la MAC es universal o no hay MAC. */
+  slap_quadrant: "eli" | "sai" | "aai" | "reserved" | null;
+  nic_vendor: string | null;
+}
+
+export interface IdentitySource {
+  source: string;
+  value: string | null;
+  seen_at: IsoDateTime | null;
+  freshness: "fresh" | "stale" | "unknown";
+}
+
+/** Un nivel de identidad (nombre, fabricante, tipo o SO) con su procedencia. */
+export interface IdentityTier {
+  value: string | null;
+  source: string | null;
+  state: "confirmed" | "probable" | "unresolved";
+  reasons: string[];
+  alternatives: IdentitySource[];
+}
+
+export interface AddressChange {
+  field: "ip" | "mac";
+  old_value: string | null;
+  new_value: string | null;
+  source: string;
+  observed_at: IsoDateTime;
+}
+
+export interface IdentityLinkRead {
+  link_id: string;
+  kind: IdentityLinkKind;
+  target_asset_id: string;
+  target_name: string;
+  alias_asset_id: string | null;
+  alias_name: string | null;
+  wlan_client_id: string | null;
+  mac: string | null;
+  reason: string;
+  evidence: Record<string, unknown>;
+  active: boolean;
+  created_by: string;
+  created_at: IsoDateTime;
+  revoked_by: string | null;
+  revoked_at: IsoDateTime | null;
+  revoke_reason: string | null;
+}
+
+export interface IdentityLinkList {
+  items: IdentityLinkRead[];
+}
+
+export interface AssetIdentityProfile {
+  asset_id: string;
+  display_name: string;
+  custom_label: string | null;
+  managed: boolean;
+  archived: boolean;
+  state: IdentityState;
+  reasons: string[];
+  mac: MacProfile;
+  name: IdentityTier;
+  vendor: IdentityTier;
+  device_type: IdentityTier;
+  os: IdentityTier;
+  /** Fase 7B-Fix1: modelo, nombre que fijó un admin (manda) y lo que falta. */
+  model: IdentityTier;
+  assigned_name: IdentityTier;
+  missing: IdentityGap[];
+  sources: IdentitySource[];
+  addresses: AddressChange[];
+  links: IdentityLinkRead[];
+}
+
+export type IdentityGapField = "name" | "vendor" | "model" | "device_type" | "os" | "stable_identity";
+
+export interface IdentityGap {
+  field: IdentityGapField;
+  code: string;
+  detail: string;
+}
+
+export interface IdentityAssetRef {
+  asset_id: string;
+  display_name: string;
+  primary_ip: string;
+  mac_address: string | null;
+  managed: boolean;
+  archived: boolean;
+  last_seen_at: IsoDateTime | null;
+}
+
+export interface CandidateEvidence {
+  code: IdentityEvidenceCode;
+  strength: IdentityStrength;
+  detail?: string | null;
+}
+
+export interface IdentityCandidate {
+  asset: IdentityAssetRef;
+  strength: IdentityStrength;
+  evidence: CandidateEvidence[];
+}
+
+export interface IdentityCandidateList {
+  items: IdentityCandidate[];
+}
+
+export interface IdentityComparison {
+  left: IdentityAssetRef;
+  right: IdentityAssetRef;
+  classification:
+    | "same_agent_reinstalled"
+    | "historical_asset"
+    | "ip_reuse"
+    | "reconcilable_identity"
+    | "distinct_records";
+  recommended_action: "reconcile" | "link_alias" | "none";
+  evidence: CandidateEvidence[];
+  conflicts: string[];
+  explanation: string;
+  reconcile_blockers: string[];
+}
+
+export interface IdentityLinkRequest {
+  kind: IdentityLinkKind;
+  target_asset_id: string;
+  alias_asset_id?: string | null;
+  wlan_client_id?: string | null;
+  /** Opcional en la vista previa; obligatorio (3-500) al crear. */
+  reason?: string;
+}
+
+export interface IdentityLinkPreview {
+  kind: IdentityLinkKind;
+  target: IdentityAssetRef;
+  alias: IdentityAssetRef | null;
+  wlan_client_id: string | null;
+  mac: string | null;
+  allowed: boolean;
+  blockers: string[];
+  evidence: CandidateEvidence[];
+  effects: string[];
+}
+
+export type SearchKind = "ip" | "mac" | "sha256" | "rule" | "case" | "text";
+
+export interface SearchAsset {
+  asset_id: string;
+  display_name: string;
+  primary_ip: string;
+  mac_address: string | null;
+  archived: boolean;
+}
+
+export interface SearchDetection {
+  detection_id: string;
+  rule_id: string;
+  title: string;
+  status: string;
+  severity: string;
+  asset_id: string;
+  asset_name: string;
+  last_seen_at: IsoDateTime;
+}
+
+export interface SearchIncident {
+  incident_id: string;
+  number: number;
+  title: string;
+  status: string;
+  severity: string;
+}
+
+export interface SearchOperation {
+  operation_id: string;
+  title: string;
+  status: string;
+  asset_id: string;
+  asset_name: string;
+  artifact_path: string | null;
+}
+
+/** Usuario de Sentra (solo para quien puede asignar casos: incidents:manage). */
+export interface SearchUser {
+  user_id: string;
+  username: string;
+  role: Role;
+  active: boolean;
+  /** Casos activos de los que es responsable. */
+  open_cases: number;
+}
+
+export interface SearchResult {
+  query: string;
+  /** Cómo interpretó el servidor el texto (la UI lo muestra). */
+  kind: SearchKind;
+  assets: SearchAsset[];
+  detections: SearchDetection[];
+  incidents: SearchIncident[];
+  operations: SearchOperation[];
+  users: SearchUser[];
+  /** false cuando el rol no puede ver usuarios: `users` vacío no significa "sin coincidencias". */
+  users_visible: boolean;
+}
+
+// Analyst Tool Engine (Fase 7A): la consola 7B.4 solo lo consume.
+
+export interface ToolOut {
+  id: string;
+  version: number;
+  name: string;
+  description: string;
+  /** read | investigation | action */
+  category: string;
+  scope: string;
+  risk_level: string;
+  /** auto | preview_confirm | ... */
+  policy: string;
+  required_permissions: string[];
+  required_role: string;
+  timeout_seconds: number;
+  max_rows: number;
+  required_capabilities: string[];
+  sources: string[];
+  availability: "available" | "unavailable";
+  unavailable_reason: string | null;
+  permitted: boolean;
+  /** JSON Schema de la entrada (modelo cerrado del servidor). */
+  input_schema: Record<string, unknown>;
+  output_schema: Record<string, unknown>;
+}
+
+export interface ToolCatalog {
+  items: ToolOut[];
+  enabled: boolean;
+}
+
+export interface DelegatedExecution {
+  execution_id: string;
+  action_id: string;
+  status: string;
+}
+
+export interface ToolExecutionOut {
+  execution_id: string;
+  correlation_id: string;
+  tool_id: string;
+  tool_version: number;
+  tool_name: string;
+  category: string;
+  risk_level: string;
+  status: string;
+  invoker: string;
+  actor: string;
+  input: Record<string, unknown>;
+  input_sha256: string;
+  output: Record<string, unknown> | null;
+  output_sha256: string | null;
+  output_bytes: number | null;
+  truncated: boolean;
+  summary: string | null;
+  evidence: Record<string, unknown>[];
+  provenance: Record<string, unknown> | null;
+  error_code: string | null;
+  error_message: string | null;
+  target_type: string | null;
+  target_id: string | null;
+  target_label: string | null;
+  site_id: string | null;
+  asset_id: string | null;
+  incident_id: string | null;
+  response_execution: DelegatedExecution | null;
+  approved_by: string | null;
+  approved_at: IsoDateTime | null;
+  approval_note: string | null;
+  cancelled_by: string | null;
+  created_at: IsoDateTime;
+  started_at: IsoDateTime | null;
+  finished_at: IsoDateTime | null;
+  deadline_at: IsoDateTime | null;
+  duration_ms: number | null;
+  version: number;
+  deduplicated?: boolean;
+}
+
+export interface ToolExecutionList {
+  items: ToolExecutionOut[];
+  total: number;
+}
+
+// --- Fase 7B-Fix1: revisión de correlaciones CORR-002 anteriores a la v5 -----------------------
+
+export type ReviewVerdict = "causal" | "temporal_only" | "insufficient_evidence";
+
+export interface CorrelationReviewItem {
+  detection_id: string;
+  asset_id: string;
+  hostname: string | null;
+  rule_version: number;
+  status: string;
+  title: string;
+  verdict: ReviewVerdict;
+  would_resolve: boolean;
+  causal_links: Record<string, unknown>[];
+  temporal_context: Record<string, unknown>;
+  explanation: string[];
+}
+
+export interface CorrelationReviewPreview {
+  items: CorrelationReviewItem[];
+  causal: number;
+  temporal_only: number;
+  insufficient_evidence: number;
+}
+
+export interface CorrelationReviewApplyResult {
+  reviewed: number;
+  resolved: number;
+  kept: number;
 }

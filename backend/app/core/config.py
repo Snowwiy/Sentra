@@ -579,6 +579,13 @@ class Settings(BaseSettings):
     asset_cleanup_batch_size: int = Field(default=50, ge=1, le=500)
     asset_cleanup_interval_minutes: int = Field(default=360, ge=5, le=10_080)
 
+    # --- Autorización de mantenimiento (Fase 7B.1, docs/detection-attribution.md) -------------
+    # Encendido (por defecto): una operación aprobada por un admin reconoce sola las
+    # detecciones NUEVAS cuya evidencia, toda posterior a la aprobación, casa exactamente con
+    # ella. Las históricas solo cambian con vista previa y aplicar. Apagado, nada se reconoce
+    # solo: toda reclasificación pasa por esa revisión explícita.
+    maintenance_auto_recognition: bool = True
+
     # --- Response Engine y Playbooks (Fase 5D, docs/response-engine.md) ---------------------
     # Solo acciones del catálogo (allowlist en código), siempre manuales: no existe ejecución
     # automática por detecciones. Apagado, la API responde 409 response_disabled y los agentes

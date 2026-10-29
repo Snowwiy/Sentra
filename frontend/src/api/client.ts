@@ -184,6 +184,25 @@ const PHASE_6E_MESSAGES: Record<string, string> = {
   isolation_state_conflict: "El estado del aislamiento ha cambiado. Se han recargado los datos: revisa y vuelve a intentarlo.",
 };
 
+// Fase 7B: atribución, identidad de dispositivos y Analyst Console (motor de herramientas 7A).
+// identity_link_refused llega con el motivo concreto en la vista previa (blockers): la UI lo
+// muestra allí; este texto es el genérico para quien no pasó por la vista previa.
+const PHASE_7B_MESSAGES: Record<string, string> = {
+  identity_link_invalid: "La asociación no es válida: revisa el tipo, el destino y el motivo.",
+  identity_link_refused: "La asociación no está permitida para estos registros. Revisa la vista previa.",
+  identity_link_not_found: "La asociación no existe o ya no está disponible.",
+  wlan_client_not_found: "El cliente Wi-Fi no existe o ya no está disponible.",
+  maintenance_operation_state: "La operación de mantenimiento cambió de estado. Se han recargado los datos.",
+  tools_disabled: "Las herramientas de analista están desactivadas en este servidor.",
+  tool_unavailable: "La herramienta no está disponible ahora mismo.",
+  tool_invalid_input: "La entrada de la herramienta no es válida.",
+  tool_invalid_state: "La ejecución cambió de estado. Se han recargado los datos.",
+  tool_concurrency_limit: "Hay demasiadas herramientas en ejecución. Espera un momento y vuelve a intentarlo.",
+  tool_preview_required: "Esta herramienta modifica datos: genera primero una vista previa.",
+  tool_preview_not_applicable: "Esta herramienta se ejecuta directamente, sin vista previa.",
+  confirmation_required: "Falta la confirmación explícita.",
+};
+
 // Errores del gestor de modelos locales cuyo detalle (en inglés) dice qué corregir: se
 // conserva tras un prefijo en español, porque sin él el administrador no sabría qué falla.
 const AI_DETAIL_PREFIXES: Record<string, string> = {
@@ -219,6 +238,9 @@ function translate(code: string, message: string): string {
   if (NETWORK_MESSAGES[code]) return NETWORK_MESSAGES[code];
   if (TOPOLOGY_MESSAGES[code]) return TOPOLOGY_MESSAGES[code];
   if (PHASE_6E_MESSAGES[code]) return PHASE_6E_MESSAGES[code];
+  if (PHASE_7B_MESSAGES[code]) return PHASE_7B_MESSAGES[code];
+  // Fase 7B.1: el detalle (inglés) dice qué falla (ventana, hash, cuentas, ImagePath...).
+  if (code === "maintenance_operation_invalid") return `Operación de mantenimiento no válida: ${message}`;
   // Dirección fuera de las redes del site: el detalle (inglés) dice qué dirección y por qué.
   if (code === "network_address_out_of_scope") return `Dirección fuera de las redes autorizadas del site: ${message}`;
   // CIDR rechazado: el detalle (inglés) dice el motivo (host bits, /0, multicast, tamaño...).

@@ -29,6 +29,7 @@ from app.core.exceptions import (
     SiteConflictError,
     WlanAccessPointNotFoundError,
     WlanBssNotFoundError,
+    WlanClientNotFoundError,
 )
 from app.models.asset import Asset
 from app.models.network import NetworkDevice, NetworkDevicePoll
@@ -700,6 +701,60 @@ class WlanService:
 
     # --- clientes --------------------------------------------------------------------------
 
+    def _client_reads(self, rows: Sequence[WlanClient], w: _Windows) -> list[WlanClientRead]:
+        sites = site_refs(self._session)
+        refs = self._refs(
+            devices={r.source_device_id for r in rows if r.source_device_id},
+            assets={r.asset_id for r in rows if r.asset_id},
+            aps={r.access_point_id for r in rows if r.access_point_id},
+        )
+        items = []
+        for client in rows:
+            site = sites[client.site_id]
+            cutoff = w.agent_cutoff if client.source == wc.SOURCE_AGENT else w.snmp_cutoff
+            items.append(
+                WlanClientRead(
+                    client_id=client.public_id,
+                    site_id=site.public_id,
+                    site_name=site.name,
+                    mac=client.mac,
+                    mac_randomized=client.mac_randomized,
+                    bssid=client.bssid,
+                    ssid=client.ssid,
+                    access_point=refs["aps"].get(client.access_point_id or 0),
+                    radio_slot=client.radio_slot,
+                    band=client.band,
+                    standard=client.standard,
+                    state=client.state,
+                    source=client.source,
+                    identity_confidence=client.identity_confidence,
+                    asset=refs["assets"].get(client.asset_id or 0),
+                    correlation_basis=client.correlation_basis,
+                    reported_by=refs["devices"].get(client.source_device_id or 0),
+                    present=client.present,
+                    freshness="recent" if client.last_seen_at >= cutoff else "historical",
+                    first_seen_at=client.first_seen_at,
+                    last_seen_at=client.last_seen_at,
+                )
+            )
+        return items
+
+    def _require_client(self, public_id: UUID) -> WlanClient:
+        client = self._session.scalar(select(WlanClient).where(WlanClient.public_id == public_id))
+        if client is None:
+            raise WlanClientNotFoundError("Wireless client not found")
+        return client
+
+    def get_client(self, public_id: UUID) -> WlanClientRead:
+        """Ficha de un cliente (Fase 7B.2): base de la asociación manual desde la UI."""
+        client = self._require_client(public_id)
+        (read,) = self._client_reads([client], self._windows(datetime.now(UTC)))
+        return read
+
+    def client_observations(self, public_id: UUID, limit: int, offset: int) -> WlanObservationList:
+        client = self._require_client(public_id)
+        return self._observations(WlanObservation.client_id == client.id, limit, offset)
+
     def list_clients(
         self,
         *,
@@ -740,41 +795,7 @@ class WlanService:
         rows = session.scalars(
             stmt.order_by(WlanClient.last_seen_at.desc(), WlanClient.id).limit(limit).offset(offset)
         ).all()
-        sites = site_refs(session)
-        refs = self._refs(
-            devices={r.source_device_id for r in rows if r.source_device_id},
-            assets={r.asset_id for r in rows if r.asset_id},
-            aps={r.access_point_id for r in rows if r.access_point_id},
-        )
-        items = []
-        for client in rows:
-            site = sites[client.site_id]
-            cutoff = w.agent_cutoff if client.source == wc.SOURCE_AGENT else w.snmp_cutoff
-            items.append(
-                WlanClientRead(
-                    client_id=client.public_id,
-                    site_id=site.public_id,
-                    site_name=site.name,
-                    mac=client.mac,
-                    mac_randomized=client.mac_randomized,
-                    bssid=client.bssid,
-                    ssid=client.ssid,
-                    access_point=refs["aps"].get(client.access_point_id or 0),
-                    radio_slot=client.radio_slot,
-                    band=client.band,
-                    standard=client.standard,
-                    state=client.state,
-                    source=client.source,
-                    identity_confidence=client.identity_confidence,
-                    asset=refs["assets"].get(client.asset_id or 0),
-                    correlation_basis=client.correlation_basis,
-                    reported_by=refs["devices"].get(client.source_device_id or 0),
-                    present=client.present,
-                    freshness="recent" if client.last_seen_at >= cutoff else "historical",
-                    first_seen_at=client.first_seen_at,
-                    last_seen_at=client.last_seen_at,
-                )
-            )
+        items = self._client_reads(rows, w)
         return WlanClientList(items=items, total=total, limit=limit, offset=offset)
 
     # --- vista general ---------------------------------------------------------------------

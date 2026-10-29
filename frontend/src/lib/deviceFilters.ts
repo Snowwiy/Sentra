@@ -26,7 +26,8 @@ export type DeviceSortKey =
   | "first"
   | "network"
   | "last"
-  | "ports";
+  | "ports"
+  | "risk";
 
 /** Columna de la tabla -> orden de GET /assets. */
 export const DEVICE_SORT_KEYS: Record<DeviceSortKey, AssetSortKey> = {
@@ -40,6 +41,7 @@ export const DEVICE_SORT_KEYS: Record<DeviceSortKey, AssetSortKey> = {
   network: "network_seen",
   last: "last_seen",
   ports: "ports",
+  risk: "risk",
 };
 
 export type InternetFilter = "true" | "false" | "unknown";

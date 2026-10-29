@@ -3,6 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import (
     BigInteger,
+    CheckConstraint,
     DateTime,
     Enum,
     ForeignKey,
@@ -36,6 +37,10 @@ class AssetPort(Base):
         # Fase 5B: vista consolidada de exposición (puertos abiertos de todos los activos,
         # los más recientes primero) paginada sin recorrer la tabla.
         Index("ix_asset_ports_state_last_seen", "state", "last_seen_at"),
+        CheckConstraint(
+            "observed_from IS NULL OR observed_from IN ('self', 'remote')",
+            name="ck_asset_ports_observed_from",
+        ),
     )
 
     id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
@@ -59,3 +64,7 @@ class AssetPort(Base):
     # Consecutive complete scans that found it not open while the host was up. A port is
     # only considered closed after 2, so one lost packet does not raise "port closed".
     misses: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # Fase 7B-Fix1: desde dónde se comprobó por última vez que estaba abierto. "self" = el
+    # escáner corre en el propio equipo (no demuestra acceso desde la LAN); "remote" = desde
+    # otro equipo; None = sin dato (anterior a 0050).
+    observed_from: Mapped[str | None] = mapped_column(String(8))

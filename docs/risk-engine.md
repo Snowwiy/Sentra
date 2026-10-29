@@ -319,6 +319,18 @@ Los pesos (puntos, factores, saturación) son constantes de `app/risk/config.py`
 cambia lo que significa un score: hay que subir `FORMULA_VERSION`, que se guarda en cada
 cálculo y en cada snapshot.
 
+**Fórmula v6 (Fase 7B.1).** Claves causales (una operación cuenta una vez), detecciones
+verificadas como mantenimiento autorizado sin riesgo activo (salvo exposición) y componentes
+inherente/activo/residual: ver `docs/risk-attribution.md`.
+
+**Fórmula v7 (Fase 7B-Fix1).** Las repeticiones de SCR-001 forman una familia con un factor de
+repetición acotado (como las ocurrencias), CORR-002 une todos los scripts de su cadena por
+`script_keys`, cada aportación lleva su clase (`direct`, `correlated`, `contextual`) y
+`breakdown.by_class` las suma, y un puerto visto abierto solo desde el propio equipo
+(`asset_ports.observed_from = 'self'`, migración 0050) aporta con
+`exposure_self_vantage_factor` (0,6) en vez de eliminarse. Sin repeticiones ni puertos `self`
+el resultado es el de v6. Ver `docs/fase-7b-fix1.md`.
+
 ## Trazabilidad del score (Fase 6D.8)
 
 Cada cálculo guarda `breakdown.trace` (base, factores de criticidad, tipo y contexto, puntos

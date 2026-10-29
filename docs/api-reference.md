@@ -3,7 +3,7 @@
 Tabla que antes estaba en el README (movida en la Fase 7A sin cambios de contenido). La
 referencia completa y actualizada es el OpenAPI que publica el servidor en `/docs` (solo fuera
 de producción) y los documentos de cada módulo en `docs/`. Endpoints añadidos en 7A:
-[compatibility-matrix.md](compatibility-matrix.md).
+[compatibility-matrix.md](compatibility-matrix.md). Endpoints añadidos en 7B: tabla al final.
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -78,3 +78,44 @@ administrativa: [docs/discovery.md](discovery.md).
 
 Payloads and error format: [docs/agent-protocol.md](agent-protocol.md). Interactive docs at
 `/docs` in development.
+
+## Fase 7B (server 0.5.0)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/maintenance-operations?asset_id=&status=&limit=&offset=` | Operaciones de mantenimiento autorizadas (`monitoring:read`) ([detection-attribution.md](detection-attribution.md)) |
+| GET | `/api/v1/maintenance-operations/reference-artifacts` | SHA-256 de los scripts que distribuye este servidor (`maintenance:manage`) |
+| GET | `/api/v1/maintenance-operations/{id}` | Detalle de una operación |
+| POST | `/api/v1/maintenance-operations` | Registrar una operación (nace `pending_review`; `maintenance:manage`, solo admin) |
+| POST | `/api/v1/maintenance-operations/{id}/approve` `{note}`, `/revoke` `{reason}` | Aprobar o revocar (admin) |
+| POST | `/api/v1/maintenance-operations/{id}/preview`, `/apply` `{confirm: true}` | Recálculo controlado de las detecciones existentes de su ventana (admin) |
+| GET | `/api/v1/detections/{id}/attribution` | Veredicto de atribución, comprobaciones e historial |
+| POST | `/api/v1/detections/{id}/attribution/evaluate` | Reevaluar (`detections:manage`) |
+| POST | `/api/v1/detections/{id}/attribution/verdict` `{verdict, reason}` | Veredicto del analista; nunca `verified_benign` (`detections:manage`) |
+| GET | `/api/v1/assets/{id}/identity/profile` | Identidad por niveles con procedencia ([device-identity-wifi.md](device-identity-wifi.md)) |
+| GET | `/api/v1/assets/{id}/identity/candidates` | Posibles coincidencias con evidencia (sin fusión automática) |
+| GET | `/api/v1/identity/compare?left=&right=` | Clasifica dos registros (reinstalación, histórico, reutilización de IP...) |
+| GET | `/api/v1/identity/links?asset_id=&wlan_client_id=&active=` | Asociaciones manuales |
+| POST | `/api/v1/identity/links/preview`, `/api/v1/identity/links` `{..., reason, confirm: true}` | Vista previa y asociación manual (`identity:manage`, solo admin) |
+| POST | `/api/v1/identity/links/{id}/revoke` `{reason}` | Deshacer una asociación (admin) |
+| GET | `/api/v1/network/wlan/clients/{id}`, `/observations` | Ficha e historial de un cliente Wi-Fi |
+| GET | `/api/v1/search?q=&site_id=` | Búsqueda de la Analyst Console ([analyst-console.md](analyst-console.md)) |
+
+Cambios aditivos: `GET /assets` acepta `sort=risk` y devuelve `identity_state` y
+`mac_randomized`; las detecciones devuelven `attribution_verdict`; el riesgo devuelve
+`breakdown.components` y `breakdown.reductions` (fórmula v6, [risk-attribution.md](risk-attribution.md)).
+
+### Fase 7B-Fix1
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/v1/detections/correlation-review/preview` `{asset_id?}` | Reevalúa las CORR-002 abiertas anteriores a la v5 con la evidencia guardada: `causal`, `temporal_only` o `insufficient_evidence` (`detections:manage`) ([fase-7b-fix1.md](fase-7b-fix1.md)) |
+| POST | `/api/v1/detections/correlation-review/apply` `{detection_ids, note?, confirm: true}` | Anota la revisión y resuelve solo las `temporal_only` sin actuación del analista; pide el recálculo del riesgo y audita `correlation_review_applied` (`detections:manage`) |
+
+Cambios aditivos: el perfil de identidad devuelve `model`, `assigned_name` y `missing`
+(`[{field, code, detail}]`); `GET /topology/graph` devuelve `coverage` (nodos sin enlace,
+enlaces por tipo, limitaciones); los candidatos y pares de duplicados devuelven `hypothesis`;
+el riesgo devuelve `breakdown.by_class` y, por aportación, `risk_class`, `absorbed_reason` y,
+en exposición, `reachability`, `listen_scope` y `missing` (fórmula v7); los cambios de
+servicio pueden ser `image_changed`; las detecciones PER-001 y CORR-002 incluyen
+`classification` y `causal_links`.
