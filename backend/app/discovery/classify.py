@@ -200,9 +200,69 @@ _NAME_HINTS: tuple[tuple[re.Pattern[str], _Hint], ...] = (
     (_rx(r"\biphone\b|^iphone"), _Hint(T.MOBILE, 3, "Apple", "iOS")),
     (_rx(r"\bipad\b|^ipad"), _Hint(T.TABLET, 3, "Apple", "iPadOS")),
     (_rx(r"^galaxy[-_ ]?tab|^sm-[tx]\d{3}"), _Hint(T.TABLET, 2, "Samsung", "Android")),
-    (_rx(r"^galaxy"), _Hint(T.MOBILE, 2, "Samsung", "Android")),
+    # Fase 7C.6: "galaxy" sin más es un móvil, pero no un Galaxy Tab, Book, Watch o Buds.
+    (_rx(r"^galaxy(?![-_ ]?(tab|book|watch|buds))"), _Hint(T.MOBILE, 2, "Samsung", "Android")),
+    (_rx(r"^galaxy[-_ ]?book"), _Hint(T.LAPTOP, 2, "Samsung")),
     (_rx(r"^sm-[afgmns]\d{3}"), _Hint(T.MOBILE, 2, "Samsung", "Android", True)),
-    (_rx(r"^(redmi|poco|xiaomi|mi-?\d)"), _Hint(T.MOBILE, 2, "Xiaomi", "Android")),
+    (
+        _rx(r"^(redmi|poco|xiaomi|mi-?\d)(?![-_ ]?(tv|box|pad))"),
+        _Hint(T.MOBILE, 2, "Xiaomi", "Android"),
+    ),
+    # --- Fase 7C.6: más marcas de consumo sin SNMP (nombres que publican por DHCP/mDNS) ---
+    # Tabletas: MatePad/MediaPad (Huawei), Lenovo Tab (TB-X606F, TB-J606L), Kindle/Fire
+    # (Amazon) y Xiaomi/Redmi Pad.
+    (_rx(r"^(huawei[-_ ]?)?(matepad|mediapad)"), _Hint(T.TABLET, 3, "Huawei")),
+    (_rx(r"^(lenovo[-_ ]?tab|tb-?[jx]\d{3}[a-z]?)"), _Hint(T.TABLET, 2, "Lenovo", "Android")),
+    (_rx(r"^(kindle|fire[-_ ]?(hd|tablet|\d))"), _Hint(T.TABLET, 2, "Amazon")),
+    (_rx(r"^(xiaomi|redmi|mi)[-_ ]?pad"), _Hint(T.TABLET, 2, "Xiaomi", "Android")),
+    # Móviles: Huawei nova/Mate, Motorola (moto-g54), OPPO (CPH2xxx), realme (RMX3xxx), vivo.
+    (_rx(r"^(huawei[-_ ]?)?(nova|mate)[-_ ]?\d{1,2}"), _Hint(T.MOBILE, 2, "Huawei")),
+    (_rx(r"^(huawei[-_ ]?)?matebook"), _Hint(T.LAPTOP, 3, "Huawei", "Windows")),
+    (
+        _rx(r"^(moto[-_ ]?[egxz]\d{0,3}([-_ ]|$)|motorola)"),
+        _Hint(T.MOBILE, 2, "Motorola", "Android"),
+    ),
+    (_rx(r"^(oppo[-_ ]|cph\d{4}$)"), _Hint(T.MOBILE, 2, "OPPO", "Android")),
+    (_rx(r"^(realme[-_ ]|rmx\d{4}$)"), _Hint(T.MOBILE, 2, "realme", "Android")),
+    (_rx(r"^vivo[-_ ]"), _Hint(T.MOBILE, 2, "vivo", "Android")),
+    # Televisores y reproductores: Hisense (VIDAA), TCL, Philips, Xiaomi TV/Box, NVIDIA Shield,
+    # Apple TV y los códigos de modelo de los TV Samsung (QE55Q80A, UE43TU7105).
+    (_rx(r"^(hisense|vidaa)"), _Hint(T.SMART_TV, 2, "Hisense")),
+    (_rx(r"^tcl[-_ ]?(tv|smart|android)"), _Hint(T.SMART_TV, 2, "TCL")),
+    (_rx(r"^philips[-_ ]?(tv|android|ambilight)|^saphi"), _Hint(T.SMART_TV, 2, "Philips")),
+    (_rx(r"^(xiaomi|mi)[-_ ]?(tv|box)"), _Hint(T.SMART_TV, 2, "Xiaomi", "Android")),
+    (_rx(r"^android[-_ ]?tv"), _Hint(T.SMART_TV, 2, None, "Android")),
+    (
+        _rx(r"^(nvidia[-_ ]?shield|shield[-_ ]?(android[-_ ]?)?tv)"),
+        _Hint(T.SMART_TV, 2, "NVIDIA", "Android"),
+    ),
+    (_rx(r"^apple[-_ ]?tv"), _Hint(T.SMART_TV, 3, "Apple", "tvOS")),
+    (
+        _rx(r"^(qe|ue|qn|un)\d{2}[a-z]{1,3}\d{2,4}[a-z]?$"),
+        _Hint(T.SMART_TV, 2, "Samsung", None, True),
+    ),
+    # Docks: el adaptador de red del dock de una consola es la consola; el de un dock de
+    # portátil (Dell WD19/TB16, ThinkPad, Surface) solo sugiere, débil, que detrás hay un
+    # portátil, y nunca la marca del portátil.
+    (_rx(r"^(nintendo[-_ ]?)?switch[-_ ]?dock"), _Hint(T.CONSOLE, 2, "Nintendo")),
+    (
+        _rx(r"^(wd1\d|tb1\d|wd22tb4|thinkpad[-_ ]?dock|surface[-_ ]?dock|usb-?c[-_ ]?dock)"),
+        _Hint(T.LAPTOP, 1),
+    ),
+    # Cámaras de consumo y domótica.
+    (_rx(r"^tapo[-_ ]?c\d{3}"), _Hint(T.IP_CAMERA, 2, "TP-Link")),
+    (
+        _rx(r"^(ezviz|imou|wyze[-_ ]?cam|arlo|blink[-_ ]?(mini|outdoor|indoor))"),
+        _Hint(T.IP_CAMERA, 2),
+    ),
+    (
+        _rx(
+            r"^(sonoff|meross|tapo[-_ ]?[pl]\d{3}|kasa|hs1\d{2}|wiz[-_]|yeelight|broadlink"
+            r"|switchbot)"
+        ),
+        _Hint(T.IOT, 2),
+    ),
+    (_rx(r"^(roborock|roomba|irobot|dreame|ecovacs|deebot)"), _Hint(T.IOT, 2)),
     (_rx(r"^oneplus"), _Hint(T.MOBILE, 2, "OnePlus", "Android")),
     (_rx(r"^pixel[-_ ]?\d"), _Hint(T.MOBILE, 2, "Google", "Android")),
     (

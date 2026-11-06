@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-27 (Fase 7B-Fix1: CORR-002 v5 con relación causal demostrable, PER-001 v3 con instancias de servicio por usuario verificables, riesgo v7, identidad y topología con lo que falta explícito, hipótesis de duplicados, consola con contexto; migración 0050, agente 0.6.2). Anterior: 2026-10-26 (Fase 7B: atribución verificable de detecciones con operaciones de mantenimiento autorizadas, riesgo v6 sin doble conteo causal, identidad de dispositivos por niveles con MAC privadas y asociación manual auditada, tabla SOC de dispositivos con panel lateral, Analyst Console sobre el motor 7A; servidor y frontend 0.5.0, agente 0.6.1, sensor 0.7.0). Anterior: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
+Last updated: 2026-10-30 (7C-Fix2: `AI_REASONING_EFFORT` opcional para modelos "thinking" en llama.cpp, motivo concreto de `ai_invalid_response` sin contenido, sin reintento de respuestas cortadas; revisión de CORR-002/PER-001 sin cambios de reglas y hueco del 7045 documentado; servidor y frontend 0.6.2, sin migraciones). Anterior: 2026-10-29 (7C-Security-Fix1: asistente de la consola solo con modelo en loopback, apagado por defecto, revisión del documento con huella antes de enviar, sin secretos, tools:execute y auditoría; servidor y frontend 0.6.1, sin migraciones). Anterior: 2026-10-29 (Fase 7C: modelo open-weight opcional con asistente de la Analyst Console, selectores contextuales sin ids tecleados, rediseño de consola y panel, informes v3 con gráficas circulares e identidad sin SNMP; servidor y frontend 0.6.0, agente 0.6.2 y sensor 0.7.0 sin cambios, sin migraciones). Anterior: 2026-10-27 (Fase 7B-Fix1: CORR-002 v5 con relación causal demostrable, PER-001 v3 con instancias de servicio por usuario verificables, riesgo v7, identidad y topología con lo que falta explícito, hipótesis de duplicados, consola con contexto; migración 0050, agente 0.6.2). Anterior: 2026-10-26 (Fase 7B: atribución verificable de detecciones con operaciones de mantenimiento autorizadas, riesgo v6 sin doble conteo causal, identidad de dispositivos por niveles con MAC privadas y asociación manual auditada, tabla SOC de dispositivos con panel lateral, Analyst Console sobre el motor 7A; servidor y frontend 0.5.0, agente 0.6.1, sensor 0.7.0). Anterior: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
 
 ## Current state
 
@@ -196,6 +196,11 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Known issues and limitations
 
+- Fase 7C: el asistente solo se ha probado con un servidor OpenAI-compatible simulado
+  (`qa/console_assist_fake_llm.py`); la calidad con modelos pequeños es limitada y Sentra
+  descarta más respuestas por formato o grounding. Sin streaming. Los selectores no usan
+  índices de texto completo (tope de 20 resultados). Las señales de identidad nuevas no
+  fusionan nada y la rotación de MAC privada es solo un apoyo débil.
 - Fase 6E (detalle en docs/fase-6e-known-issues.md): forense y aislamiento solo probados con
   agentes y helpers simulados; el aislamiento está desactivado por defecto en servidor y
   helper, sin macOS, con helper privilegiado separado (decidido el 2026-10-22); la
@@ -438,6 +443,43 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Recommended next phase
 
+7C-Fix2 implementado sobre 7C + 7C-Security-Fix1 (servidor y frontend 0.6.2, sin migraciones:
+siguiente libre 0051). `AI_REASONING_EFFORT` (vacío = no se envía), motivos de
+`ai_invalid_response` en respuesta, auditoría y log, sin reintentar respuestas cortadas
+(docs/fase-7c-fix2.md). Pendiente: probar con el llama.cpp real de Jesus y comprobar con
+`qa/diagnose_service_detections.sql` si las PER-001 de instancias por usuario vienen del 7045
+(hueco documentado, sin corregir).
+
+7C-Security-Fix1 implementado sobre el árbol 7C (servidor y frontend 0.6.1, sin migraciones:
+siguiente libre 0051). Política de privacidad estricta del asistente de la consola decidida
+por Jesus el 2026-10-29: solo loopback, `AI_CONSOLE_ASSIST_ENABLED=false` por defecto,
+`POST /ai/console/context` + huella obligatoria en `POST /ai/console/assist`, secretos fuera
+y nada marcado por defecto, `tools:execute`, auditoría `ai_console_*`
+(docs/fase-7c-security-fix1.md).
+
+Fase 7C implementada sobre Dev `8319d57` (servidor y frontend 0.6.0, agente y sensor sin
+cambios, sin migraciones: la siguiente libre sigue siendo 0051; sin dependencias nuevas;
+cuatro ajustes opcionales de IA fijados en conftest). Resumen en docs/fase-7c.md:
+
+- 7C.1 compatibilidad con modelos open-weight: razonamiento `<think>` descartado, JSON con
+  prosa o en bloque, `AI_SYSTEM_PROMPT_MODE=user_prefix`, `AI_MAX_PROMPT_CHARS`, origen del
+  modelo en `/ai/status`; sin Internet ni fallback (docs/open-weight-model.md).
+- 7C.2 asistente de la consola (`POST /ai/console/assist`): resumen, riesgo, hipótesis y
+  borrador sobre resultados de herramientas que el usuario ya ve, con grounding y separación
+  visible entre sugerencia del modelo y datos de Sentra; nunca ejecuta nada.
+- 7C.3 selectores contextuales (`GET /lookup/{kind}`, `EntityPicker`) en consola, informes,
+  tareas de caso, excepciones y reconciliación; ambigüedad siempre como opciones
+  (docs/contextual-selectors.md).
+- 7C.4 consola en tres columnas y panel con indicadores, actividad de 24 h y activo de mayor
+  riesgo con sus factores, sobre datos reales.
+- 7C.5 informes plantilla v3 con panel de gráficas circulares (PDF y HTML); v1/v2 iguales byte
+  a byte (docs/reporting.md).
+- 7C.6 nombres de producto nuevos (Huawei, Samsung, tabletas, TV, bases, IoT) y señales
+  `same_dhcp_client_id` y `private_mac_rotation`, sin fusión automática.
+
+Validar en el PC: suites en Windows, asistente con un modelo real (llama.cpp u Ollama),
+revisión visual de consola, panel e informes, identidad con dispositivos reales de la LAN.
+
 Fase 7B-Fix1 implementada sobre la 7B final (servidor y frontend 0.5.0, agente 0.6.2, sensor
 sin cambios, migración 0050, sin dependencias ni ajustes nuevos): servicios por usuario
 clasificados con evidencia verificable, CORR-002 v5 causal y revisión explícita de las v4,
@@ -545,7 +587,7 @@ Informes por site (pasos completos en el HANDOFF de la fase).
 
 Siguientes fases: 6A Advanced Network Discovery, 6B SNMP/LLDP/CDP, 6C Wi-Fi, 6D Topología,
 6E detección de cambios e historial de topología. Después: 7A Analyst Tool Engine, 7B Analyst
-Console, 7C capa de modelo open-weight autoalojado.
+Console, 7C capa de modelo open-weight autoalojado (implementada el 2026-10-29).
 
 Fase 5E (Reporting y evidencias) completada. Comprobaciones en Windows si siguen pendientes: fijar
 `REPORT_OUTPUT_DIR` fuera del repo (por ejemplo `D:\SentraData\reports`), generar cada tipo

@@ -80,11 +80,12 @@ class ReportDefinition:
 
 
 # Versión de plantilla de los informes NUEVOS (Fase 6D.5: v2 con portada, gráficas
-# extendidas y PDF con transliteración). La versión se guarda en `reports.template_version` y
+# extendidas y PDF con transliteración; Fase 7C.5: v3 añade el panel visual de anillos al
+# resumen ejecutivo). La versión se guarda en `reports.template_version` y
 # en `snapshot.meta.template_version`; el render elige la plantilla por la del snapshot, así un
 # informe v1 ya generado se vuelve a renderizar con v1 y conserva sus bytes.
-TEMPLATE_VERSION = 2
-SUPPORTED_TEMPLATE_VERSIONS: tuple[int, ...] = (1, 2)
+TEMPLATE_VERSION = 3
+SUPPORTED_TEMPLATE_VERSIONS: tuple[int, ...] = (1, 2, 3)
 
 _MONITORING = Permission.MONITORING_READ
 _ALL_DOMAINS = frozenset(

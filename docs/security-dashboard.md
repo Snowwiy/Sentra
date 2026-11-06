@@ -22,6 +22,8 @@ quien no tenga `incidents:read`.
 | `risk_history` | `risk_snapshots` (ledger del Risk Engine) | un punto por día UTC |
 | `new_devices` | `assets.first_seen_at` | últimos 7 días: total y los 8 más recientes |
 | `exposed_ports` | `asset_ports` en estado `open` | total, activos afectados y los 8 puertos con más activos |
+| `activity_24h` (7C.4) | `detections.first_seen_at` y `system_events.occurred_at` | 24 horas UTC terminadas en la hora actual, con ceros explícitos; `events` es `null` (no medido) si el alcance no tiene ningún activo con agente |
+| `top_risk` (7C.4) | `asset_risk` y su ledger de contribuciones | activo actual de mayor puntuación con los 6 factores de más peso (positivos o negativos) y el resto en `other_points`; `null` si nadie tiene riesgo calculado |
 
 Las gráficas de severidad, nivel de riesgo, tipo de activo y gestionados frente a
 descubiertos usan los contadores de `/dashboard/summary` (`detections.by_severity`,

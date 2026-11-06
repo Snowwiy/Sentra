@@ -21,7 +21,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from app.ai.context import AIContext
-from app.ai.provider import AIInvalidResponseError, AIUngroundedResponseError
+from app.ai.provider import AIInvalidResponseError, AIResponse, AIUngroundedResponseError
 from app.detection.text import clean
 
 Certainty = Literal["observed", "detected", "correlated", "possible", "requires_validation"]
@@ -78,23 +78,125 @@ class RawInsight(_Model):
         return [] if value is None else value
 
 
-def parse_json(content: str) -> RawInsight:
-    """JSON del modelo -> RawInsight, o AIInvalidResponseError (nunca se evalúa nada)."""
-    text = content.strip()
-    # Algunos modelos envuelven el JSON en un bloque ```json ... ``` pese a la instrucción.
-    fenced = re.match(r"^```(?:json)?\s*(.*?)\s*```$", text, re.DOTALL)
+# Fase 7C.1: bloques de razonamiento que emiten modelos open-weight "thinking" (Qwen3,
+# DeepSeek-R1, QwQ, algunos GGUF de llama.cpp) antes de la respuesta. No son la respuesta ni
+# se guardan: se quitan antes de interpretar el JSON. Un bloque sin cerrar (el modelo agotó
+# max_tokens pensando) deja la respuesta vacía y acaba en ai_invalid_response con el motivo
+# truncated_reasoning (7C-Fix2, answer_content).
+_REASONING = re.compile(
+    r"<(think|thinking|reasoning|reflection)>.*?(</\1>|\Z)", re.DOTALL | re.IGNORECASE
+)
+_FENCE = re.compile(r"```(?:json|JSON)?\s*(\{.*?\})\s*```", re.DOTALL)
+# Límite de búsqueda del objeto JSON dentro de un texto con prosa alrededor: una respuesta
+# legítima cabe de sobra; un texto enorme no se recorre carácter a carácter.
+_MAX_SCAN = 256 * 1024
+
+
+def _balanced_object(text: str) -> str | None:
+    """Primer objeto JSON equilibrado y válido de `text` (respeta cadenas y escapes), o None.
+
+    Solo localiza llaves y comprueba el candidato con json.loads (nunca se evalúa nada). Un
+    candidato que no es JSON ("{previa}" en la prosa) se salta y se prueba el siguiente.
+    """
+    limit = min(len(text), _MAX_SCAN)
+    start = text.find("{")
+    while 0 <= start < limit:
+        depth = 0
+        in_string = False
+        escaped = False
+        for index in range(start, limit):
+            char = text[index]
+            if in_string:
+                if escaped:
+                    escaped = False
+                elif char == "\\":
+                    escaped = True
+                elif char == '"':
+                    in_string = False
+            elif char == '"':
+                in_string = True
+            elif char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    candidate = text[start : index + 1]
+                    try:
+                        if isinstance(json.loads(candidate), dict):
+                            return candidate
+                    except ValueError:
+                        pass
+                    break
+        start = text.find("{", start + 1)
+    return None
+
+
+def extract_json_text(content: str) -> str:
+    """Texto JSON de una respuesta de modelo, tolerante con modelos open-weight.
+
+    Orden: quitar razonamiento <think>…</think>; respuesta entera si ya es JSON; bloque
+    ```json``` en cualquier posición; primer objeto equilibrado dentro de prosa ("Aquí
+    tienes el análisis: {...}"). Si nada encaja se devuelve el texto tal cual y json.loads
+    falla con un error controlado.
+    """
+    text = _REASONING.sub("", content).strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    fenced = _FENCE.search(text)
     if fenced:
-        text = fenced.group(1)
+        return fenced.group(1)
+    found = _balanced_object(text)
+    return found if found is not None else text
+
+
+def answer_content(response: AIResponse) -> str:
+    """Contenido utilizable de la respuesta, o AIInvalidResponseError con el motivo (7C-Fix2).
+
+    Distingue lo que antes era un único "respuesta no válida": el servidor cortó por
+    max_tokens (`finish_reason="length"`) mientras el modelo razonaba (`truncated_reasoning`)
+    o sin razonamiento visible (`truncated`); terminó solo con razonamiento
+    (`reasoning_only`); o no devolvió nada (`empty_answer`). Solo mira tamaños y marcas, nunca
+    guarda ni registra el texto.
+    """
+    text = _REASONING.sub("", response.content).strip()
+    if text:
+        return response.content
+    thought = response.reasoning_chars > 0 or _REASONING.search(response.content) is not None
+    if response.finish_reason == "length":
+        raise AIInvalidResponseError(
+            "The AI model used its whole output budget before answering",
+            "truncated_reasoning" if thought else "truncated",
+        )
+    raise AIInvalidResponseError(
+        "The AI model returned no answer", "reasoning_only" if thought else "empty_answer"
+    )
+
+
+def _load_object(content: str, truncated: bool) -> dict[str, Any]:
+    # Con finish_reason="length" un JSON roto es una respuesta cortada, no un modelo que no
+    # sabe escribir JSON: reintentar con el mismo presupuesto daría lo mismo.
+    reason = "truncated" if truncated else "invalid_json"
     try:
-        data = json.loads(text)
+        data = json.loads(extract_json_text(content))
     except ValueError:
-        raise AIInvalidResponseError("The AI response is not valid JSON") from None
+        raise AIInvalidResponseError("The AI response is not valid JSON", reason) from None
     if not isinstance(data, dict):
-        raise AIInvalidResponseError("The AI response is not a JSON object")
+        raise AIInvalidResponseError("The AI response is not a JSON object", reason)
+    return data
+
+
+def parse_json(content: str, truncated: bool = False) -> RawInsight:
+    """JSON del modelo -> RawInsight, o AIInvalidResponseError (nunca se evalúa nada).
+
+    Un JSON genérico ({"status": "ok"}) no es un análisis: sin `summary` no cumple el schema.
+    """
+    data = _load_object(content, truncated)
     try:
         return RawInsight.model_validate(data)
     except ValidationError:
-        raise AIInvalidResponseError("The AI response does not match the expected format") from None
+        raise AIInvalidResponseError(
+            "The AI response does not match the expected format", "schema_mismatch"
+        ) from None
 
 
 def _resolve(refs: list[str], ctx: AIContext, dropped: list[str]) -> list[str]:
@@ -216,3 +318,99 @@ def insufficient_result(reason: str) -> dict[str, Any]:
         "warnings": [],
         "dropped_refs": 0,
     }
+
+
+# --- Fase 7C.2: asistencia contextual de la Analyst Console -------------------------------
+
+
+class RawHypothesis(_Model):
+    text: str = Field(min_length=1, max_length=500)
+    evidence: list[str] = Field(default_factory=list, max_length=12)
+    # Qué tendría que comprobar el analista para confirmarla o descartarla.
+    validate_with: str = Field(default="", max_length=300)
+
+
+class RawConsoleInsight(RawInsight):
+    hypotheses: list[RawHypothesis] = Field(default_factory=list, max_length=8)
+    # Borrador de nota analítica (solo la tarea draft_note); texto plano.
+    draft: str = Field(default="", max_length=4000)
+
+    @field_validator("hypotheses", mode="before")
+    @classmethod
+    def _null_hypotheses(cls, value: object) -> object:
+        return [] if value is None else value
+
+    @field_validator("draft", mode="before")
+    @classmethod
+    def _null_draft(cls, value: object) -> object:
+        return "" if value is None else value
+
+
+def parse_console_json(content: str, truncated: bool = False) -> RawConsoleInsight:
+    data = _load_object(content, truncated)
+    try:
+        return RawConsoleInsight.model_validate(data)
+    except ValidationError:
+        raise AIInvalidResponseError(
+            "The AI response does not match the expected format", "schema_mismatch"
+        ) from None
+
+
+# Encabezado fijo del borrador: aunque el analista lo copie a un caso, el texto sigue diciendo
+# de dónde salió. Lo pone Sentra, no el modelo (el modelo no puede quitarlo).
+DRAFT_HEADER = "[Borrador generado por IA local: revisar contra la evidencia antes de usarlo]"
+
+
+def _clean_multiline(value: str, limit: int, max_lines: int = 60) -> str:
+    """Como clean() pero conserva los saltos de línea (párrafos del borrador)."""
+    lines = [clean(line, limit) for line in value.replace("\r\n", "\n").split("\n")]
+    # Varias líneas vacías seguidas se quedan en una (el modelo a veces rellena).
+    compact: list[str] = []
+    for line in lines[: max_lines * 2]:
+        if line or (compact and compact[-1]):
+            compact.append(line)
+    return "\n".join(compact[:max_lines]).strip()[:limit]
+
+
+def ground_console(raw: RawConsoleInsight, ctx: AIContext) -> dict[str, Any]:
+    """Grounding de la consola: el de 4J más hipótesis y borrador.
+
+    Una hipótesis es siempre una sugerencia del modelo: su certeza se fija en "possible"
+    (no la elige el modelo) y sin evidencia válida se descarta como un hallazgo.
+    """
+    result = ground(raw, ctx)
+    dropped: list[str] = []
+    restore = ctx.redactor.restore
+    hypotheses: list[dict[str, Any]] = []
+    discarded = 0
+    for h in raw.hypotheses:
+        valid = _resolve(h.evidence, ctx, dropped)
+        if not valid:
+            discarded += 1
+            continue
+        hypotheses.append(
+            {
+                "text": restore(clean(h.text, 500)),
+                "certainty": "possible",
+                "evidence": valid,
+                "validate_with": restore(clean(h.validate_with, 300)),
+            }
+        )
+    cited = [item["ref"] for item in result["evidence_refs"]]
+    for h_item in hypotheses:
+        for ref in h_item["evidence"]:
+            if ref not in cited:
+                cited.append(ref)
+                result["evidence_refs"].append({"ref": ref, **ctx.refs[ref].as_dict()})
+    if dropped:
+        result["dropped_refs"] += len(dropped)
+        result["warnings"].append(
+            f"Se descartaron {len(dropped)} referencias de hipótesis que no existen en Sentra."
+        )
+    if discarded:
+        result["warnings"].append(f"Se descartaron {discarded} hipótesis sin evidencia de Sentra.")
+    draft = restore(_clean_multiline(raw.draft, 4000)) if raw.draft.strip() else ""
+    result["hypotheses"] = hypotheses
+    result["draft"] = f"{DRAFT_HEADER}\n\n{draft}" if draft else None
+    result["origin"] = "model"
+    return result

@@ -38,6 +38,11 @@ class AIResponse:
     usage_input: int | None = None
     usage_output: int | None = None
     extra: dict[str, str] = field(default_factory=dict)
+    # 7C-Fix2: por qué terminó la generación ("stop", "length"...) y cuántos caracteres de
+    # razonamiento devolvió el servidor aparte (`reasoning_content`). Solo para diagnosticar
+    # una respuesta inutilizable; el razonamiento nunca se guarda ni se registra.
+    finish_reason: str | None = None
+    reasoning_chars: int = 0
 
 
 class AIProvider(Protocol):
@@ -94,6 +99,31 @@ class AIProviderAuthError(AIError):
 class AIInvalidResponseError(AIError):
     # La respuesta no es JSON válido o no cumple el schema tras los reintentos.
     code = "ai_invalid_response"
+
+    def __init__(self, message: str, reason: str = "invalid_json") -> None:
+        # 7C-Fix2: motivo concreto (ver INVALID_REASONS). Va a la auditoría, al log y al
+        # cliente en `details`; nunca el contenido de la respuesta.
+        super().__init__(message, details=[{"reason": reason}])
+        self.reason = reason
+
+
+# 7C-Fix2: motivos de una respuesta inutilizable, del más al menos específico.
+INVALID_REASONS = (
+    # El servidor cortó por max_tokens mientras el modelo razonaba: no llegó a responder.
+    "truncated_reasoning",
+    # Cortado por max_tokens con la respuesta a medias (JSON incompleto).
+    "truncated",
+    # Terminó sin respuesta, solo con razonamiento.
+    "reasoning_only",
+    # Terminó sin contenido.
+    "empty_answer",
+    # Hay texto, pero no es un objeto JSON.
+    "invalid_json",
+    # Es JSON, pero no cumple el schema del análisis (RawInsight o el de la consola).
+    "schema_mismatch",
+    # Cuerpo HTTP sin la forma de la API de chat, o demasiado grande.
+    "unexpected_body",
+)
 
 
 class AIUngroundedResponseError(AIError):

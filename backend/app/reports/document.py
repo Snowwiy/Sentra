@@ -252,6 +252,28 @@ class PageBreak:
     pass
 
 
+@dataclass(frozen=True)
+class DonutChart:
+    """Fase 7C.5: gráfica de anillo con su leyenda (etiqueta, valor y porcentaje).
+
+    Las porciones llegan ya ordenadas, sin ceros y acotadas por la plantilla (lo que no cabe
+    se agrupa en "Otros"); el renderer solo calcula ángulos y porcentajes.
+    """
+
+    title: str
+    slices: tuple[tuple[str, float, str], ...]
+    unit: str = "recuento"
+    empty_text: str = "Sin datos en el periodo."
+
+
+@dataclass(frozen=True)
+class DonutPanel:
+    """Panel visual del resumen ejecutivo (plantilla v3): varios anillos en rejilla."""
+
+    charts: tuple[DonutChart, ...]
+    note: str | None = None
+
+
 BlockV2 = (
     Paragraph
     | Bullets
@@ -265,6 +287,7 @@ BlockV2 = (
     | Metrics
     | Subheading
     | PageBreak
+    | DonutPanel
 )
 
 

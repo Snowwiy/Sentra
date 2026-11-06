@@ -24,11 +24,45 @@ consultas ni tipos definidos por el usuario.
 | `response_activity` | Actividad de Response | html, pdf, csv, evidence | activos, ejecuciones, playbooks, estados, include_archived | analyst |
 | `lifecycle_change` | Ciclo de vida y cambios | html, pdf, csv | activos, plataformas, include_archived | analyst |
 
-Cada tipo lleva `template_version` (hoy 2, ver "Plantilla v2"). Cambiar lo que muestra una
+Cada tipo lleva `template_version` (hoy 3, ver "Plantilla v3" y "Plantilla v2"). Cambiar lo que muestra una
 plantilla obliga a subirla; los informes ya generados conservan la versión con que se hicieron.
 
 El resumen ejecutivo omite IDs, direcciones IP y evidencia técnica: solo cifras agregadas,
 estado general, hallazgos principales y frases deterministas.
+
+## Plantilla v3 (Fase 7C.5)
+
+Los informes nuevos se generan con la plantilla **v3** (`TEMPLATE_VERSION = 3`); los v1 y v2
+ya generados se vuelven a renderizar con su propia plantilla y dan los mismos bytes
+(`tests/test_reports_v2.py` y `tests/test_reports_v3_7c.py`). El snapshot es el mismo que en
+v2 (incluido `extended`): la v3 solo cambia la presentación.
+
+**Panel visual.** Tras las métricas de la primera sección, un subtítulo «Panel visual» con
+gráficas circulares (`DonutPanel` en `app/reports/document.py`, `executive_panel` en
+`templates_v2.py`) calculadas de los recuentos del snapshot:
+
+| Informe | Gráficas |
+| --- | --- |
+| Resumen ejecutivo y técnico | Activos por nivel de riesgo, detecciones del periodo por severidad, vulnerabilidades activas por severidad |
+| Riesgo | Activos por nivel de riesgo, activos por estado |
+| Detecciones | Por severidad y por estado |
+| Vulnerabilidades | Por severidad y findings por evidencia (confirmada, probable, potencial) |
+| Activo | Detecciones por severidad |
+| Incidente | Detecciones vinculadas por severidad |
+| Actividad de Response | Ejecuciones por estado y por acción |
+| Ciclo de vida | Sin panel (la tabla de cambios ya es el contenido) |
+
+Reglas: sin recuentos en el snapshot no hay gráfica (nunca se inventan ceros); las porciones a
+cero no se dibujan; más de 6 porciones se agrupan en «Otros»; cada leyenda lleva valor y
+porcentaje («2 · 67%», «<1%» para valores muy pequeños) y el total va en el centro. PDF: sectores
+anulares con curvas de Bézier de como mucho 90° en el escritor propio, dos gráficas por fila,
+sin dependencias. HTML: SVG con `stroke-dasharray`, sin scripts, con `aria-label` que da el
+desglose completo para lectores de pantalla; la hoja de estilos del panel solo se añade en v3,
+así que el HTML v2 no cambia.
+
+**Flujo en la UI.** Informes muestra tres pasos (tipo, alcance, formato y entrega), el alcance
+se elige por nombre con los selectores 7C.3 y un resumen de lo que incluirá el informe
+(incluido «Panel de gráficas circulares» cuando la plantilla es v3).
 
 ## Plantilla v2 (Fase 6D.5)
 

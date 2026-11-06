@@ -23,6 +23,8 @@ from app.reports.document import (
     Bullets,
     Diagram,
     DocumentV2,
+    DonutChart,
+    DonutPanel,
     KeyValues,
     LineChart,
     Metrics,
@@ -33,7 +35,7 @@ from app.reports.document import (
     Subheading,
     Table,
 )
-from app.reports.render_pdf_v2 import axis_max, fmt_chart, safe
+from app.reports.render_pdf_v2 import axis_max, donut_angles, fmt_chart, safe, share
 
 _CSP = (
     "default-src 'none'; style-src 'unsafe-inline'; img-src data:; base-uri 'none';"
@@ -93,6 +95,23 @@ footer{margin-top:32px;border-top:1px solid var(--line);padding-top:6px;color:va
 @media print{main{padding:0;max-width:none}h2,h3{break-after:avoid;page-break-after:avoid}
  .cover{break-after:page;page-break-after:always}}
 @media (max-width:640px){.metrics{grid-template-columns:1fr}}
+"""
+
+# Fase 7C.5: estilos del panel de anillos. Solo se añaden a documentos v3 o posteriores: un
+# snapshot v2 ya generado se vuelve a renderizar con los mismos bytes.
+_CSS_V3 = """
+.donuts{display:grid;grid-template-columns:repeat(2,1fr);gap:10px;margin:10px 0}
+.donut{border:1px solid var(--line);background:var(--zebra);border-radius:4px;padding:8px 10px;
+ break-inside:avoid;page-break-inside:avoid}
+.donut h4{margin:0 0 6px;font-size:12px}
+.donut-body{display:flex;align-items:center;gap:12px}
+.donut-body svg{width:112px;height:112px;flex:none}
+.donut ul{list-style:none;margin:0;padding:0;flex:1;min-width:0;font-size:11px}
+.donut li{display:flex;align-items:center;gap:6px;padding:1px 0}
+.donut li i{width:10px;height:10px;flex:none;border-radius:2px}
+.donut li span{flex:1;min-width:0;overflow-wrap:anywhere}
+.donut li b{white-space:nowrap}
+@media (max-width:640px){.donuts{grid-template-columns:1fr}}
 """
 
 
@@ -383,6 +402,51 @@ def _diagram(block: Diagram) -> str:
     )
 
 
+def _donut(chart: DonutChart) -> str:
+    angles = donut_angles(chart)
+    head = f"<h4>{_e(chart.title)}</h4>"
+    if not angles:
+        return f'<div class="donut">{head}<div class="empty">{_e(chart.empty_text)}</div></div>'
+    total = sum(safe(v) for _, v, _ in chart.slices)
+    radius = 40.0
+    circumference = 2 * math.pi * radius
+    # Cada porción es un trazo del mismo círculo con dasharray: sin path ni trigonometría en
+    # el SVG, y una porción del 100 % se dibuja igual que las demás.
+    rings = [
+        f'<circle cx="60" cy="60" r="{_n(radius)}" fill="none" stroke="#e2e8f0" stroke-width="18"/>'
+    ]
+    for start, end, color in angles:
+        length = circumference * (end - start) / 360.0
+        offset = circumference * start / 360.0
+        rings.append(
+            f'<circle cx="60" cy="60" r="{_n(radius)}" fill="none" stroke="{_color(color)}"'
+            f' stroke-width="18" stroke-dasharray="{_n(length)} {_n(circumference)}"'
+            f' stroke-dashoffset="{_n(-offset)}" transform="rotate(-90 60 60)"/>'
+        )
+    summary = "; ".join(
+        f"{label}: {fmt_chart(value)} ({share(value, total)})" for label, value, _ in chart.slices
+    )
+    svg = (
+        f'<svg viewBox="0 0 120 120" role="img" aria-label="{_e(chart.title)}: {_e(summary)}">'
+        f"{''.join(rings)}"
+        f'<text x="60" y="62" text-anchor="middle" font-size="18" font-weight="bold"'
+        f' fill="#1b2430">{_e(fmt_chart(total))}</text>'
+        f'<text x="60" y="76" text-anchor="middle" font-size="9" fill="#5b6573">'
+        f"{_e(chart.unit)}</text></svg>"
+    )
+    legend = "".join(
+        f'<li><i style="background:{_color(color)}"></i><span>{_e(label)}</span>'
+        f"<b>{_e(fmt_chart(value))} · {_e(share(value, total))}</b></li>"
+        for label, value, color in chart.slices
+    )
+    return f'<div class="donut">{head}<div class="donut-body">{svg}<ul>{legend}</ul></div></div>'
+
+
+def _donuts(block: DonutPanel) -> str:
+    note = f'<p class="note">{_e(block.note)}</p>' if block.note else ""
+    return f'<div class="donuts">{"".join(_donut(c) for c in block.charts)}</div>{note}'
+
+
 def _metrics(block: Metrics) -> str:
     tiles = "".join(
         f'<div class="metric"><div class="label">{_e(m.label)}</div>'
@@ -425,10 +489,13 @@ def _block(block: BlockV2) -> str:
         return _lines(block)
     if isinstance(block, Diagram):
         return _diagram(block)
+    if isinstance(block, DonutPanel):
+        return _donuts(block)
     return _bars(block)
 
 
 def render_html_v2(document: DocumentV2) -> bytes:
+    css = _CSS + _CSS_V3 if document.template_version >= 3 else _CSS
     cover_rows = "".join(f"<tr><th>{_e(k)}</th><td>{_e(v)}</td></tr>" for k, v in document.cover)
     toc = "".join(
         f'<li><a href="#s-{n}">{_e(section.title)}</a></li>'
@@ -445,7 +512,7 @@ def render_html_v2(document: DocumentV2) -> bytes:
         f'<meta http-equiv="Content-Security-Policy" content="{_CSP}">'
         '<meta name="referrer" content="no-referrer">'
         '<meta name="viewport" content="width=device-width, initial-scale=1">'
-        f"<title>{_e(document.title)}</title><style>{_CSS}</style></head><body><main>"
+        f"<title>{_e(document.title)}</title><style>{css}</style></head><body><main>"
         '<header class="cover">'
         f'<span class="classification">{_e(document.classification)}</span>'
         f'<div class="brand">{_logo(56, "#ffffff", BRAND)}<div><div class="word">SENTRA</div>'

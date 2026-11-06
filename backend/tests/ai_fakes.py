@@ -13,7 +13,8 @@ from typing import Any
 from app.ai.openai_compat import ProviderHealth
 from app.ai.provider import AIRequest, AIResponse
 
-Responder = Callable[[AIRequest], str | Exception]
+# 7C-Fix2: un AIResponse completo permite simular finish_reason y razonamiento aparte.
+Responder = Callable[[AIRequest], str | AIResponse | Exception]
 
 
 def context_refs(request: AIRequest) -> list[str]:
@@ -90,6 +91,8 @@ class FakeAIProvider:
         result = self.responder(request)
         if isinstance(result, Exception):
             raise result
+        if isinstance(result, AIResponse):
+            return result
         return AIResponse(
             content=result, model=self.model, latency_ms=3, usage_input=100, usage_output=50
         )

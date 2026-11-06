@@ -837,11 +837,11 @@ def test_all_types_generate_v2_with_label_and_extended_data(
     for rtype, fmt, report_id in created:
         report = _ok(client.get(f"{R}/{report_id}"))
         assert report["status"] == "succeeded", (rtype, fmt, report)
-        assert report["template_version"] == 2
+        assert report["template_version"] == 3
         stored = db.scalar(select(Report).where(Report.public_id == UUID(report_id)))
         assert stored is not None and stored.snapshot is not None
-        assert stored.template_version == 2
-        assert stored.snapshot["meta"]["template_version"] == 2
+        assert stored.template_version == 3
+        assert stored.snapshot["meta"]["template_version"] == 3
         assert "extended" in stored.snapshot
         data = _download(client, report_id)
         if fmt == "html":
@@ -870,6 +870,9 @@ def test_all_types_generate_v2_with_label_and_extended_data(
             assert "Etiqueta Manual -> Ficheros" in text
         if rtype in ("technical", "asset"):
             assert isinstance(stored.snapshot["extended"]["topology"], list)
+        if fmt == "html" and rtype in ("executive_summary", "technical", "detection"):
+            # Fase 7C.5: la plantilla v3 añade el panel de anillos al resumen ejecutivo.
+            assert "Panel visual" in text and 'class="donuts"' in text, rtype
         if rtype == "executive_summary":
             # El resumen ejecutivo v2 sigue minimizando datos: ni IPs ni ids de activos.
             assert asset.primary_ip and asset.primary_ip not in text

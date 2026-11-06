@@ -315,3 +315,25 @@ describe("mensajes de topología", () => {
     expect((await failure(apiPost("/topology/rebuild", {}))).message).toMatch(/reconstrucción de la topología en curso/);
   });
 });
+
+describe("motivo de una respuesta de IA no válida (7C-Fix2)", () => {
+  const invalid = (details?: unknown) =>
+    JSON.stringify({ error: { code: "ai_invalid_response", message: "The AI model used its whole output budget", details } });
+
+  it("explica el corte por razonamiento y el schema sin datos del modelo", async () => {
+    respond(502, invalid([{ reason: "truncated_reasoning" }]));
+    const cut = await failure(apiPost("/ai/assets/1/analyze", {}));
+    expect(cut.code).toBe("ai_invalid_response");
+    expect(cut.message).toMatch(/agotó el límite de salida razonando/);
+    expect(cut.message).not.toMatch(/AI_/);
+    respond(502, invalid([{ reason: "schema_mismatch" }]));
+    expect((await failure(apiPost("/ai/assets/1/analyze", {}))).message).toMatch(/sin la estructura de un análisis/);
+  });
+
+  it("sin motivo o con uno desconocido conserva el mensaje general", async () => {
+    respond(502, invalid());
+    expect((await failure(apiPost("/ai/ask", {}))).message).toBe("El modelo devolvió una respuesta no válida.");
+    respond(502, invalid([{ reason: "otro" }]));
+    expect((await failure(apiPost("/ai/ask", {}))).message).toBe("El modelo devolvió una respuesta no válida.");
+  });
+});

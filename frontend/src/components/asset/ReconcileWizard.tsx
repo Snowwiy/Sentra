@@ -30,6 +30,7 @@ import {
 } from "../../lib/lifecycle";
 import { usePolling } from "../../lib/usePolling";
 import { CredentialBadge } from "../agents/AgentBadges";
+import { EntityPicker } from "../lookup/EntityPicker";
 import { Modal } from "../Modal";
 import { MethodBadge } from "../NetworkBadges";
 
@@ -134,7 +135,7 @@ export function ReconcileWizard({
 
   const targetId = (manual.trim() || selected).toLowerCase();
   const targetProblem = !targetId
-    ? "Elige un candidato o pega el Asset ID del activo existente."
+    ? "Elige un candidato o busca el activo existente."
     : !isAssetId(targetId)
       ? "El Asset ID no tiene un formato válido."
       : targetId === source.asset_id.toLowerCase()
@@ -280,17 +281,15 @@ export function ReconcileWizard({
             ))}
           </fieldset>
         )}
-        <label className="form-field">
-          O pega el Asset ID del activo existente
-          <input
-            className="input mono"
-            aria-label="Asset ID del destino"
-            value={manual}
-            placeholder="00000000-0000-0000-0000-000000000000"
-            maxLength={64}
-            onChange={(event) => setManual(event.target.value)}
-          />
-        </label>
+        {/* Fase 7C.3: otro activo se busca por nombre, IP o MAC (un id pegado también vale). */}
+        <EntityPicker
+          kind="asset"
+          label="O busca otro activo existente"
+          value={manual}
+          siteId={source.site_id ?? undefined}
+          onChange={(id) => setManual(id)}
+          hint="Solo activos del mismo site; la reconciliación nunca cruza sites."
+        />
         {targetId && targetProblem && <p className="muted small">{targetProblem}</p>}
       </>
     );

@@ -53,6 +53,30 @@ const AI_MESSAGES: Record<string, string> = {
   local_model_unavailable: "El modelo no está disponible en el runtime ni en disco.",
 };
 
+// 7C-Fix2: motivo concreto de ai_invalid_response (details[0].reason). Sin contenido del
+// modelo: solo qué falló y qué puede hacer el administrador del servidor.
+const AI_INVALID_REASONS: Record<string, string> = {
+  truncated_reasoning:
+    "El modelo agotó el límite de salida razonando y no llegó a responder. El administrador puede desactivar el razonamiento del modelo o ampliar el límite de salida en el servidor.",
+  truncated:
+    "La respuesta del modelo se cortó al alcanzar el límite de salida. El administrador puede ampliar ese límite en el servidor.",
+  reasoning_only:
+    "El modelo solo devolvió razonamiento interno, sin respuesta. El administrador puede desactivar el razonamiento del modelo en el servidor.",
+  empty_answer: "El modelo devolvió una respuesta vacía.",
+  invalid_json: "El modelo no devolvió JSON válido.",
+  schema_mismatch: "El modelo devolvió JSON, pero sin la estructura de un análisis de Sentra.",
+  unexpected_body: "El servidor del modelo devolvió una respuesta con un formato inesperado.",
+};
+
+/** Texto del motivo de un ai_invalid_response, o undefined si no se reconoce. */
+export function aiInvalidReasonText(details: unknown): string | undefined {
+  if (!Array.isArray(details) || details.length === 0) return undefined;
+  const first: unknown = details[0];
+  if (typeof first !== "object" || first === null || !("reason" in first)) return undefined;
+  const reason = (first as { reason: unknown }).reason;
+  return typeof reason === "string" ? AI_INVALID_REASONS[reason] : undefined;
+}
+
 // Gestión de incidentes (Fase 4K). incident_conflict: otro operador cambió el caso; la UI
 // recarga antes de reintentar (nunca se sobrescribe en silencio).
 const INCIDENT_MESSAGES: Record<string, string> = {
@@ -268,7 +292,8 @@ async function parseError(response: Response): Promise<ApiError> {
   try {
     const body: unknown = await response.json();
     if (isErrorEnvelope(body)) {
-      const message = translate(body.error.code, body.error.message);
+      const reason = body.error.code === "ai_invalid_response" ? aiInvalidReasonText(body.error.details) : undefined;
+      const message = reason ?? translate(body.error.code, body.error.message);
       return new ApiError(response.status, body.error.code, message, body.error.details);
     }
   } catch {

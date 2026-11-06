@@ -9,6 +9,7 @@ import "./styles/base.css";
 import "./styles/shell.css";
 import "./index.css";
 import "./styles/components.css";
+import "./styles/sentra7c.css";
 import "./styles/responsive.css";
 
 const root = document.getElementById("root");

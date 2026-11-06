@@ -718,6 +718,8 @@ def _concrete(path: str) -> str:
     path = path.replace("{rule_id}", "SENTRA-CUSTOM-999999").replace("{version}", "1")
     # Fase 6C.4: fuentes del catálogo por clave y detalle de un CVE.
     path = path.replace("{source_key}", "nvd").replace("{cve_id}", "CVE-2099-0001")
+    # Fase 7C.3: selectores contextuales por tipo de entidad.
+    path = path.replace("{kind}", "asset")
     assert "{" not in path, path
     return path
 
@@ -751,6 +753,9 @@ AI_ANALYSIS = {
     ("POST", "/api/v1/ai/incidents/{incident_id}/analyze"),
     # Fase 5B: explicación de solo lectura de un finding de vulnerabilidad.
     ("POST", "/api/v1/ai/vulnerabilities/{finding_id}/analyze"),
+    # 7C-Security-Fix1: el asistente de la consola (/ai/console/context y /assist) ya no está
+    # aquí: compartir resultados con el modelo exige tools:execute, así que el viewer recibe 403
+    # como en cualquier otra mutación.
 }
 
 

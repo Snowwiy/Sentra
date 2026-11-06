@@ -114,7 +114,11 @@ describe("rutas del hub Red", () => {
     renderAt(`/assets/${ASSET_ID}`);
     const nav = await sidebar();
     await waitFor(() => expect(within(nav).getByRole("link", { name: "Red" })).toHaveAttribute("aria-current", "page"));
-    expect(await screen.findByRole("link", { name: "← Dispositivos" })).toHaveAttribute("href", "/network/devices");
+    // La ficha se carga en diferido: con la suite completa en paralelo tarda más de 1 s.
+    expect(await screen.findByRole("link", { name: "← Dispositivos" }, { timeout: 5000 })).toHaveAttribute(
+      "href",
+      "/network/devices",
+    );
   });
 
   it("/ es el Panel y enlaza a todos los dispositivos", async () => {

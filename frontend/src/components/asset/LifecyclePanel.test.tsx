@@ -16,6 +16,7 @@ import type {
   SystemEvent,
 } from "../../api/types";
 import { WithRole } from "../../test/auth";
+import { lookupItem, lookupResult } from "../../test/lookup";
 import { EventsTab } from "./EventsTab";
 import { ACK_WEAK_EVIDENCE, IRREVERSIBLE_WARNING, NOT_YET_DELETABLE } from "../../lib/lifecycle";
 import { AssetStateBadge } from "../StatusBadge";
@@ -193,6 +194,15 @@ beforeEach(() => {
   routes = {
     [`GET /assets/${ID}/duplicate-candidates`]: () => ({ body: { asset_id: ID, items: [] } }),
     [`GET /assets/${ID}/delete-check`]: () => ({ body: check() }),
+    // Fase 7C.3: el selector resuelve el id pegado a su nombre.
+    "GET /lookup/asset": (_init, url) => ({
+      body: lookupResult(
+        url,
+        lookupItem({ kind: "asset", id: ID, label: "ORIGEN-PC" }),
+        lookupItem({ kind: "asset", id: "22222222-0000-4000-8000-000000000002", label: "DESTINO-PC" }),
+        lookupItem({ kind: "asset", id: candidate().asset.asset_id, label: candidate().asset.display_name }),
+      ),
+    }),
   };
   vi.stubGlobal(
     "fetch",
@@ -423,12 +433,15 @@ describe("LifecyclePanel (Fase 5C.2)", () => {
     const dialog = await screen.findByRole("dialog", { name: "Reconciliar con activo existente" });
     expect(dialog).toHaveTextContent(ID);
     fireEvent.click(within(dialog).getByRole("button", { name: "Siguiente" }));
-    const input = within(dialog).getByLabelText("Asset ID del destino");
+    const search = () => within(dialog).getByRole("combobox", { name: "O busca otro activo existente" });
     // Origen y destino nunca pueden ser el mismo activo.
-    fireEvent.change(input, { target: { value: ID } });
+    fireEvent.change(search(), { target: { value: ID } });
+    fireEvent.click(await within(dialog).findByRole("option", { name: /ORIGEN-PC/ }));
     expect(within(dialog).getByRole("button", { name: "Ver evidencia" })).toBeDisabled();
     expect(dialog).toHaveTextContent("no puede ser el mismo activo");
-    fireEvent.change(input, { target: { value: TARGET } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cambiar" }));
+    fireEvent.change(search(), { target: { value: TARGET } });
+    fireEvent.click(await within(dialog).findByRole("option", { name: /DESTINO-PC/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Ver evidencia" }));
     await within(dialog).findByText(/Conflicto: identidades de máquina distintas/);
     expect(dialog).toHaveTextContent("Confianza baja");
@@ -470,7 +483,10 @@ describe("LifecyclePanel (Fase 5C.2)", () => {
     fireEvent.click(screen.getByRole("button", { name: "Reconciliar manualmente…" }));
     const dialog = await screen.findByRole("dialog", { name: "Reconciliar con activo existente" });
     fireEvent.click(within(dialog).getByRole("button", { name: "Siguiente" }));
-    fireEvent.change(within(dialog).getByLabelText("Asset ID del destino"), { target: { value: candidate().asset.asset_id } });
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "O busca otro activo existente" }), {
+      target: { value: candidate().asset.asset_id },
+    });
+    fireEvent.click(await within(dialog).findByRole("option", { name: new RegExp(candidate().asset.display_name) }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Ver evidencia" }));
     fireEvent.click(await within(dialog).findByRole("button", { name: "Ver impacto" }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));

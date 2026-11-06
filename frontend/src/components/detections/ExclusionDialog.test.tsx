@@ -4,6 +4,7 @@ import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { WithRole } from "../../test/auth";
+import { lookupItem, lookupResult } from "../../test/lookup";
 import { ExclusionDialog } from "./ExclusionDialog";
 import { RuleDetailsPanel } from "./RuleDetailsPanel";
 
@@ -26,6 +27,10 @@ beforeEach(() => {
       if (init?.method === "POST") {
         posted.push(JSON.parse(String(init.body)));
         return reply ?? json(201, {});
+      }
+      const url = new URL(_input, "http://localhost");
+      if (url.pathname.endsWith("/lookup/asset")) {
+        return json(200, lookupResult(url, lookupItem({ kind: "asset", id: ASSET, label: "srv-pruebas", match_field: "name" })));
       }
       return json(404, { error: { code: "not_found", message: "x" } });
     }),
@@ -76,7 +81,7 @@ describe("ExclusionDialog (Fase 7A.8)", () => {
     });
   });
 
-  it("NET-001 exige puerto y equipo y rechaza un intérprete entero", () => {
+  it("NET-001 exige puerto y equipo y rechaza un intérprete entero", async () => {
     const dialog = renderDialog({ ruleId: "NET-001", field: "exe", value: "python.exe" });
     fireEvent.change(within(dialog).getByLabelText("Justificación"), { target: { value: "Servidor de pruebas" } });
     const problems = within(dialog).getByRole("list", { name: "Problemas del formulario" });
@@ -85,7 +90,9 @@ describe("ExclusionDialog (Fase 7A.8)", () => {
     expect(problems).toHaveTextContent("NET-001 exige indicar el equipo.");
     fireEvent.change(within(dialog).getByLabelText("Valor exacto"), { target: { value: "C:\\apps\\srv.exe" } });
     fireEvent.change(within(dialog).getByLabelText("Puerto"), { target: { value: "8443" } });
-    fireEvent.change(within(dialog).getByLabelText("Equipo (identificador, obligatorio)"), { target: { value: ASSET } });
+    // Fase 7C.3: el equipo se busca por nombre y se elige; el id lo pone el selector.
+    fireEvent.change(within(dialog).getByRole("combobox", { name: "Equipo *" }), { target: { value: "srv" } });
+    fireEvent.click(await within(dialog).findByRole("option", { name: /srv-pruebas/ }));
     expect(within(dialog).queryByRole("list", { name: "Problemas del formulario" })).not.toBeInTheDocument();
     expect(within(dialog).getByRole("button", { name: "Crear excepción" })).toBeEnabled();
   });

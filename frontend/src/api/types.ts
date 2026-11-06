@@ -2019,8 +2019,13 @@ export type InsightKind =
   | "incident_timeline"
   | "incident_evidence"
   | "incident_next_steps"
-  | "vulnerability_analysis";
-export type InsightScope = "asset" | "detection" | "incident" | "vulnerability" | "fleet";
+  | "vulnerability_analysis"
+  // Fase 7C.2: asistente contextual de la Analyst Console (privados de quien los pide).
+  | "console_summary"
+  | "console_risk"
+  | "console_hypotheses"
+  | "console_draft";
+export type InsightScope = "asset" | "detection" | "incident" | "vulnerability" | "fleet" | "console";
 /** Vocabulario de certeza que exige el backend a cada hallazgo. */
 export type Certainty = "observed" | "detected" | "correlated" | "possible" | "requires_validation";
 export type AIWindow = "24h" | "7d" | "30d";
@@ -2045,6 +2050,14 @@ export interface InsightAction {
   evidence: string[];
 }
 
+/** Fase 7C.2: hipótesis del modelo. Siempre "possible": es una sugerencia que hay que validar. */
+export interface InsightHypothesis {
+  text: string;
+  certainty: "possible";
+  evidence: string[];
+  validate_with: string;
+}
+
 export interface InsightResult {
   summary: string;
   assessment: string;
@@ -2056,6 +2069,12 @@ export interface InsightResult {
   insufficient_data: boolean;
   warnings: string[];
   dropped_refs: number;
+  /** Fase 7C.2 (asistente de consola). */
+  hypotheses: InsightHypothesis[];
+  /** Borrador de nota con la cabecera fija de "generado por IA local". */
+  draft: string | null;
+  /** "model" = texto del modelo; "sentra" = respuesta fija de Sentra sin llamar al modelo. */
+  origin: "model" | "sentra" | null;
 }
 
 export interface Insight {
@@ -2082,7 +2101,46 @@ export interface Insight {
   context_items: number;
   latency_ms: number | null;
   requested_by: string;
+  /** Fase 7C.2: ejecuciones de herramientas que usó el asistente de consola. */
+  tool_execution_ids: string[];
   result: InsightResult;
+}
+
+export type ConsoleTask = "summary" | "explain_risk" | "hypotheses" | "draft_note";
+
+export interface ConsoleContextRequest {
+  task: ConsoleTask;
+  execution_ids: string[];
+  asset_id?: string | null;
+  detection_id?: string | null;
+  question?: string | null;
+}
+
+/** 7C-Security-Fix1: el envío repite la huella de la revisión y la confirmación explícita. */
+export interface ConsoleAssistRequest extends ConsoleContextRequest {
+  context_sha256: string;
+  confirm_send: boolean;
+  refresh?: boolean;
+}
+
+export interface ConsoleContextItem {
+  ref: string;
+  type: string;
+  label: string;
+}
+
+/** 7C-Security-Fix1: documento exacto que recibiría el modelo local (POST /ai/console/context). */
+export interface ConsoleContextPreview {
+  task: ConsoleTask;
+  context_sha256: string;
+  destination: "loopback";
+  model: string | null;
+  items: ConsoleContextItem[];
+  redacted_values: number;
+  pseudonymized: string[];
+  chars: number;
+  question: string | null;
+  document: Record<string, unknown>;
 }
 
 export interface InsightList {
@@ -2119,6 +2177,13 @@ export interface AIStatus {
   max_context_items: number;
   rate_limit_per_user_per_minute: number;
   prompt_versions: Record<string, string>;
+  /** Fase 7C.1: "settings" (modelo configurado en el servidor) o "local_manager" (modelo activo del gestor 4J.2). */
+  model_source: string;
+  system_prompt_mode: "system" | "user_prefix";
+  console_assist_available: boolean;
+  console_max_executions: number;
+  /** 7C-Security-Fix1: por qué el asistente no está disponible (apagado o modelo fuera de loopback). */
+  console_assist_reason: string | null;
 }
 
 // --- Fase 4J.2: gestor de modelos locales (backend/app/schemas/ai_local.py) ---
@@ -5892,6 +5957,68 @@ export interface SecurityOverview {
   risk_history: RiskHistoryPoint[];
   new_devices: NewDevices;
   exposed_ports: ExposedPortSummary;
+  /** Fase 7C.4: 24 franjas horarias; events es null si no hay agentes en el alcance. */
+  activity_24h: ActivityHour[];
+  /** Fase 7C.4: activo con más riesgo y sus factores (null sin activos puntuados). */
+  top_risk: TopRiskAsset | null;
+}
+
+export interface ActivityHour {
+  hour: IsoDateTime;
+  detections: number;
+  events: number | null;
+}
+
+export interface TopRiskFactor {
+  label: string;
+  category: string | null;
+  points: number;
+  rule_id: string | null;
+  detection_id: string | null;
+}
+
+export interface TopRiskAsset {
+  asset_id: string;
+  name: string;
+  primary_ip: string;
+  score: number;
+  level: string;
+  confidence: string;
+  calculated_at: IsoDateTime | null;
+  factors: TopRiskFactor[];
+  other_points: number;
+}
+
+// --- Fase 7C.3: selectores contextuales (GET /lookup/{kind}) ---
+
+export type LookupKind = "asset" | "detection" | "incident";
+export type LookupResolution = "exact" | "ambiguous" | "partial" | "none";
+
+export interface LookupItem {
+  kind: LookupKind;
+  id: string;
+  label: string;
+  secondary: string | null;
+  match_field: string;
+  exact: boolean;
+  archived: boolean;
+  site_name: string | null;
+  ip: string | null;
+  mac: string | null;
+  device_type: string | null;
+  status: string | null;
+  severity: string | null;
+  asset_id: string | null;
+  asset_label: string | null;
+  last_seen_at: IsoDateTime | null;
+}
+
+export interface LookupResult {
+  kind: LookupKind;
+  query: string;
+  resolution: LookupResolution;
+  items: LookupItem[];
+  truncated: boolean;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -6068,10 +6195,12 @@ export type IdentityEvidenceCode =
   | "agent_reported_mac"
   | "same_universal_mac"
   | "mac_in_history"
+  | "same_dhcp_client_id"
   | "same_device_name"
   | "same_ip"
   | "same_vendor"
-  | "same_os";
+  | "same_os"
+  | "private_mac_rotation";
 
 export interface MacProfile {
   mac: string | null;

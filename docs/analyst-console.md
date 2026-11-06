@@ -64,6 +64,21 @@ Ninguna escribe. Todas respetan el site del activo y los permisos del motor (`to
 | analyst | Ejecutar lecturas e investigaciones, preparar acciones permitidas a su rol, añadir evidencias, crear tareas y asignarlas. |
 | admin | Todo lo anterior y las acciones restringidas a admin del catálogo 7A. |
 
+## Fase 7C
+
+- **Diseño** (7C.4): tres columnas (catálogo, zona de trabajo, historial con permisos y
+  asistente) que se apilan en pantallas estrechas; el catálogo se agrupa por categoría y marca
+  con candado lo que el rol no puede ejecutar o requiere vista previa.
+- **Selectores** (7C.3): el workspace y los campos `asset_id`, `detection_id` e
+  `incident_id` de las herramientas se eligen por nombre, IP, MAC, regla o número de caso
+  ([contextual-selectors.md](contextual-selectors.md)).
+- **Asistente de IA local** (7C.2): resume, explica el riesgo, propone hipótesis y redacta
+  borradores sobre los resultados marcados; nunca ejecuta herramientas
+  ([open-weight-model.md](open-weight-model.md)). Desde 7C-Security-Fix1: apagado por
+  defecto, solo con un modelo en loopback, solo analyst y admin, ningún resultado marcado por
+  defecto y revisión del documento antes de «Enviar al modelo local»
+  ([fase-7c-security-fix1.md](fase-7c-security-fix1.md)).
+
 ## Extensiones de la API documentadas
 
 - `GET /search` (nuevo).

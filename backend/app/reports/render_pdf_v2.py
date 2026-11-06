@@ -37,6 +37,8 @@ from app.reports.document import (
     Bullets,
     Diagram,
     DocumentV2,
+    DonutChart,
+    DonutPanel,
     KeyValues,
     LineChart,
     Metrics,
@@ -228,6 +230,35 @@ def safe(value: float) -> float:
     return value if math.isfinite(value) and value > 0 else 0.0
 
 
+def share(value: float, total: float) -> str:
+    """Porcentaje de una porción (Fase 7C.5). Entero salvo una porción real pero muy pequeña,
+    que se muestra como "<1%" para que nunca parezca un cero."""
+    if total <= 0 or safe(value) <= 0:
+        return "0%"
+    percent = 100.0 * safe(value) / total
+    return "<1%" if percent < 0.5 else f"{round(percent)}%"
+
+
+def donut_angles(chart: DonutChart) -> list[tuple[float, float, str]]:
+    """(inicio, fin, color) de cada porción en grados, desde las 12 y en sentido horario.
+
+    Compartido por el HTML y el PDF para que ambos dibujen exactamente las mismas porciones.
+    """
+    values = [safe(v) for _, v, _ in chart.slices]
+    total = sum(values)
+    if total <= 0:
+        return []
+    out = []
+    start = 0.0
+    for (_, _, color), value in zip(chart.slices, values, strict=True):
+        if value <= 0:
+            continue
+        end = start + 360.0 * value / total
+        out.append((start, end, color))
+        start = end
+    return out
+
+
 class _Layout:
     """Maquetación por bloques: llena páginas y salta cuando un bloque no cabe."""
 
@@ -311,6 +342,49 @@ class _Layout:
             f"{_num(x)} {_num(y)} {'m' if i == 0 else 'l'}" for i, (x, y) in enumerate(points)
         )
         self.ops.append(f"q {_num(fill[0])} {_num(fill[1])} {_num(fill[2])} rg {path} h f Q")
+
+    def annular_sector(
+        self,
+        cx: float,
+        cy: float,
+        outer: float,
+        inner: float,
+        start: float,
+        end: float,
+        fill: Color,
+    ) -> None:
+        """Porción de anillo con curvas Bézier (tramos de 90° como máximo).
+
+        Los ángulos van desde las 12 en sentido horario; en PDF el eje Y crece hacia arriba,
+        así que el ángulo matemático es 90° - ángulo.
+        """
+        sweep = end - start
+        if sweep <= 0:
+            return
+        steps = max(1, math.ceil(sweep / 90.0 - 1e-9))
+
+        def arc(radius: float, a0: float, a1: float, first: str) -> list[str]:
+            ops = []
+            step = (a1 - a0) / steps
+            for i in range(steps):
+                t0 = math.radians(90.0 - (a0 + i * step))
+                t1 = math.radians(90.0 - (a0 + (i + 1) * step))
+                k = 4.0 / 3.0 * math.tan((t1 - t0) / 4.0)
+                x0, y0 = cx + radius * math.cos(t0), cy + radius * math.sin(t0)
+                x3, y3 = cx + radius * math.cos(t1), cy + radius * math.sin(t1)
+                x1 = x0 - k * radius * math.sin(t0)
+                y1 = y0 + k * radius * math.cos(t0)
+                x2 = x3 + k * radius * math.sin(t1)
+                y2 = y3 - k * radius * math.cos(t1)
+                if i == 0:
+                    ops.append(f"{_num(x0)} {_num(y0)} {first}")
+                ops.append(f"{_num(x1)} {_num(y1)} {_num(x2)} {_num(y2)} {_num(x3)} {_num(y3)} c")
+            return ops
+
+        path = arc(outer, start, end, "m") + arc(inner, end, start, "l")
+        self.ops.append(
+            f"q {_num(fill[0])} {_num(fill[1])} {_num(fill[2])} rg {' '.join(path)} h f Q"
+        )
 
     def logo(self, x: float, y: float, scale: float, body: Color, mark: Color) -> None:
         """Escudo SENTRA: contorno de escudo y un trazo de pulso, solo vectores."""
@@ -638,6 +712,50 @@ class _Layout:
             x += needed
         self.y -= 15
 
+    def donut_panel(self, block: DonutPanel) -> None:
+        """Rejilla de anillos, dos por fila; cada celda no se parte entre páginas."""
+        gap = 12.0
+        cell_w = (CONTENT_W - gap) / 2
+        for start in range(0, len(block.charts), 2):
+            row = block.charts[start : start + 2]
+            height = max(_donut_height(chart) for chart in row)
+            self.ensure(height + 6)
+            top = self.y
+            for col, chart in enumerate(row):
+                self._donut(chart, MARGIN + col * (cell_w + gap), top, cell_w, height)
+            self.y = top - height - 6
+        if block.note:
+            self.paragraph(block.note, size=7.5, font="F3", color=_GREY)
+        self.y -= 2
+
+    def _donut(self, chart: DonutChart, x: float, top: float, width: float, height: float) -> None:
+        self.rect(x, top - height, width, height, fill=_ZEBRA, stroke=_LINE)
+        self.text(x + 8, top - 13, one_line(chart.title, width - 16, 8.5, True), 8.5, "F2")
+        angles = donut_angles(chart)
+        if not angles:
+            data = one_line(chart.empty_text, width - 16, 8)
+            self.text(x + 8, top - 34, data, 8, "F3", _GREY)
+            return
+        outer, inner = 34.0, 21.0
+        cx, cy = x + 10 + outer, top - 24 - outer
+        for a0, a1, color in angles:
+            self.annular_sector(cx, cy, outer, inner, a0, a1, rgb(color))
+        total = sum(safe(v) for _, v, _ in chart.slices)
+        value = encode_winansi(fmt_chart(total))
+        self.text(cx - text_width(value, 11, True) / 2, cy - 1, value, 11, "F2")
+        unit = one_line(chart.unit, 2 * inner - 4, 6)
+        self.text(cx - text_width(unit, 6) / 2, cy - 9, unit, 6, "F1", _GREY)
+        lx = cx + outer + 12
+        legend_w = x + width - lx - 6
+        y = top - 28
+        for label, amount, color in chart.slices:
+            self.rect(lx, y - 7, 7, 7, fill=rgb(color))
+            figures = encode_winansi(f"{fmt_chart(amount)} · {share(amount, total)}")
+            fw = text_width(figures, 7, True)
+            self.text(lx + 11, y - 6.5, one_line(label, legend_w - fw - 16, 7), 7)
+            self.text(lx + legend_w - fw, y - 6.5, figures, 7, "F2")
+            y -= 11
+
     def line_chart(self, chart: LineChart) -> None:
         series = [s for s in chart.series if s.points]
         if not series and not chart.missing:
@@ -768,6 +886,8 @@ class _Layout:
             self.line_chart(block)
         elif isinstance(block, Diagram):
             self.diagram(block)
+        elif isinstance(block, DonutPanel):
+            self.donut_panel(block)
         else:
             self.bar_chart(block)
 
@@ -847,6 +967,11 @@ class _Layout:
                     self.block(block)
 
 
+def _donut_height(chart: DonutChart) -> float:
+    # Título + anillo (2 × 34 pt) o la leyenda si tiene más filas de las que caben al lado.
+    return max(100.0, 34.0 + len(chart.slices) * 11.0)
+
+
 def _diagram_height(rows: int) -> float:
     return min(max(rows, 1) * 58.0 + 10, TOP - BOTTOM - 120)
 
@@ -865,6 +990,8 @@ def _lead(block: BlockV2) -> float:
         return _diagram_height(block.rows) + 74
     if isinstance(block, Metrics):
         return 62
+    if isinstance(block, DonutPanel):
+        return max((_donut_height(c) for c in block.charts[:2]), default=30) + 8
     if isinstance(block, Table | KeyValues):
         return 50
     if isinstance(block, Subheading):

@@ -18,6 +18,7 @@ Qué hace con los datos:
   seudonimización configurada (AI_REDACT) antes de que nada salga del servidor.
 """
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -29,6 +30,7 @@ from sqlalchemy.orm import Session
 
 from app.ai.redaction import Redactor
 from app.core.exceptions import NotFoundError
+from app.core.redaction import REDACTED, redact_value
 from app.detection.rules import RULES_BY_ID
 from app.detection.text import clean
 from app.incidents.workflow import incident_key
@@ -56,6 +58,7 @@ from app.models.incident import (
 )
 from app.models.risk import RiskSnapshot
 from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
+from app.models.tool import ToolExecution
 from app.models.vulnerability import Vulnerability, VulnerabilityFinding
 from app.risk.config import RiskConfig
 from app.services.asset_context_service import (
@@ -84,6 +87,7 @@ RefType = Literal[
     "note",
     "vulnerability",
     "threat_match",
+    "tool_execution",
 ]
 
 # Prefijo del identificador corto de cada tipo (lo que ve el modelo).
@@ -104,6 +108,8 @@ _PREFIX: dict[str, str] = {
     "vulnerability": "F",
     # Fase 5C: match de inteligencia de amenazas con un dato local.
     "threat_match": "T",
+    # Fase 7C.2: resultado de una herramienta del Analyst Tool Engine (consola).
+    "tool_execution": "R",
 }
 
 # Claves de diccionarios no confiables que se seudonimizan como campo estructurado.
@@ -176,6 +182,8 @@ class AIContext:
     # Hay datos sustantivos sobre los que razonar (si no, no se llama al modelo).
     has_data: bool = True
     omitted: dict[str, int] = field(default_factory=dict)
+    # 7C-Security-Fix1: valores con aspecto de secreto sustituidos antes de enviar (consola).
+    redacted_values: int = 0
 
     def input_refs(self) -> list[dict[str, str]]:
         """Referencias de entrada que se guardan con el insight (sin el contenido)."""
@@ -1127,6 +1135,136 @@ class ContextBuilder:
         # Sin activos no hay nada que analizar: se responde sin llamar al modelo.
         ctx.has_data = total_assets > 0
         return ctx
+
+    # --- Fase 7C.2: Analyst Console -----------------------------------------------------
+
+    def console(
+        self,
+        executions: Sequence[ToolExecution],
+        *,
+        asset_id: UUID | None = None,
+        detection_id: UUID | None = None,
+        max_chars: int = 24_000,
+    ) -> AIContext:
+        """Contexto de la consola: resultados de herramientas + activo o detección elegidos.
+
+        Las ejecuciones llegan ya autorizadas por el servicio (propias o con tools:manage y
+        con salida). Cada una es un elemento citable "R<n>" cuyo id es el de la ejecución, así
+        la UI puede abrir exactamente la salida (y su SHA-256) que respalda cada hallazgo.
+
+        Presupuesto (Fase 7C.1, modelos open-weight con ventanas pequeñas): las referencias de
+        los resultados se reservan primero (son el motivo de la petición); después se lee el
+        activo o la detección y lo que queda de `max_chars` se reparte entre las salidas.
+        """
+        data: dict[str, Any] = {"generated_for": "console", "now": self._now}
+        # 7C-Security-Fix1, minimización: antes de que nada llegue al modelo se quitan los
+        # valores con aspecto de secreto (claves password/token/cookie..., Bearer, user:pass@
+        # en URLs) con el mismo redactor que los logs. Se cuentan para la revisión previa.
+        removed = [0]
+
+        def minimal(value: Any) -> Any:
+            before = json.dumps(value, ensure_ascii=False, default=str).count(REDACTED)
+            cleaned = redact_value(value)
+            after = json.dumps(cleaned, ensure_ascii=False, default=str).count(REDACTED)
+            removed[0] += max(0, after - before)
+            return cleaned
+
+        shells: list[tuple[ToolExecution, dict[str, Any]]] = []
+        for row in executions:
+            label = f"{row.tool_id}: {row.summary or row.target_label or 'resultado'}"
+            key = self._ref(
+                "tool_execution",
+                str(row.public_id),
+                label,
+                str(row.target_public_id) if row.target_type == "asset" else None,
+            )
+            if key is None:
+                break
+            shells.append(
+                (
+                    row,
+                    {
+                        "ref": key,
+                        "tool_id": row.tool_id,
+                        "category": row.category,
+                        "target": self._r.value("hostnames", self._text(row.target_label, 160)),
+                        "finished_at": row.finished_at,
+                        "summary": minimal(self._text(row.summary, 300)),
+                        "output_sha256": row.output_sha256,
+                        "truncated_at_source": row.truncated,
+                    },
+                )
+            )
+        asset_pk: int | None = None
+        detection_pk: int | None = None
+        snapshot_pk: int | None = None
+        if detection_id is not None:
+            found = self._session.execute(
+                select(Detection, Asset)
+                .join(Asset, Asset.id == Detection.asset_id)
+                .where(Detection.public_id == detection_id)
+            ).first()
+            if found is None:
+                raise NotFoundError("Detection not found")
+            detection, owner = found[0], found[1]
+            data["asset"] = self._asset_item(owner)
+            item = self._detection_item(detection, owner) or {}
+            item["details"] = self._safe(minimal(detection.details or {}))
+            data["detection"] = item
+            asset_pk, detection_pk = owner.id, detection.id
+        elif asset_id is not None:
+            asset = self._asset_by_public_id(asset_id)
+            data["asset"] = self._asset_item(asset)
+            data["active_detections"] = self._active_detections(asset, limit=6)
+            asset_pk = asset.id
+        if asset_pk is not None:
+            subject = self._session.get(Asset, asset_pk)
+            if subject is not None:
+                data["risk"] = self._risk_block(subject, contributions_limit=6)
+                snapshot_pk = self._latest_snapshot_pk(subject)
+        used = len(json.dumps(data, ensure_ascii=False, default=str)) + sum(
+            len(json.dumps(shell, ensure_ascii=False, default=str)) for _, shell in shells
+        )
+        # Mínimo por salida: aunque el resto ocupe mucho, cada resultado aporta algo (si no
+        # cabe ni eso, _bounded_output lo sustituye por un aviso y el modelo lo dice).
+        per_tool = max(800, (max_chars - used) // max(1, len(shells)))
+        results: list[dict[str, Any]] = []
+        for row, shell in shells:
+            output, truncated = self._bounded_output(minimal(row.output or {}), per_tool)
+            results.append({**shell, "truncated_for_model": truncated, "output": output})
+        data["tool_results"] = results
+        ctx = self._finish(
+            "console",
+            data,
+            asset_pk=asset_pk,
+            detection_pk=detection_pk,
+            risk_snapshot_pk=snapshot_pk,
+        )
+        ctx.has_data = bool(results) or asset_pk is not None
+        ctx.redacted_values = removed[0]
+        return ctx
+
+    def _bounded_output(self, output: dict[str, Any], limit: int) -> tuple[Any, bool]:
+        """Salida de una herramienta acotada a `limit` caracteres de JSON (Fase 7C.2).
+
+        Primero el saneado común (_safe: profundidad, claves, listas y longitud). Si aun así no
+        cabe, se reduce el número de elementos de las listas (10 → 5 → 3 → 1) y, en último caso,
+        se sustituye por un aviso: nunca se corta un JSON a mitad (el modelo lo malinterpretaría).
+        """
+        safe = self._safe(output)
+        for keep in (None, 5, 3, 1):
+            candidate = safe if keep is None else _shrink(safe, keep)
+            if len(json.dumps(candidate, ensure_ascii=False, default=str)) <= limit:
+                return candidate, keep is not None
+        return {"note": "salida demasiado grande para el modelo; revísela en la consola"}, True
+
+
+def _shrink(value: Any, keep: int) -> Any:
+    if isinstance(value, dict):
+        return {k: _shrink(v, keep) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_shrink(v, keep) for v in value[:keep]]
+    return value
 
 
 def _note_label(body: str) -> str:

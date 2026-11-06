@@ -8,7 +8,7 @@ El cliente nunca elige proveedor, URL, modelo ni parámetros: solo la entidad y,
 pregunta. La configuración es exclusiva del servidor y la clave nunca sale de él.
 """
 
-from typing import Annotated
+from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -21,6 +21,9 @@ from app.schemas.ai import (
     AIStatus,
     AnalyzeRequest,
     AskRequest,
+    ConsoleAssistRequest,
+    ConsoleContextPreview,
+    ConsoleContextRequest,
     IncidentAnalyzeRequest,
     InsightKindName,
     InsightList,
@@ -147,6 +150,81 @@ def analyze_vulnerability(
     Solo lectura: genera un insight y nunca cambia el finding ni consulta fuentes externas.
     """
     return service.analyze_vulnerability(finding_id, bool(body and body.refresh))
+
+
+# 7C-Security-Fix1: enviar resultados de herramientas a un modelo exige poder ejecutarlas
+# (tools:execute, analyst y admin) además de ai:use; un viewer no comparte datos con la IA
+# desde la consola.
+_CONSOLE_DEPS = [
+    Depends(require_permission(Permission.TOOLS_READ)),
+    Depends(require_permission(Permission.TOOLS_EXECUTE)),
+]
+_CONSOLE_ERRORS: dict[int | str, dict[str, Any]] = {
+    **_ANALYSIS_ERRORS,
+    409: {
+        "model": ErrorResponse,
+        "description": "AI not configured, console assistant disabled, model not on loopback or"
+        " data changed since the review (`ai_not_configured`, `ai_console_disabled`,"
+        " `ai_console_loopback_required`, `console_context_changed`)",
+    },
+    422: {
+        "model": ErrorResponse,
+        "description": "Execution without output or an action, invalid combination or missing"
+        " review (`console_execution_not_usable`, `console_assist_invalid`,"
+        " `console_context_review_required`)",
+    },
+}
+
+
+@router.post(
+    "/console/context",
+    response_model=ConsoleContextPreview,
+    responses=_CONSOLE_ERRORS,
+    dependencies=_CONSOLE_DEPS,
+)
+def console_context(
+    body: ConsoleContextRequest, service: Service, ctx: CurrentAuth
+) -> ConsoleContextPreview:
+    """7C-Security-Fix1: documento exacto que recibiría el modelo, para revisarlo antes.
+
+    No llama al modelo. Devuelve `context_sha256`, que el envío tiene que repetir con
+    `confirm_send=true`. Solo con un modelo en loopback (`ai_console_loopback_required`).
+    """
+    return service.console_context(
+        body.task,
+        body.execution_ids,
+        body.asset_id,
+        body.detection_id,
+        body.question,
+        can_read_all_executions=ctx.has(Permission.TOOLS_MANAGE),
+    )
+
+
+@router.post(
+    "/console/assist",
+    response_model=InsightRead,
+    responses=_CONSOLE_ERRORS,
+    dependencies=_CONSOLE_DEPS,
+)
+def console_assist(body: ConsoleAssistRequest, service: Service, ctx: CurrentAuth) -> InsightRead:
+    """Fase 7C.2: asistente de la Analyst Console sobre resultados de herramientas.
+
+    Solo lectura: resume, explica el riesgo, propone hipótesis o redacta un borrador de nota.
+    No ejecuta herramientas ni acciones. Las ejecuciones ajenas solo con tools:manage.
+    7C-Security-Fix1: exige la huella de la revisión (`context_sha256`) y `confirm_send`; si
+    los datos cambiaron, 409 `console_context_changed` y no se envía nada.
+    """
+    return service.console_assist(
+        body.task,
+        body.execution_ids,
+        body.asset_id,
+        body.detection_id,
+        body.question,
+        body.refresh,
+        can_read_all_executions=ctx.has(Permission.TOOLS_MANAGE),
+        context_sha256=body.context_sha256,
+        confirm_send=body.confirm_send,
+    )
 
 
 @router.post("/soc/analyze", response_model=InsightRead, responses=_ANALYSIS_ERRORS)

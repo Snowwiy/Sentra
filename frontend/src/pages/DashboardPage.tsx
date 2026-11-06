@@ -9,7 +9,10 @@ import {
   RecentDetectionsList,
   SummaryCharts,
 } from "../components/charts/DashboardCharts";
+import { ActivityChart, SeverityBars } from "../components/charts/ActivityChart";
 import { PostureCard } from "../components/charts/PostureCard";
+import { TopRiskCard } from "../components/charts/TopRiskCard";
+import { Icon, type IconName } from "../components/icons";
 import { RiskHistoryChart, type HistoryDays } from "../components/charts/RiskHistoryChart";
 import { AssetName, DeviceTypeCell } from "../components/DeviceIdentity";
 import { EventTable } from "../components/EventTable";
@@ -32,6 +35,30 @@ const STAT_CARDS: { key: StatusCard; label: string }[] = [
   { key: "offline", label: "Sin conexión" },
   { key: "unknown", label: "Desconocidos" },
 ];
+
+function KpiTile({
+  to,
+  icon,
+  label,
+  value,
+  hint,
+}: {
+  to: string;
+  icon: IconName;
+  label: string;
+  value: number;
+  hint: string;
+}) {
+  return (
+    <Link to={to} className="kpi">
+      <span className="kpi__label">
+        <Icon name={icon} size={15} /> {label}
+      </span>
+      <span className="kpi__value">{value}</span>
+      <span className="kpi__hint">{hint}</span>
+    </Link>
+  );
+}
 
 /** Dispositivos recientes que se muestran en el panel; la lista completa está en Red. */
 const RECENT_DEVICES = 5;
@@ -102,6 +129,7 @@ export function DashboardPage() {
     <div className="page">
       <div className="page__header">
         <div>
+          <p className="eyebrow">General</p>
           <h1>Panel</h1>
           <p className="muted small page__scope">
             {/* Eco del servidor (summary.site_id): el alcance que de verdad se aplicó. */}
@@ -121,8 +149,46 @@ export function DashboardPage() {
         </div>
       )}
 
+      {/* Fase 7C.4: indicadores operativos con icono, como en la presentación de Sentra. */}
+      <section className="kpis" aria-label="Resumen operativo">
+        <KpiTile
+          to={DEVICES_PATH}
+          icon="network"
+          label="Activos monitorizados"
+          value={kpis.assets.total}
+          hint={`${kpis.assets.by_method.agent} con agente · ${kpis.assets.by_method.discovered} descubiertos`}
+        />
+        <KpiTile to="/alerts" icon="alert" label="Alertas abiertas" value={kpis.active_alerts} hint="sin resolver" />
+        <KpiTile
+          to="/detections"
+          icon="detection"
+          label="Detecciones por revisar"
+          value={kpis.detections.active}
+          hint="activas, pendientes de análisis"
+        />
+        {kpis.incidents && (
+          <KpiTile
+            to="/incidents"
+            icon="incident"
+            label="Casos abiertos"
+            value={kpis.incidents.active}
+            hint={`${kpis.incidents.critical} críticos · ${kpis.incidents.unassigned} sin asignar`}
+          />
+        )}
+      </section>
+
+      {overviewData && (
+        <div className="dashboard-hero">
+          <div className="dashboard-hero__main">
+            <ActivityChart hours={overviewData.activity_24h ?? []} />
+            <SeverityBars bySeverity={kpis.detections.by_severity} />
+          </div>
+          <TopRiskCard data={overviewData.top_risk ?? null} />
+        </div>
+      )}
+
       {/* Cada tarjeta abre Red › Dispositivos con ese estado ya filtrado. */}
-      <section className="stats" aria-label="Resumen de estado">
+      <section className="stats stats--compact" aria-label="Resumen de estado">
         {STAT_CARDS.map(({ key, label }) => (
           <Link
             key={key}

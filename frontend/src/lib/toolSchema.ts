@@ -39,9 +39,10 @@ function unwrap(node: Schema, root: Schema): Schema {
 }
 
 const LABELS: Record<string, string> = {
-  asset_id: "Activo (id)",
-  detection_id: "Detección (id)",
-  incident_id: "Caso (id)",
+  // Fase 7C.3: estos tres se eligen con el selector contextual (nombre, IP, regla, INC-n).
+  asset_id: "Activo",
+  detection_id: "Detección",
+  incident_id: "Caso",
   investigation_id: "Investigación (id)",
   evidence_id: "Evidencia (id)",
   kind: "Tipo",

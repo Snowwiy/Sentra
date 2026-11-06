@@ -79,6 +79,23 @@ administrativa: [docs/discovery.md](discovery.md).
 Payloads and error format: [docs/agent-protocol.md](agent-protocol.md). Interactive docs at
 `/docs` in development.
 
+## Fase 7C (server 0.6.0)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/v1/lookup/{kind}?q=&ids=&site_id=&limit=&include_archived=` | Selectores contextuales: `asset`, `detection` (`monitoring:read`) o `incident` (`incidents:read`); dice si la coincidencia es `exact`, `ambiguous`, `partial` o `none` ([contextual-selectors.md](contextual-selectors.md)) |
+| POST | `/api/v1/ai/console/context` `{task, execution_ids, asset_id?, detection_id?, question?}` | 7C-Security-Fix1: documento exacto que recibiría el modelo y su `context_sha256`; no llama al modelo (`ai:use` + `tools:execute`, solo con modelo en loopback) ([fase-7c-security-fix1.md](fase-7c-security-fix1.md)) |
+| POST | `/api/v1/ai/console/assist` `{task, execution_ids, asset_id?, detection_id?, question?, context_sha256, confirm_send, refresh?}` | Asistente de la consola sobre resultados de herramientas: `summary`, `explain_risk`, `hypotheses`, `draft_note` (`ai:use` + `tools:execute`; solo lectura; exige la huella de la revisión) ([open-weight-model.md](open-weight-model.md)) |
+
+Cambios aditivos: `GET /ai/status` devuelve `model_source`, `system_prompt_mode`,
+`console_assist_available`, `console_max_executions` y (7C-Security-Fix1)
+`console_assist_reason`; los insights devuelven
+`result.hypotheses`, `result.draft`, `result.origin` y `tool_execution_ids`;
+`GET /dashboard/security-overview` devuelve `activity_24h` (24 horas con `detections` y
+`events`, `null` sin agentes) y `top_risk` (activo de mayor riesgo con sus factores); los
+candidatos de identidad pueden traer `same_dhcp_client_id` y `private_mac_rotation`; los
+informes nuevos llevan `template_version` 3.
+
 ## Fase 7B (server 0.5.0)
 
 | Method | Path | Description |

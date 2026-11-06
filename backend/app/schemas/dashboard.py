@@ -2,6 +2,8 @@ from datetime import datetime
 from typing import Literal
 from uuid import UUID
 
+from pydantic import Field
+
 from app.schemas.common import ResponseModel
 
 
@@ -164,6 +166,41 @@ class ExposedPortSummary(ResponseModel):
     top: list[ExposedPortCount]
 
 
+class ActivityHour(ResponseModel):
+    """Fase 7C.4: actividad de una hora (UTC) en las últimas 24 h."""
+
+    hour: datetime
+    # Detecciones nuevas (first_seen_at) en esa hora.
+    detections: int
+    # Eventos del sistema recibidos de agentes; None si no hay ningún agente en el alcance
+    # (no medido: no se dibuja como cero).
+    events: int | None
+
+
+class TopRiskFactor(ResponseModel):
+    label: str
+    category: str | None
+    points: float
+    rule_id: str | None
+    detection_id: UUID | None
+
+
+class TopRiskAsset(ResponseModel):
+    """Fase 7C.4: activo de mayor riesgo con sus factores (cada punto con su motivo)."""
+
+    asset_id: UUID
+    name: str
+    primary_ip: str
+    score: int
+    level: str
+    confidence: str
+    calculated_at: datetime | None
+    # Factores con puntos distintos de cero, de mayor a menor valor absoluto (máximo 6).
+    factors: list[TopRiskFactor]
+    # Resto de puntos que no entran en la lista (para que la suma cuadre a la vista).
+    other_points: float
+
+
 class SecurityOverview(ResponseModel):
     """GET /dashboard/security-overview (Fase 7A.7). Complementa a /dashboard/summary."""
 
@@ -177,3 +214,7 @@ class SecurityOverview(ResponseModel):
     risk_history: list[RiskHistoryPoint]
     new_devices: NewDevices
     exposed_ports: ExposedPortSummary
+    # Fase 7C.4 (campos nuevos; los clientes anteriores los ignoran).
+    activity_24h: list[ActivityHour] = Field(default_factory=list)
+    # None sin activos con riesgo calculado.
+    top_risk: TopRiskAsset | None = None

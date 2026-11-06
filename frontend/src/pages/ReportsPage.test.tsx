@@ -5,6 +5,7 @@ import { MemoryRouter, Route, Routes } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Report, ReportCatalog, ReportTypeInfo, Role } from "../api/types";
 import { WithRole } from "../test/auth";
+import { lookupItem, lookupResult } from "../test/lookup";
 import { GenerateReportLink } from "../components/reports/GenerateReportLink";
 import { ReportsPage } from "./ReportsPage";
 
@@ -105,6 +106,10 @@ beforeEach(() => {
     const method = init.method ?? "GET";
     const path = new URL(input, "http://localhost").pathname.replace("/api/v1", "");
     if (method === "GET" && path === "/reports/catalog") return json(200, CATALOG);
+    if (method === "GET" && path === "/lookup/incident") {
+      const url = new URL(input, "http://localhost");
+      return json(200, lookupResult(url, lookupItem({ kind: "incident", id: INCIDENT_ID, label: "INC-000007 · Ransomware" })));
+    }
     if (method === "GET" && path === "/reports") return json(200, { items: [report()], total: 1 });
     if (method === "POST" && path === "/reports/preview") {
       return json(200, {
@@ -172,7 +177,9 @@ describe("ReportsPage", () => {
   it("prefills the form from the query string and shows the preview", async () => {
     renderPage("analyst", `/reports?type=incident&incident_id=${INCIDENT_ID}`);
     expect(await screen.findByLabelText("Tipo de informe")).toHaveValue("incident");
-    expect(screen.getByLabelText("Incidentes")).toHaveValue(INCIDENT_ID);
+    // Fase 7C.3: el caso del enlace aparece por su número y título, no por el id.
+    const chosen = screen.getByRole("list", { name: "Incidentes elegidos" });
+    expect(await within(chosen).findByText("INC-000007 · Ransomware")).toBeInTheDocument();
     expect(screen.queryByLabelText("Rango")).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Vista previa" }));

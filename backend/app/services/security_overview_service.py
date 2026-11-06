@@ -17,14 +17,16 @@ from sqlalchemy import String, case, cast, func, select
 from sqlalchemy.dialects.postgresql import distinct_on
 from sqlalchemy.orm import Session
 
-from app.models.asset import Asset, AssetCriticality
+from app.models.asset import Asset, AssetCriticality, MonitoringMethod
 from app.models.detection import Detection
+from app.models.event import SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.incident import Incident, IncidentStatus
 from app.models.risk import AssetRisk, RiskLevel, RiskSnapshot
 from app.repositories.asset_repository import display_name_expr
 from app.risk.config import RiskConfig
 from app.schemas.dashboard import (
+    ActivityHour,
     ExposedPortCount,
     ExposedPortSummary,
     NewDevice,
@@ -34,6 +36,8 @@ from app.schemas.dashboard import (
     RiskHistoryPoint,
     SecurityOverview,
     SecurityPosture,
+    TopRiskAsset,
+    TopRiskFactor,
 )
 from app.services.dashboard_service import DETECTION_ACTIVE, DashboardService
 
@@ -83,6 +87,8 @@ class SecurityOverviewService(DashboardService):
             risk_history=self.risk_history(days, now),
             new_devices=self._new_devices(now),
             exposed_ports=self._exposed_ports(),
+            activity_24h=self.activity_24h(now),
+            top_risk=self.top_risk(),
         )
 
     def _method(self) -> PostureMethod:
@@ -319,3 +325,116 @@ class SecurityOverviewService(DashboardService):
                 for port, protocol, count in top
             ],
         )
+
+    # --- Fase 7C.4 -----------------------------------------------------------------------
+
+    def activity_24h(self, now: datetime) -> list[ActivityHour]:
+        """24 cubos horarios (UTC) con detecciones nuevas y eventos de agentes.
+
+        Cubos con ceros explícitos (una hora sin datos es 0 medido). Los eventos solo se miden
+        si el alcance tiene algún activo con agente: sin agentes la serie es None (no medido),
+        como en los informes v2, para no dibujar una línea plana engañosa.
+        """
+        end = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=1)
+        start = end - timedelta(hours=24)
+        hour = func.date_trunc("hour", Detection.first_seen_at)
+        detections = {
+            bucket: count
+            for bucket, count in self._session.execute(
+                select(hour, func.count())
+                .join(Asset, Asset.id == Detection.asset_id)
+                .where(
+                    self._current, Detection.first_seen_at >= start, Detection.first_seen_at < end
+                )
+                .group_by(hour)
+            )
+        }
+        agents = self._session.scalar(
+            select(func.count())
+            .select_from(Asset)
+            .where(self._current, Asset.monitoring_method == MonitoringMethod.AGENT)
+        )
+        events: dict[datetime, int] | None = None
+        if agents:
+            event_hour = func.date_trunc("hour", SystemEvent.occurred_at)
+            events = {
+                bucket: count
+                for bucket, count in self._session.execute(
+                    select(event_hour, func.count())
+                    .join(Asset, Asset.id == SystemEvent.asset_id)
+                    .where(
+                        self._current,
+                        SystemEvent.occurred_at >= start,
+                        SystemEvent.occurred_at < end,
+                    )
+                    .group_by(event_hour)
+                )
+            }
+        points: list[ActivityHour] = []
+        for offset in range(24):
+            bucket = start + timedelta(hours=offset)
+            points.append(
+                ActivityHour(
+                    hour=bucket,
+                    detections=_bucket(detections, bucket),
+                    events=_bucket(events, bucket) if events is not None else None,
+                )
+            )
+        return points
+
+    def top_risk(self) -> TopRiskAsset | None:
+        """Activo actual de mayor riesgo y los factores del Risk Engine que lo explican."""
+        row = self._session.execute(
+            select(Asset, AssetRisk)
+            .join(AssetRisk, AssetRisk.asset_id == Asset.id)
+            .where(self._current, AssetRisk.calculated_at.is_not(None))
+            .order_by(AssetRisk.score.desc(), AssetRisk.calculated_at.desc(), Asset.id)
+            .limit(1)
+        ).first()
+        if row is None:
+            return None
+        asset, risk = row[0], row[1]
+        relevant = [
+            c
+            for c in (risk.contributions or [])
+            if isinstance(c, dict) and float(c.get("points") or 0) != 0
+        ]
+        relevant.sort(key=lambda c: abs(float(c.get("points") or 0)), reverse=True)
+        factors = [
+            TopRiskFactor(
+                label=str(c.get("label") or c.get("factor") or "factor")[:200],
+                category=c.get("category"),
+                points=round(float(c.get("points") or 0), 1),
+                rule_id=c.get("rule_id"),
+                detection_id=_uuid_or_none(c.get("detection_id")),
+            )
+            for c in relevant[:TOP_RISK_FACTORS]
+        ]
+        other = sum(float(c.get("points") or 0) for c in relevant[TOP_RISK_FACTORS:])
+        return TopRiskAsset(
+            asset_id=asset.public_id,
+            name=asset.display_name,
+            primary_ip=asset.primary_ip,
+            score=risk.score,
+            level=risk.level.value,
+            confidence=risk.confidence.value,
+            calculated_at=risk.calculated_at,
+            factors=factors,
+            other_points=round(other, 1),
+        )
+
+
+TOP_RISK_FACTORS = 6
+
+
+def _bucket(values: dict[datetime, int] | None, bucket: datetime) -> int:
+    # date_trunc devuelve la hora en la zona de la sesión; dos datetime con zona y el mismo
+    # instante son iguales (y con el mismo hash), así que get() basta.
+    return int((values or {}).get(bucket, 0))
+
+
+def _uuid_or_none(value: object) -> UUID | None:
+    try:
+        return UUID(str(value)) if value else None
+    except ValueError:
+        return None

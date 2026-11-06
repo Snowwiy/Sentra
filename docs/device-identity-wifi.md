@@ -101,8 +101,18 @@ evidencia:
 | Evidencia | Fuerza |
 |---|---|
 | Mismo MachineGuid, mismo linaje de agente, asociación manual, MAC informada por el agente del otro registro | fuerte |
-| Misma MAC universal, MAC en el historial del otro | media |
-| Mismo nombre, misma IP, mismo fabricante, mismo SO | débil |
+| Misma MAC universal, MAC en el historial del otro, mismo identificador de cliente DHCP (7C.6) | media |
+| Mismo nombre, misma IP, mismo fabricante, mismo SO, rotación de MAC privada (7C.6) | débil |
+
+Fase 7C.6, sin SNMP:
+
+- `same_dhcp_client_id`: el mismo identificador de cliente DHCP (opción 61, guardado como
+  huella en `dhcp_leases.client_id`) en leases de los dos registros. Un client id opaco (DUID)
+  sobrevive al cambio de MAC privada; una imagen clonada sin sysprep puede repetirlo, por eso
+  es media y nunca fuerte. También sirve para encontrar candidatos en el mismo site.
+- `private_mac_rotation`: dos MAC privadas (localmente administradas) distintas cuyos
+  periodos de actividad no se solapan; si falta la última vez visto del más antiguo no se
+  afirma. Solo apoya una hipótesis: con un nombre igual sigue siendo débil.
 
 Las señales débiles solas nunca generan una sugerencia: IP, OUI, SO o parecido de nombres no
 bastan (`test_ip_name_or_os_alone_never_suggest_a_match`). Nada se fusiona solo.

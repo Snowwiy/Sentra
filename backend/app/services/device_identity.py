@@ -38,7 +38,7 @@ from app.discovery.device_types import ClassificationConfidence
 from app.discovery.probes import normalize_mac
 from app.models.asset import Asset
 from app.models.asset_lineage import AssetAgentLineage
-from app.models.dhcp import AssetIdentityHistory
+from app.models.dhcp import AssetIdentityHistory, DhcpLease
 from app.models.identity_link import AssetIdentityLink
 from app.models.inventory import AssetInventory
 from app.models.wlan import WlanAgentReport, WlanClient
@@ -85,10 +85,18 @@ STRENGTH: dict[str, str] = {
     "agent_reported_mac": "strong",
     "same_universal_mac": "medium",
     "mac_in_history": "medium",
+    # Fase 7C.6: mismo identificador de cliente DHCP (opción 61, guardado como huella) en
+    # leases de los dos registros. Un client id opaco (DUID, o uno que no es la propia MAC)
+    # sobrevive al cambio de MAC privada; una imagen clonada sin sysprep puede repetirlo, por
+    # eso es media y no fuerte, y nunca fusiona sola.
+    "same_dhcp_client_id": "medium",
     "same_device_name": "weak",
     "same_ip": "weak",
     "same_vendor": "weak",
     "same_os": "weak",
+    # Fase 7C.6: dos MACs privadas (localmente administradas) que nunca estuvieron activas a
+    # la vez: encaja con un equipo que rota su MAC. Es solo un apoyo de comportamiento.
+    "private_mac_rotation": "weak",
 }
 _RANK = {"strong": 0, "medium": 1, "weak": 2}
 # Clases de nombre (classify) que identifican a un equipo concreto; "generic" no.
@@ -418,6 +426,8 @@ class _Facts:
     mac_history: set[str]
     ip_history: set[str]
     name: str | None
+    # Fase 7C.6: huellas de client id DHCP de los leases asociados al activo.
+    client_ids: set[str] = field(default_factory=set)
 
 
 def _bare(name: str | None) -> str | None:
@@ -432,6 +442,17 @@ def _selected_name(asset: Asset) -> str | None:
                 return _bare(str(item.get("value")))
             return None
     return _bare(asset.hostname) if asset.is_managed else None
+
+
+def _rotated_private_macs(x: Asset, y: Asset) -> bool:
+    """Ambos con MAC privada distinta y periodos de actividad que no se solapan."""
+    if not x.mac_address or not y.mac_address or x.mac_address == y.mac_address:
+        return False
+    if mac_profile(x.mac_address).kind != "local" or mac_profile(y.mac_address).kind != "local":
+        return False
+    first, second = sorted((x, y), key=lambda a: a.first_seen_at)
+    # Sin last_seen no se sabe cuándo dejó de verse: no se afirma que no coincidieran.
+    return first.last_seen_at is not None and first.last_seen_at <= second.first_seen_at
 
 
 def _platform(asset: Asset) -> str | None:
@@ -616,6 +637,14 @@ class DeviceIdentityService:
         ):
             target = macs if kind == "mac" else addresses
             target[asset_id] |= {v.lower() for v in (old, new) if v}
+        client_ids: dict[int, set[str]] = {i: set() for i in ids}
+        for owner, client_id in self._session.execute(
+            select(DhcpLease.asset_id, DhcpLease.client_id).where(
+                DhcpLease.asset_id.in_(ids), DhcpLease.client_id.is_not(None)
+            )
+        ):
+            if owner is not None and client_id:
+                client_ids[owner].add(client_id)
         return {
             a.id: _Facts(
                 asset=a,
@@ -624,6 +653,7 @@ class DeviceIdentityService:
                 mac_history=macs[a.id] - ({a.mac_address} if a.mac_address else set()),
                 ip_history=addresses[a.id] | {a.primary_ip},
                 name=_selected_name(a),
+                client_ids=client_ids[a.id],
             )
             for a in assets
         }
@@ -669,6 +699,16 @@ class DeviceIdentityService:
             x.mac_address and x.mac_address in b.mac_history
         ):
             result.add("mac_in_history")
+        if a.client_ids & b.client_ids:
+            result.add(
+                "same_dhcp_client_id",
+                "El mismo identificador de cliente DHCP aparece en los leases de ambos",
+            )
+        if _rotated_private_macs(x, y):
+            result.add(
+                "private_mac_rotation",
+                "Dos MACs privadas que nunca estuvieron activas a la vez",
+            )
         if a.name and a.name == b.name:
             result.add("same_device_name", a.name)
         if a.ip_history & b.ip_history:
@@ -733,6 +773,15 @@ class DeviceIdentityService:
             conditions.append(
                 Asset.id.in_(
                     select(AssetAgentLineage.asset_id).where(AssetAgentLineage.agent_id.in_(agents))
+                )
+            )
+        if facts.client_ids:
+            conditions.append(
+                Asset.id.in_(
+                    select(DhcpLease.asset_id).where(
+                        DhcpLease.site_id == asset.site_id,
+                        DhcpLease.client_id.in_(sorted(facts.client_ids)),
+                    )
                 )
             )
         if facts.name:

@@ -1,4 +1,32 @@
-# Matriz de compatibilidad (Fase 7B y 7B-Fix1, Sentra 0.5.0)
+# Matriz de compatibilidad (Fase 7C, Sentra 0.6.0, 7C-Security-Fix1 0.6.1 y 7C-Fix2 0.6.2)
+
+7C-Fix2 (0.6.2): cambios aditivos. `ai_invalid_response` añade `details[0].reason`; un frontend
+0.6.1 sigue mostrando el mensaje general. `AI_REASONING_EFFORT` vacío por defecto (no se envía
+nada nuevo al proveedor). Sin migraciones; agente y sensor sin cambios.
+
+7C-Security-Fix1 (0.6.1): el asistente de la consola exige revisión previa
+(`POST /ai/console/context`) y la huella en `POST /ai/console/assist`; un frontend 0.6.0 contra
+un servidor 0.6.1 recibe `console_context_review_required` al pedir un análisis. Servidor y
+frontend se actualizan juntos (mismo parche). Sin migraciones; agente y sensor sin cambios.
+
+`0.6.0` es la versión del servidor y del frontend. Sin migraciones ni cambios de protocolo de
+agente o sensor: todos los cambios de 7C son aditivos.
+
+| Componente | Versión 7C | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.6.0 | Sí | `/lookup/{kind}`, `/ai/console/assist`, campos nuevos en `/ai/status` y `/dashboard/security-overview`, informes v3, dos señales de identidad. Sin migraciones (cabeza 0050) |
+| Frontend | 0.6.0 | Sí | Requiere servidor 0.6.0 para los selectores, el asistente y el panel nuevo |
+| Agente | 0.6.2 | No | |
+| Sensor | 0.7.0 | No | |
+
+| Cliente | Servidor 0.5.0 | Servidor 0.6.0 |
+| --- | --- | --- |
+| Frontend 0.5.0 | Completo | Compatible: ignora los campos nuevos |
+| Frontend 0.6.0 | Selectores y asistente fallan con 404; el panel nuevo se muestra vacío | Completo |
+| Agentes y sensores actuales | Compatibles | Compatibles |
+| Informes v1/v2 ya generados | Iguales | Iguales, byte a byte |
+
+# Fase 7B y 7B-Fix1 (Sentra 0.5.0)
 
 `0.5.0` es la versión del servidor y del frontend. La API sigue siendo `/api/v1` y los cambios
 de 7B son aditivos.

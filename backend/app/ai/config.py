@@ -15,7 +15,7 @@ un nombre "local" que resuelva fuera de loopback/AI_LOCAL_NETWORKS no recibe nin
 """
 
 import ipaddress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Literal
 from urllib.parse import urlsplit
 
@@ -107,6 +107,16 @@ class AIConfig:
     rate_global: int
     max_concurrent: int
     max_retries: int
+    # Fase 7C.1: compatibilidad con modelos open-weight y asistente de la consola.
+    system_prompt_mode: str = "system"
+    max_prompt_chars: int = 24_000
+    console_assist_enabled: bool = False
+    console_max_executions: int = 6
+    # 7C-Fix2: `reasoning_effort` para el servidor; "" = no se envía.
+    reasoning_effort: str = ""
+    # De dónde sale el nombre del modelo: AI_MODEL ("settings") o el modelo local activo del
+    # gestor 4J.2 ("local_manager"). Solo informativo: el destino es siempre AI_BASE_URL.
+    model_source: str = "settings"
 
     def __repr__(self) -> str:
         # Nunca imprimir la clave, ni por accidente en un log de depuración.
@@ -145,6 +155,11 @@ class AIConfig:
             rate_global=settings.ai_rate_limit_global_per_minute,
             max_concurrent=settings.ai_max_concurrent,
             max_retries=settings.ai_max_retries,
+            system_prompt_mode=settings.ai_system_prompt_mode,
+            max_prompt_chars=settings.ai_max_prompt_chars,
+            console_assist_enabled=settings.ai_console_assist_enabled,
+            console_max_executions=settings.ai_console_max_executions,
+            reasoning_effort=settings.ai_reasoning_effort,
         )
 
     @property
@@ -170,6 +185,38 @@ class AIConfig:
         if not self.base_url or not self.model:
             return "IA no configurada: faltan AI_BASE_URL o AI_MODEL."
         return self.destination_blocked_reason()
+
+    def console_destination_blocked_reason(self) -> str | None:
+        """7C-Security-Fix1: el asistente de la consola solo habla con un modelo en loopback.
+
+        La salida de herramientas puede llevar rutas, cuentas o direcciones internas: por
+        política (decisión de Jesus del 2026-10-29) no sale del propio servidor, ni siquiera
+        hacia una LAN autorizada con AI_LOCAL_NETWORKS ni hacia un nombre de AI_LOCAL_HOSTS.
+        Se decide por la URL (sin DNS): una IP literal de loopback o "localhost". Además el
+        proveedor se crea con `console_provider_config`, que solo acepta una IP conectada de
+        loopback (anti DNS rebinding).
+        """
+        if not self.base_url:
+            return "IA no configurada: falta AI_BASE_URL."
+        host = _url_host(self.base_url)
+        if host == "localhost" or host.endswith(".localhost"):
+            return None
+        address = literal_ip(host)
+        if address is not None and address.is_loopback:
+            return None
+        return (
+            "El asistente de la consola solo usa un modelo en este mismo servidor: AI_BASE_URL "
+            "debe apuntar a loopback (127.0.0.1, ::1 o localhost)."
+        )
+
+    def console_provider_config(self) -> "AIConfig":
+        """Configuración del proveedor para la consola: local, sin redes LAN ni externos.
+
+        Con `local_networks` vacío, la comprobación de la IP conectada del proveedor
+        (`is_authorized_local_ip`) solo acepta loopback; `allow_external=False` impide que un
+        destino no local reciba nada. No hay fallback: si falla, el asistente devuelve error.
+        """
+        return replace(self, local_networks=(), allow_external=False, location="local")
 
     def destination_blocked_reason(self) -> str | None:
         """Motivo por el que AI_BASE_URL no puede recibir datos, o None si está permitido."""
