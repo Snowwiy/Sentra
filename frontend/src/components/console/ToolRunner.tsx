@@ -1,8 +1,16 @@
 import { useMemo, useState, type FormEvent } from "react";
 import { toolsApi } from "../../api/sentra7b";
-import type { ToolExecutionOut, ToolOut } from "../../api/types";
+import type { LookupKind, ToolExecutionOut, ToolOut } from "../../api/types";
 import { errorMessage } from "../../lib/format";
+import { EntityPicker } from "../lookup/EntityPicker";
 import { buildInput, fieldsOf, initialValues, type FieldValues } from "../../lib/toolSchema";
+
+/** Fase 7C.3: campos de id que se eligen con el selector contextual en vez de teclearlos. */
+export const PICKER_FIELDS: Record<string, LookupKind> = {
+  asset_id: "asset",
+  detection_id: "detection",
+  incident_id: "incident",
+};
 
 export const CATEGORY_LABELS: Record<string, string> = {
   read: "Lectura",
@@ -62,6 +70,20 @@ export function ToolRunner({
           const id = `tool-${tool.id}-${field.name}`;
           const value = values[field.name];
           const set = (next: string | boolean) => setValues((current) => ({ ...current, [field.name]: next }));
+          const pickerKind = field.kind === "text" ? PICKER_FIELDS[field.name] : undefined;
+          if (pickerKind) {
+            return (
+              <EntityPicker
+                key={field.name}
+                kind={pickerKind}
+                label={field.label}
+                value={String(value ?? "")}
+                required={field.required}
+                siteId={siteId}
+                onChange={(id) => set(id)}
+              />
+            );
+          }
           if (field.kind === "boolean") {
             return (
               <label key={field.name} className="checkbox small">

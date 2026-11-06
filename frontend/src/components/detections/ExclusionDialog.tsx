@@ -4,6 +4,7 @@ import type { DetectionExclusionField } from "../../api/types";
 import { EXCLUSION_FIELD_LABELS } from "../../lib/endpoint";
 import { allowedFields, policyErrors, RULE_POLICIES, type ExclusionDraft } from "../../lib/exclusionPolicy";
 import { errorMessage, toLocalInputValue } from "../../lib/format";
+import { EntityPicker } from "../lookup/EntityPicker";
 import { Modal } from "../Modal";
 
 const RULE_ID = /^[A-Z0-9-]{3,64}$/;
@@ -192,13 +193,16 @@ export function ExclusionDialog({
           <span>Justificación</span>
           <textarea className="input" rows={2} value={reason} maxLength={500} onChange={(e) => setReason(e.target.value)} disabled={busy} />
         </label>
-        <label className="form-field">
-          <span>
-            {policy?.assetRequired ? "Equipo (identificador, obligatorio)" : "Solo para el equipo (identificador, opcional)"}
-          </span>
-          <input className="input mono" value={assetId} onChange={(e) => setAssetId(e.target.value)} disabled={busy} />
-          {assetLabel && assetId === initial.assetId && <span className="muted small">{assetLabel}</span>}
-        </label>
+        {/* Fase 7C.3: el equipo se elige por nombre, IP o MAC; nunca se teclea su id. */}
+        <EntityPicker
+          kind="asset"
+          label={policy?.assetRequired ? "Equipo" : "Solo para el equipo (opcional)"}
+          required={policy?.assetRequired}
+          value={assetId}
+          initialLabel={initial.assetId && assetLabel ? assetLabel : undefined}
+          onChange={(id) => setAssetId(id)}
+          disabled={busy}
+        />
         <label className="form-field">
           <span>{policy ? `Caduca (obligatorio, máximo ${policy.maxDays} días)` : "Caduca (opcional)"}</span>
           <input className="input" type="datetime-local" value={expires} onChange={(e) => setExpires(e.target.value)} disabled={busy} />

@@ -2,12 +2,13 @@ import { useCallback, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import { reportsApi } from "../api/sentra";
-import type { Report, ReportCatalog, ReportPreview, ReportStatus, ReportTypeInfo } from "../api/types";
+import type { LookupKind, Report, ReportCatalog, ReportPreview, ReportStatus, ReportTypeInfo } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
 import { config } from "../config";
 import { CopyButton } from "../components/CopyButton";
 import { FilterSelect, Pager, SearchInput, Toolbar } from "../components/ListControls";
 import { DownloadReportButton, ReportStatusBadge } from "../components/reports/ReportViews";
+import { EntityMultiPicker } from "../components/lookup/EntityMultiPicker";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { errorMessage, formatBytes, formatDateTime, formatRelative } from "../lib/format";
 import {
@@ -25,6 +26,7 @@ import {
   MULTI_FILTERS,
   multiFilterValues,
   newReportKey,
+  parseIdList,
   parsePrefill,
   RANGE_PRESETS,
   REPORT_STATUS_LABELS,
@@ -114,6 +116,13 @@ function PreviewPanel({ preview }: { preview: ReportPreview }) {
   );
 }
 
+/** Fase 7C.3: filtros de alcance que se eligen por nombre en vez de pegar ids. */
+const PICKER_FILTERS: Partial<Record<string, LookupKind>> = {
+  asset_ids: "asset",
+  incident_ids: "incident",
+  detection_ids: "detection",
+};
+
 function FilterFields({
   type,
   form,
@@ -127,7 +136,17 @@ function FilterFields({
   const required = new Set(type.required_filters);
   return (
     <>
-      {ID_FILTERS.filter((key) => allowed.has(key)).map((key) => (
+      {ID_FILTERS.filter((key) => allowed.has(key) && PICKER_FILTERS[key]).map((key) => (
+        <EntityMultiPicker
+          key={key}
+          kind={PICKER_FILTERS[key]!}
+          label={FILTER_LABELS[key] ?? key}
+          required={required.has(key)}
+          values={parseIdList(form.ids[key] ?? "")}
+          onChange={(ids) => update({ ids: { ...form.ids, [key]: ids.join(", ") } })}
+        />
+      ))}
+      {ID_FILTERS.filter((key) => allowed.has(key) && !PICKER_FILTERS[key]).map((key) => (
         <label key={key} className="form-field">
           <span className="muted small">
             {FILTER_LABELS[key]} (IDs){required.has(key) ? " · obligatorio" : ""}
@@ -183,6 +202,20 @@ function FilterFields({
         </label>
       )}
     </>
+  );
+}
+
+/** Fase 7C.5: qué incluye el documento según la versión de plantilla del tipo. */
+function ReportContents({ type }: { type: ReportTypeInfo }) {
+  const v3 = type.template_version >= 3;
+  return (
+    <span className="report-contents small" aria-label="Contenido del informe">
+      <span className="chip">{type.audience === "executive" ? "Ejecutivo" : "Técnico"}</span>
+      {v3 && <span className="chip chip--accent">Panel de gráficas circulares</span>}
+      {type.template_version >= 2 && <span className="chip">Barras y tendencias</span>}
+      <span className="chip">Resumen ejecutivo + detalle técnico</span>
+      <span className="chip">SHA-256 reproducible</span>
+    </span>
   );
 }
 
@@ -266,6 +299,17 @@ function GenerateForm({ catalog, onCreated }: { catalog: ReportCatalog; onCreate
           El tipo de informe indicado en el enlace no está disponible; se muestra el primero del catálogo.
         </div>
       )}
+      <ol className="report-steps" aria-label="Pasos">
+        <li>
+          <span className="report-steps__n">1</span> Tipo
+        </li>
+        <li>
+          <span className="report-steps__n">2</span> Alcance
+        </li>
+        <li>
+          <span className="report-steps__n">3</span> Formato y entrega
+        </li>
+      </ol>
       <div className="detail-grid">
         <label className="form-field">
           <span className="muted small">Tipo de informe</span>
@@ -283,6 +327,7 @@ function GenerateForm({ catalog, onCreated }: { catalog: ReportCatalog; onCreate
             ))}
           </select>
           {type.description && <span className="muted small">{type.description}</span>}
+          <ReportContents type={type} />
         </label>
         <label className="form-field">
           <span className="muted small">Formato</span>

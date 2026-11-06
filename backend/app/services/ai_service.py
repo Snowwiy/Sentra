@@ -32,8 +32,15 @@ from app.ai.context import AIContext, ContextBuilder
 from app.ai.freshness import data_version
 from app.ai.intent import resolve_scope
 from app.ai.openai_compat import OpenAICompatibleProvider, ProviderHealth
-from app.ai.output import ground, insufficient_result, parse_json
-from app.ai.prompts import TEMPLATES, InsightKind
+from app.ai.output import (
+    answer_content,
+    ground,
+    ground_console,
+    insufficient_result,
+    parse_console_json,
+    parse_json,
+)
+from app.ai.prompts import PRIVATE_KINDS, TEMPLATES, InsightKind
 from app.ai.provider import (
     AIBusyError,
     AIError,
@@ -46,22 +53,99 @@ from app.ai.provider import (
 )
 from app.ai.redaction import Redactor
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, RateLimitedError
+from app.core.exceptions import NotFoundError, RateLimitedError, SentraError
 from app.core.rate_limit import Limiter, RateLimiter, make_limiter
 from app.models.ai import AIInsight
 from app.models.asset import Asset
 from app.models.detection import Detection
 from app.models.incident import Incident
 from app.models.risk import RiskSnapshot
+from app.models.tool import ToolExecution
 from app.models.vulnerability import VulnerabilityFinding
 from app.risk.config import RiskConfig
-from app.schemas.ai import AIProviderState, AIStatus, InsightList, InsightRead, InsightResult
+from app.schemas.ai import (
+    AIProviderState,
+    AIStatus,
+    ConsoleContextItem,
+    ConsoleContextPreview,
+    InsightList,
+    InsightRead,
+    InsightResult,
+)
 from app.services import audit_service
 from app.services.audit_service import Actor
 
 logger = logging.getLogger("sentra.ai")
 
 ProviderFactory = Callable[[AIConfig], AIProvider]
+
+# Fase 7C.2: tareas del asistente de la consola -> tipo de insight.
+_CONSOLE_TASKS = {
+    "summary": InsightKind.CONSOLE_SUMMARY,
+    "explain_risk": InsightKind.CONSOLE_RISK,
+    "hypotheses": InsightKind.CONSOLE_HYPOTHESES,
+    "draft_note": InsightKind.CONSOLE_DRAFT,
+}
+CONSOLE_KINDS = frozenset(_CONSOLE_TASKS.values())
+# Margen para la plantilla del usuario (task, pregunta, claves JSON) sobre el presupuesto.
+_PROMPT_OVERHEAD = 800
+# 7C-Fix2: motivos de ai_invalid_response que no se reintentan (ver _infer).
+_NO_RETRY = frozenset({"truncated", "truncated_reasoning"})
+
+
+class ConsoleAssistDisabledError(SentraError):
+    # AI_CONSOLE_ASSIST_ENABLED=false: la IA puede estar activa para AI Insights.
+    status_code = 409
+    code = "ai_console_disabled"
+
+
+class ConsoleExecutionNotUsableError(SentraError):
+    # La ejecución no terminó bien (sin salida) o no es una lectura/investigación.
+    status_code = 422
+    code = "console_execution_not_usable"
+
+
+class ConsoleAssistRequestError(SentraError):
+    status_code = 422
+    code = "console_assist_invalid"
+
+
+class ConsoleLoopbackRequiredError(SentraError):
+    # 7C-Security-Fix1: AI_BASE_URL no es loopback; la consola no envía nada fuera del servidor.
+    status_code = 409
+    code = "ai_console_loopback_required"
+
+
+class ConsoleContextReviewRequiredError(SentraError):
+    # 7C-Security-Fix1: falta la revisión previa (context_sha256) o la confirmación explícita.
+    status_code = 422
+    code = "console_context_review_required"
+
+
+class ConsoleContextChangedError(SentraError):
+    # Los datos cambiaron desde la revisión: no se envía algo distinto de lo revisado.
+    status_code = 409
+    code = "console_context_changed"
+
+
+def console_digest(kind: InsightKind, data: dict[str, Any], question: str | None) -> str:
+    """Huella de lo que recibe el modelo en la consola (7C-Security-Fix1).
+
+    Cubre la tarea, la versión del prompt, la pregunta (tal como se envía) y el documento de
+    datos completo salvo la hora de la petición ("now"), que cambia en cada llamada. Cualquier
+    otro cambio (un resultado, el estado del activo, una contribución de riesgo) cambia la
+    huella y obliga a revisar de nuevo.
+    """
+    document = {k: v for k, v in data.items() if k != "now"}
+    payload = {
+        "task": kind.value,
+        "prompt": TEMPLATES[kind].name,
+        "question": question,
+        "data": document,
+    }
+    raw = json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
 
 _INCIDENT_TASKS = {
     "summary": InsightKind.INCIDENT_SUMMARY,
@@ -184,6 +268,8 @@ class AIInsightService:
         self._runtime = runtime
         self._factory = provider_factory
         self._requester = requester
+        # 7C-Fix2: diagnóstico (sin contenido) de la última respuesta inutilizable.
+        self._invalid: dict[str, Any] = {}
 
     # --- Estado -----------------------------------------------------------------------------
 
@@ -215,7 +301,20 @@ class AIInsightService:
             max_context_items=c.max_context_items,
             rate_limit_per_user_per_minute=c.rate_per_user,
             prompt_versions={k.value: t.name for k, t in TEMPLATES.items()},
+            model_source="local_manager" if c.model_source == "local_manager" else "settings",
+            system_prompt_mode=(
+                "user_prefix" if c.system_prompt_mode == "user_prefix" else "system"
+            ),
+            console_assist_available=reason is None and self._console_reason() is None,
+            console_max_executions=c.console_max_executions,
+            console_assist_reason=reason or self._console_reason(),
         )
+
+    def _console_reason(self) -> str | None:
+        """Por qué el asistente de la consola no se puede usar (None = utilizable)."""
+        if not self._config.console_assist_enabled:
+            return "El asistente de la consola está desactivado (AI_CONSOLE_ASSIST_ENABLED=false)."
+        return self._config.console_destination_blocked_reason()
 
     # --- Tipos de insight -------------------------------------------------------------------
 
@@ -279,6 +378,217 @@ class AIInsightService:
             refresh=refresh,
         )
 
+    def _console_request(
+        self,
+        task: str,
+        execution_ids: list[UUID],
+        asset_id: UUID | None,
+        detection_id: UUID | None,
+        can_read_all_executions: bool,
+    ) -> tuple[InsightKind, list[ToolExecution], int, str, str]:
+        """Validaciones comunes de revisión y envío: (tipo, ejecuciones, presupuesto, entidad,
+        huella de versión)."""
+        self._require_available()
+        config = self._config
+        if not config.console_assist_enabled:
+            raise ConsoleAssistDisabledError(
+                "El asistente de la consola está desactivado (AI_CONSOLE_ASSIST_ENABLED=false)."
+            )
+        blocked = config.console_destination_blocked_reason()
+        if blocked is not None:
+            self._audit(
+                "ai_console_blocked",
+                audit_service.FAILURE,
+                "console",
+                {"reason": ConsoleLoopbackRequiredError.code, "location": config.location},
+            )
+            raise ConsoleLoopbackRequiredError(blocked)
+        unique = list(dict.fromkeys(execution_ids))
+        if len(unique) > config.console_max_executions:
+            raise ConsoleAssistRequestError(
+                f"Como máximo {config.console_max_executions} resultados por análisis."
+            )
+        if not unique and asset_id is None and detection_id is None:
+            raise ConsoleAssistRequestError(
+                "Elige al menos un resultado de herramienta, un activo o una detección."
+            )
+        if asset_id is not None and detection_id is not None:
+            raise ConsoleAssistRequestError("Indica un activo o una detección, no ambos.")
+        rows = self._console_executions(unique, can_read_all_executions)
+        kind = _CONSOLE_TASKS[task]
+        template = TEMPLATES[kind]
+        # Presupuesto del documento de datos: AI_MAX_PROMPT_CHARS menos las instrucciones.
+        budget = max(2_000, config.max_prompt_chars - len(template.system()) - _PROMPT_OVERHEAD)
+        hashes = "|".join(f"{r.public_id}:{r.output_sha256}" for r in rows)
+        entity = (
+            f"console:{asset_id or ''}:{detection_id or ''}:"
+            + hashlib.sha256(hashes.encode()).hexdigest()[:16]
+        )
+        return kind, rows, budget, entity, hashes
+
+    def console_context(
+        self,
+        task: str,
+        execution_ids: list[UUID],
+        asset_id: UUID | None,
+        detection_id: UUID | None,
+        question: str | None,
+        *,
+        can_read_all_executions: bool,
+    ) -> ConsoleContextPreview:
+        """7C-Security-Fix1: lo que recibiría el modelo, para revisarlo ANTES de enviarlo.
+
+        No llama al modelo ni guarda nada salvo la auditoría. El documento se construye igual
+        que en el envío (mismas lecturas, minimización y seudonimización), así que su huella
+        coincide con la del envío mientras los datos no cambien.
+        """
+        kind, rows, budget, entity, _ = self._console_request(
+            task, execution_ids, asset_id, detection_id, can_read_all_executions
+        )
+        normalized = " ".join(question.split()) if question else None
+        ctx = self._builder(datetime.now(UTC)).console(
+            rows, asset_id=asset_id, detection_id=detection_id, max_chars=budget
+        )
+        sent_question = ctx.redactor.text(normalized) if normalized else None
+        digest = console_digest(kind, ctx.data, sent_question)
+        document = json.loads(
+            json.dumps(
+                {k: v for k, v in ctx.data.items() if k != "now"},
+                ensure_ascii=False,
+                default=str,
+            )
+        )
+        chars = len(json.dumps(ctx.data, ensure_ascii=False, default=str))
+        self._audit(
+            "ai_console_context_reviewed",
+            audit_service.SUCCESS,
+            entity,
+            {
+                "kind": kind.value,
+                "context_sha256": digest,
+                "execution_ids": [str(r.public_id) for r in rows],
+                "asset_id": str(asset_id) if asset_id else None,
+                "detection_id": str(detection_id) if detection_id else None,
+                "context_items": ctx.items,
+                "chars": chars,
+                "redacted_values": ctx.redacted_values,
+                "destination": "loopback",
+            },
+        )
+        return ConsoleContextPreview(
+            task=task,
+            context_sha256=digest,
+            model=self._config.model,
+            items=[
+                ConsoleContextItem(ref=key, type=ref.type, label=ref.label)
+                for key, ref in ctx.refs.items()
+            ],
+            redacted_values=ctx.redacted_values,
+            pseudonymized=sorted(self._config.effective_redact),
+            chars=chars,
+            question=sent_question,
+            document=document,
+        )
+
+    def console_assist(
+        self,
+        task: str,
+        execution_ids: list[UUID],
+        asset_id: UUID | None,
+        detection_id: UUID | None,
+        question: str | None,
+        refresh: bool,
+        *,
+        can_read_all_executions: bool,
+        context_sha256: str | None = None,
+        confirm_send: bool = False,
+    ) -> InsightRead:
+        """Fase 7C.2: asistencia contextual de la Analyst Console. Solo lectura.
+
+        El modelo recibe resultados de herramientas que el analista YA puede ver (propios, o de
+        otros solo con tools:manage, el mismo criterio que GET /tools/executions) y el activo o
+        la detección del workspace. Nunca ejecuta herramientas ni acciones: el resultado es un
+        insight validado (grounding) con hipótesis y borrador etiquetados como del modelo.
+
+        7C-Security-Fix1: solo con un modelo en loopback, solo tras revisar el documento
+        (`context_sha256` de POST /ai/console/context) y con `confirm_send`. Si lo que se
+        enviaría ya no coincide con lo revisado, no se envía nada (409).
+        """
+        kind, rows, budget, entity, hashes = self._console_request(
+            task, execution_ids, asset_id, detection_id, can_read_all_executions
+        )
+        if not confirm_send or context_sha256 is None:
+            raise ConsoleContextReviewRequiredError(
+                "Revisa los datos que se enviarán al modelo (POST /ai/console/context) y "
+                "confirma el envío."
+            )
+        normalized = " ".join(question.split()) if question else None
+        reviewed = context_sha256
+
+        def verify(ctx: AIContext) -> dict[str, Any]:
+            sent_question = ctx.redactor.text(normalized) if normalized else None
+            digest = console_digest(kind, ctx.data, sent_question)
+            details = {
+                "context_sha256": digest,
+                "execution_ids": [str(r.public_id) for r in rows],
+                "redacted_values": ctx.redacted_values,
+                "destination": "loopback",
+                "reviewed": True,
+            }
+            if digest != reviewed:
+                self._audit(
+                    "ai_console_context_mismatch",
+                    audit_service.FAILURE,
+                    entity,
+                    {**details, "reviewed": False, "reviewed_sha256": reviewed},
+                )
+                raise ConsoleContextChangedError(
+                    "Los datos cambiaron desde la revisión: revísalos de nuevo antes de enviar."
+                )
+            return details
+
+        return self._run(
+            kind,
+            lambda b: b.console(
+                rows, asset_id=asset_id, detection_id=detection_id, max_chars=budget
+            ),
+            entity=entity,
+            refresh=refresh,
+            question=normalized,
+            extra_version=hashes,
+            verify=verify,
+            provider_config=self._config.console_provider_config(),
+        )
+
+    def _console_executions(self, ids: list[UUID], read_all: bool) -> list[ToolExecution]:
+        if not ids:
+            return []
+        rows = {
+            r.public_id: r
+            for r in self._session.scalars(
+                select(ToolExecution).where(ToolExecution.public_id.in_(ids))
+            )
+        }
+        ordered: list[ToolExecution] = []
+        for public_id in ids:
+            row = rows.get(public_id)
+            # Ajena sin tools:manage = 404, igual que GET /tools/executions/{id}: no se revela
+            # que existe.
+            if row is None or (not read_all and row.actor_user_id != self._requester.user_id):
+                raise NotFoundError("Tool execution not found")
+            if row.status != "succeeded" or row.output is None:
+                raise ConsoleExecutionNotUsableError(
+                    "Solo se pueden analizar ejecuciones terminadas con salida."
+                )
+            if row.category == "action":
+                # Una acción confirmada tiene salida, pero describe lo que se hizo, no
+                # evidencia observada; se analiza su efecto con una lectura posterior.
+                raise ConsoleExecutionNotUsableError(
+                    "Las acciones no se analizan con la IA; usa una herramienta de lectura."
+                )
+            ordered.append(row)
+        return ordered
+
     def ask(
         self,
         question: str,
@@ -341,8 +651,8 @@ class AIInsightService:
             TEMPLATES[kind].name,
             sorted(c.effective_redact),
             question.lower() if question else None,
-            # Las preguntas son privadas: la caché de Ask no se comparte entre usuarios.
-            self._requester.user_id if kind is InsightKind.ASK else None,
+            # Las preguntas (y la consola, Fase 7C) son privadas: su caché no se comparte.
+            self._requester.user_id if kind in PRIVATE_KINDS else None,
         ]
         return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
@@ -355,23 +665,23 @@ class AIInsightService:
         refresh: bool,
         question: str | None = None,
         resolved_by: str | None = None,
+        extra_version: str | None = None,
+        verify: Callable[[AIContext], dict[str, Any]] | None = None,
+        provider_config: AIConfig | None = None,
     ) -> InsightRead:
         self._require_available()
         config = self._config
         now = datetime.now(UTC)
-        redactor = Redactor(config.effective_redact)
-        builder = ContextBuilder(
-            self._session,
-            RiskConfig.from_settings(self._settings),
-            timedelta(seconds=self._settings.heartbeat_timeout_seconds),
-            config.max_context_items,
-            redactor,
-            now,
-        )
-        ctx = build(builder)  # 404 si la entidad no existe (antes de auditar nada).
+        ctx = build(self._builder(now))  # 404 si la entidad no existe (antes de auditar nada).
+        # 7C-Security-Fix1: la consola comprueba que lo construido es lo que se revisó.
+        reviewed = verify(ctx) if verify is not None else {}
         version = data_version(
             self._session, ctx.asset_pk, ctx.detection_pk, ctx.incident_pk, ctx.vulnerability_pk
         )
+        if extra_version is not None:
+            # Fase 7C.2: la consola depende también de las salidas de herramientas (inmutables
+            # una vez terminadas): sus hashes entran en la huella.
+            version = _console_version(version, extra_version)
         cache_key = self._cache_key(kind, entity, version, question)
         base = {
             "kind": kind.value,
@@ -384,6 +694,7 @@ class AIInsightService:
         if question is not None:
             base["question_chars"] = len(question)
             base["resolved_by"] = resolved_by
+        base.update(reviewed)
 
         if not refresh:
             cached = self._session.scalar(
@@ -410,15 +721,28 @@ class AIInsightService:
             # ocurre sin ocupar una conexión del pool.
             self._audit("ai_analysis_requested", audit_service.SUCCESS, entity, base)
             try:
-                outcome = self._infer(kind, ctx, question)
+                outcome = self._infer(kind, ctx, question, provider_config)
             except AIError as exc:
                 self._session.rollback()
+                # 7C-Fix2: con ai_invalid_response, el motivo y los tamaños (sin contenido).
+                diagnosis: dict[str, Any] = {}
+                if isinstance(exc, AIInvalidResponseError):
+                    # Un cuerpo HTTP inválido falla en el proveedor, antes de _infer: solo motivo.
+                    diagnosis = self._invalid or {"reason": exc.reason}
                 self._audit(
-                    "ai_analysis_failed", audit_service.FAILURE, entity, {**base, "error": exc.code}
+                    "ai_analysis_failed",
+                    audit_service.FAILURE,
+                    entity,
+                    {**base, "error": exc.code, **diagnosis},
                 )
                 logger.warning(
                     "ai analysis failed",
-                    extra={"kind": kind.value, "error": exc.code, "model": config.model},
+                    extra={
+                        "kind": kind.value,
+                        "error": exc.code,
+                        "model": config.model,
+                        **{f"ai_{k}": v for k, v in diagnosis.items()},
+                    },
                 )
                 raise
         finally:
@@ -440,7 +764,7 @@ class AIInsightService:
             provider=metrics["provider"],
             model=metrics["model"],
             result=result,
-            input_refs=ctx.input_refs(),
+            input_refs=_input_refs(ctx),
             evidence_count=len(result["evidence_refs"]),
             dropped_refs=result["dropped_refs"],
             context_items=ctx.items,
@@ -488,6 +812,16 @@ class AIInsightService:
         )
         return self._read(insight, cached=False)
 
+    def _builder(self, now: datetime) -> ContextBuilder:
+        return ContextBuilder(
+            self._session,
+            RiskConfig.from_settings(self._settings),
+            timedelta(seconds=self._settings.heartbeat_timeout_seconds),
+            self._config.max_context_items,
+            Redactor(self._config.effective_redact),
+            now,
+        )
+
     def _check_rate_limit(self) -> None:
         user_key = f"user:{self._requester.user_id}"
         wait = self._runtime.global_.blocked_for("global")
@@ -499,16 +833,22 @@ class AIInsightService:
             raise RateLimitedError("Too many AI analyses; retry later", wait, "ai")
 
     def _infer(
-        self, kind: InsightKind, ctx: AIContext, question: str | None
+        self,
+        kind: InsightKind,
+        ctx: AIContext,
+        question: str | None,
+        provider_config: AIConfig | None = None,
     ) -> tuple[dict[str, Any], dict[str, Any]]:
         config = self._config
         if not ctx.has_data:
             # Sin datos no se llama al modelo: no hay nada que interpretar y no se inventa.
-            return insufficient_result(
-                "Sentra no tiene datos sobre los que basar este análisis."
-            ), {"provider": "sentra", "model": "deterministic", "latency_ms": 0}
+            return {
+                **insufficient_result("Sentra no tiene datos sobre los que basar este análisis."),
+                "origin": "sentra",
+            }, {"provider": "sentra", "model": "deterministic", "latency_ms": 0}
         try:
-            provider = self._factory(config)
+            # La consola usa su propia configuración (solo loopback); el resto, la general.
+            provider = self._factory(provider_config or config)
         except ValueError:
             raise AINotConfiguredError("AI provider configuration is invalid") from None
         template = TEMPLATES[kind]
@@ -533,13 +873,28 @@ class AIInsightService:
                 raise
             latency += response.latency_ms
             output_chars += len(response.content)
+            truncated = response.finish_reason == "length"
             try:
-                raw = parse_json(response.content)
-            except AIInvalidResponseError:
-                if attempt + 1 >= attempts:
+                content = answer_content(response)
+                if kind in CONSOLE_KINDS:
+                    result = ground_console(parse_console_json(content, truncated), ctx)
+                else:
+                    result = {**ground(parse_json(content, truncated), ctx), "origin": "model"}
+            except AIInvalidResponseError as exc:
+                # 7C-Fix2: métricas del fallo, nunca el texto. Una respuesta cortada por
+                # max_tokens no se reintenta: con temperatura 0 y el mismo presupuesto el
+                # resultado sería el mismo y solo duplicaría la espera.
+                self._invalid = {
+                    "reason": exc.reason,
+                    "finish_reason": response.finish_reason,
+                    "output_chars": len(response.content),
+                    "reasoning_chars": response.reasoning_chars,
+                    "usage_output": response.usage_output,
+                    "attempts": attempt + 1,
+                }
+                if attempt + 1 >= attempts or exc.reason in _NO_RETRY:
                     raise
                 continue
-            result = ground(raw, ctx)
             return result, {
                 "provider": provider.name,
                 "model": response.model or provider.model,
@@ -574,7 +929,10 @@ class AIInsightService:
         )
         # Las preguntas de Ask son privadas de quien las hizo.
         return stmt.where(
-            or_(AIInsight.kind != "ask", AIInsight.requested_by_user_id == self._requester.user_id)
+            or_(
+                AIInsight.kind.notin_([k.value for k in PRIVATE_KINDS]),
+                AIInsight.requested_by_user_id == self._requester.user_id,
+            )
         )
 
     def list(
@@ -643,6 +1001,11 @@ class AIInsightService:
             vulnerability_finding_id=vulnerability_public,
             risk_snapshot_id=snapshot_public,
             question=insight.question,
+            tool_execution_ids=[
+                UUID(r["id"])
+                for r in insight.input_refs or []
+                if isinstance(r, dict) and r.get("type") == "tool_execution"
+            ],
             provider=insight.provider,
             model=insight.model,
             prompt_version=insight.prompt_version,
@@ -673,6 +1036,8 @@ class AIInsightService:
             return "entity_deleted"
         if insight.expires_at <= datetime.now(UTC):
             return "expired"
+        if insight.scope == "console":
+            return self._console_stale(insight)
         # Clave de la huella: (alcance, activo, detección o incidente o finding).
         key: tuple[str, int | None, int | None, int | None]
         if insight.scope == "incident":
@@ -692,3 +1057,44 @@ class AIInsightService:
             else:
                 versions[key] = data_version(self._session, key[1], key[2], key[3])
         return "data_changed" if versions[key] != insight.data_version else None
+
+    def _console_stale(self, insight: AIInsight) -> str | None:
+        """Stale de la consola: activo/detección cambiados o ejecución ya no disponible.
+
+        Las salidas de herramientas no cambian una vez terminadas, así que basta con
+        comprobar que siguen existiendo (retención opt-in) con el mismo hash.
+        """
+        refs = [r for r in insight.input_refs or [] if isinstance(r, dict)]
+        hashes = [f"{r['id']}:{r.get('sha256')}" for r in refs if r.get("type") == "tool_execution"]
+        current = {
+            str(public_id): digest
+            for public_id, digest in self._session.execute(
+                select(ToolExecution.public_id, ToolExecution.output_sha256).where(
+                    ToolExecution.public_id.in_(
+                        [UUID(r["id"]) for r in refs if r.get("type") == "tool_execution"]
+                    )
+                )
+            )
+        }
+        for r in refs:
+            if r.get("type") == "tool_execution" and current.get(r["id"]) != r.get("sha256"):
+                return "entity_deleted"
+        version = data_version(self._session, insight.asset_id, insight.detection_id, None)
+        version = _console_version(version, "|".join(hashes))
+        return "data_changed" if version != insight.data_version else None
+
+
+def _console_version(base: str, extra: str) -> str:
+    return hashlib.sha256(f"{base}|{extra}".encode()).hexdigest()
+
+
+def _input_refs(ctx: AIContext) -> list[dict[str, Any]]:
+    """Referencias de entrada; las de la consola llevan además el hash de la salida."""
+    refs: list[dict[str, Any]] = list(ctx.input_refs())
+    if ctx.scope == "console":
+        hashes = ctx.data.get("tool_results") or []
+        by_ref = {item.get("ref"): item.get("output_sha256") for item in hashes}
+        for item in refs:
+            if item["type"] == "tool_execution":
+                item["sha256"] = by_ref.get(item["ref"])
+    return refs

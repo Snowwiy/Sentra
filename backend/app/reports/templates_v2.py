@@ -25,6 +25,7 @@ Reglas de contenido:
 """
 
 import copy
+import dataclasses
 import math
 from collections.abc import Callable
 from datetime import datetime, timedelta
@@ -40,6 +41,8 @@ from app.reports.document import (
     DiagramEdge,
     DiagramNode,
     DocumentV2,
+    DonutChart,
+    DonutPanel,
     KeyValues,
     LineChart,
     LineSeries,
@@ -65,7 +68,7 @@ from app.reports.templates import (
     _meta,
 )
 
-TEMPLATE_VERSION = 2
+TEMPLATE_VERSION = 3
 NO_DATA = "Sin datos en el periodo."
 UNKNOWN = "Desconocido"
 UNSCORED = "Sin calcular"
@@ -1737,4 +1740,182 @@ def render_document_v2(snapshot: dict[str, Any]) -> DocumentV2:
     )
 
 
-RENDERERS: dict[int, Callable[[dict[str, Any]], DocumentV2]] = {2: render_document_v2}
+# --- Plantilla v3 (Fase 7C.5) -----------------------------------------------------------------
+#
+# v3 = v2 + un panel visual de anillos en el resumen ejecutivo. Mismos datos del snapshot
+# (solo recuentos, sin IDs ni IPs, así que el resumen ejecutivo sigue minimizando datos) y
+# mismas secciones de detalle técnico. Un snapshot v2 se sigue renderizando con v2.
+
+MAX_DONUT_SLICES = 6
+ASSET_STATUS_COLORS = {"online": "#2f855a", "offline": "#c53030", "unknown": "#a0aec0"}
+PANEL_NOTE = (
+    "Proporciones sobre el total de cada gráfica, con datos a la hora de corte. Los valores"
+    " exactos y su evidencia están en las secciones de detalle."
+)
+
+
+def _donut(
+    title: str,
+    counts: Any,
+    labels: dict[str, str] | None = None,
+    colors: dict[str, str] | None = None,
+    unit: str = "recuento",
+    extra: tuple[tuple[str, float, str], ...] = (),
+) -> DonutChart | None:
+    """Anillo a partir de un dict de recuentos; None si el dato no existe en el snapshot.
+
+    Un dict presente pero todo a cero es un anillo vacío con "Sin datos": se distingue de
+    "no medido" (que no aparece). Mismo orden fijo que las barras (primero el de las
+    etiquetas), sin ceros, y lo que pasa de MAX_DONUT_SLICES se agrupa en "Otros".
+    """
+    if not isinstance(counts, dict):
+        return None
+    labels = labels or {}
+    colors = colors or {}
+    keys = [k for k in labels if k in counts] + sorted(k for k in counts if k not in labels)
+    slices = [
+        (_label(labels.get(k, k), 40), float(_int(counts[k])), colors.get(k, CATEGORICAL[i % 8]))
+        for i, k in enumerate(keys)
+    ]
+    slices += [s for s in extra if s[1] > 0]
+    slices = [s for s in slices if s[1] > 0]
+    if len(slices) > MAX_DONUT_SLICES:
+        head = slices[: MAX_DONUT_SLICES - 1]
+        rest = sum(v for _, v, _ in slices[MAX_DONUT_SLICES - 1 :])
+        slices = [*head, ("Otros", rest, "#a0aec0")]
+    return DonutChart(title, tuple(slices), unit=unit)
+
+
+def _vuln_by_severity(groups: dict[str, Any] | None) -> dict[str, int] | None:
+    """Confirmadas + probables por severidad (las potenciales no son hallazgos confirmados)."""
+    if not groups:
+        return None
+    out: dict[str, int] = {}
+    for kind in ("confirmed", "probable"):
+        counts = groups.get(kind)
+        if isinstance(counts, dict):
+            for severity, value in counts.items():
+                out[str(severity)] = out.get(str(severity), 0) + _int(value)
+    return out
+
+
+def executive_panel(snapshot: dict[str, Any]) -> DonutPanel | None:
+    rtype = snapshot["meta"]["report_type"]
+    d = snapshot.get("data") or {}
+    charts: list[DonutChart | None] = []
+    vulns = _donut(
+        "Vulnerabilidades activas por severidad",
+        _vuln_by_severity(_vuln_groups(snapshot)),
+        SEVERITY_LABELS,
+        SEVERITY_COLORS,
+        "findings",
+    )
+    if rtype in ("executive_summary", "technical", "risk"):
+        risk = (d.get("risk") or {}) if rtype != "risk" else d
+        unscored = _int(risk.get("unscored"))
+        charts.append(
+            _donut(
+                "Activos por nivel de riesgo",
+                risk.get("by_level"),
+                LEVEL_LABELS,
+                LEVEL_COLORS,
+                "activos",
+                ((UNSCORED, float(unscored), LEVEL_COLORS["unscored"]),),
+            )
+        )
+    if rtype in ("executive_summary", "technical"):
+        charts.append(
+            _donut(
+                "Detecciones del periodo por severidad",
+                _get(d, "detections", "by_severity"),
+                SEVERITY_LABELS,
+                SEVERITY_COLORS,
+                "detecciones",
+            )
+        )
+        charts.append(vulns)
+        charts.append(
+            _donut(
+                "Activos por estado",
+                _get(d, "assets", "by_status"),
+                STATUS_LABELS,
+                ASSET_STATUS_COLORS,
+                "activos",
+            )
+        )
+    elif rtype == "detection":
+        charts.append(
+            _donut(
+                "Detecciones por severidad",
+                d.get("by_severity"),
+                SEVERITY_LABELS,
+                SEVERITY_COLORS,
+                "detecciones",
+            )
+        )
+        charts.append(
+            _donut(
+                "Detecciones por estado",
+                d.get("by_status"),
+                DETECTION_STATUS_LABELS,
+                dict(zip(DETECTION_STATUS_LABELS, DETECTION_STATUS_COLORS, strict=True)),
+                "detecciones",
+            )
+        )
+    elif rtype == "vulnerability":
+        charts.append(vulns)
+        charts.append(
+            _donut(
+                "Findings por evidencia",
+                {k: _get(d, k, "table", "total", default=0) for k in EVIDENCE_LABELS},
+                EVIDENCE_LABELS,
+                dict(zip(EVIDENCE_LABELS, EVIDENCE_COLORS, strict=True)),
+                "findings",
+            )
+        )
+    elif rtype == "asset":
+        charts.append(vulns)
+        charts.append(
+            _donut("Ejecuciones de Response", _get(d, "response", "by_status"), unit="ejecuciones")
+        )
+    elif rtype == "incident":
+        charts.append(
+            _donut(
+                "Detecciones vinculadas por severidad",
+                _get(d, "detections", "by_severity"),
+                SEVERITY_LABELS,
+                SEVERITY_COLORS,
+                "detecciones",
+            )
+        )
+    elif rtype == "response_activity":
+        charts.append(_donut("Ejecuciones por estado", d.get("by_status"), unit="ejecuciones"))
+        charts.append(_donut("Ejecuciones por acción", d.get("by_action"), unit="ejecuciones"))
+    present = tuple(c for c in charts if c is not None)
+    return DonutPanel(present, note=PANEL_NOTE) if present else None
+
+
+def render_document_v3(snapshot: dict[str, Any]) -> DocumentV2:
+    document = render_document_v2(snapshot)
+    panel = executive_panel(snapshot)
+    if panel is None or not document.sections:
+        return document
+    summary = document.sections[0]
+    # El panel va justo después de los indicadores: primero las cifras, luego la proporción
+    # y después las frases del resumen.
+    blocks = (summary.blocks[0], Subheading("Panel visual"), panel, *summary.blocks[1:])
+    sections = (dataclasses.replace(summary, blocks=blocks), *document.sections[1:])
+    return dataclasses.replace(document, sections=sections)
+
+
+RENDERERS: dict[int, Callable[[dict[str, Any]], DocumentV2]] = {
+    2: render_document_v2,
+    3: render_document_v3,
+}
+
+
+def render_versioned(snapshot: dict[str, Any]) -> DocumentV2:
+    """Render por la versión guardada en el snapshot; una versión futura desconocida usa la
+    más reciente que existe en este servidor (nunca falla un informe por eso)."""
+    version = _int(snapshot["meta"].get("template_version")) or 2
+    return RENDERERS.get(version, RENDERERS[max(RENDERERS)])(snapshot)

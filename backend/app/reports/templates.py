@@ -988,9 +988,9 @@ def render_document(snapshot: dict[str, Any]) -> AnyDocument:
     # catálogo: un informe v1 ya generado se vuelve a renderizar con v1 (mismos bytes) aunque
     # los informes nuevos usen v2. Importación diferida: templates_v2 reutiliza este módulo.
     if int(meta.get("template_version") or 1) >= 2:
-        from app.reports.templates_v2 import render_document_v2
+        from app.reports.templates_v2 import render_versioned
 
-        return render_document_v2(snapshot)
+        return render_versioned(snapshot)
     sections = TEMPLATES[meta["report_type"]](snapshot)
     return Document(
         title=meta["title"],

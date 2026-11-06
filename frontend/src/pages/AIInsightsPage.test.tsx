@@ -31,6 +31,11 @@ const AVAILABLE: AIStatus = {
   max_context_items: 40,
   rate_limit_per_user_per_minute: 6,
   prompt_versions: { ask: "ask_v1.p1" },
+  model_source: "settings",
+  system_prompt_mode: "system",
+  console_assist_available: false,
+  console_max_executions: 6,
+  console_assist_reason: null,
 };
 
 function insight(overrides: Partial<Insight> = {}): Insight {
@@ -56,6 +61,7 @@ function insight(overrides: Partial<Insight> = {}): Insight {
     context_items: 5,
     latency_ms: 120,
     requested_by: "viewer",
+    tool_execution_ids: [],
     result: {
       summary: "Fuerza bruta detectada <script>alert(1)</script>",
       assessment: "Requiere validación del analista.",
@@ -67,6 +73,9 @@ function insight(overrides: Partial<Insight> = {}): Insight {
       insufficient_data: false,
       warnings: [],
       dropped_refs: 0,
+      hypotheses: [],
+      draft: null,
+      origin: "model",
     },
     ...overrides,
   };

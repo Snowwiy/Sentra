@@ -12,6 +12,9 @@ import type {
   CorrelationReviewApplyResult,
   CorrelationReviewPreview,
   AssetIdentityProfile,
+  ConsoleAssistRequest,
+  ConsoleContextPreview,
+  ConsoleContextRequest,
   DetectionAttributionRead,
   IdentityCandidateList,
   IdentityComparison,
@@ -19,6 +22,9 @@ import type {
   IdentityLinkPreview,
   IdentityLinkRead,
   IdentityLinkRequest,
+  Insight,
+  LookupKind,
+  LookupResult,
   MaintenanceOperationCreate,
   MaintenanceOperationList,
   MaintenanceOperationRead,
@@ -181,4 +187,41 @@ export const toolsApi = {
       })}`,
       { signal },
     ),
+};
+
+/**
+ * Fase 7C.3: selectores contextuales. El usuario escribe lo que reconoce (nombre, IP, MAC,
+ * etiqueta, regla, INC-n) y el servidor devuelve candidatos con su id público; la UI nunca
+ * pide teclear un id. `ids` resuelve ids ya conocidos a su etiqueta legible.
+ */
+export const lookupApi = {
+  search: (
+    kind: LookupKind,
+    q: string,
+    params: { siteId?: string; limit?: number; includeArchived?: boolean } = {},
+    signal?: AbortSignal,
+  ) =>
+    apiGet<LookupResult>(
+      `/lookup/${enc(kind)}${query({
+        q,
+        site_id: params.siteId,
+        limit: params.limit,
+        include_archived: params.includeArchived || undefined,
+      })}`,
+      { signal },
+    ),
+  resolve: (kind: LookupKind, ids: string[], signal?: AbortSignal) => {
+    const search = new URLSearchParams();
+    for (const id of ids) search.append("ids", id);
+    return apiGet<LookupResult>(`/lookup/${enc(kind)}?${search.toString()}`, { signal });
+  },
+};
+
+/**
+ * Fase 7C.2: asistente de IA local de la consola. Solo resume, explica, propone hipótesis o
+ * redacta un borrador a partir de ejecuciones de herramientas ya hechas: no ejecuta nada.
+ */
+export const consoleAiApi = {
+  context: (body: ConsoleContextRequest) => apiPost<ConsoleContextPreview>("/ai/console/context", body),
+  assist: (body: ConsoleAssistRequest) => apiPost<Insight>("/ai/console/assist", body),
 };

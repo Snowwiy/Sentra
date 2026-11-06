@@ -494,6 +494,12 @@ class Settings(BaseSettings):
     ai_redact: str = ""
     # Pide response_format JSON al servidor. Algunos servidores locales no lo aceptan.
     ai_json_mode: bool = True
+    # 7C-Fix2: esfuerzo de razonamiento que se pide al servidor (`reasoning_effort`). Vacío =
+    # no se envía (comportamiento anterior, válido para cualquier servidor). "none" desactiva
+    # el razonamiento interno de modelos "thinking" (Qwen3 y similares) en servidores que lo
+    # aceptan, como llama.cpp: sin él, el modelo puede gastar AI_MAX_OUTPUT_TOKENS pensando y
+    # devolver `content` vacío. Solo se envía si el administrador lo fija.
+    ai_reasoning_effort: Literal["", "none", "minimal", "low", "medium", "high"] = ""
     # Un insight se marca stale al caducar o cuando cambian los datos que lo respaldan.
     ai_insight_ttl_minutes: int = Field(default=60, ge=1, le=10_080)
     # Llamadas reales al modelo (no las respuestas de caché) por usuario y en total.
@@ -525,6 +531,26 @@ class Settings(BaseSettings):
     ai_benchmark_timeout_seconds: int = Field(default=180, ge=10, le=1800)
     # tokens/s de generación para Excellent, Good y Usable (uso SOC interactivo).
     ai_performance_thresholds: str = "30,15,7"
+
+    # --- Fase 7C: modelo open-weight opcional (ver docs/open-weight-model.md) ---
+    # Asistente de la Analyst Console sobre resultados de herramientas. Solo funciona si la IA
+    # está activada (AI_ENABLED=true, apagada por defecto); esto permite apagar el asistente
+    # de la consola dejando AI Insights.
+    # 7C-Security-Fix1 (política de privacidad estricta, decisión de Jesus del 2026-10-29):
+    # apagado por defecto; lo activa un administrador del servidor de forma explícita y solo
+    # funciona con un modelo en loopback (ver AIConfig.console_destination_blocked_reason).
+    ai_console_assist_enabled: bool = False
+    # Cómo se envían las instrucciones: "system" (mensaje de sistema, por defecto) o
+    # "user_prefix" (instrucciones al principio del único mensaje de usuario), para modelos
+    # open-weight cuya plantilla de chat no tiene rol system (p. ej. Gemma). Los datos siguen
+    # yendo como JSON escapado en ambos casos.
+    ai_system_prompt_mode: Literal["system", "user_prefix"] = "system"
+    # Tope de caracteres del documento que se envía al modelo en la consola. Los modelos
+    # open-weight pequeños tienen ventanas de 4k-16k tokens: el contexto se recorta (y se dice)
+    # antes de superarla en vez de dejar que el runtime trunque sin avisar.
+    ai_max_prompt_chars: int = Field(default=24_000, ge=4_000, le=400_000)
+    # Ejecuciones de herramientas que se pueden pasar al asistente en una petición.
+    ai_console_max_executions: int = Field(default=6, ge=1, le=20)
 
     # --- Fase 4M: despliegue central en producción (ver docs/production-deployment.md) ---
     # Reverse proxies (IPs o CIDR) cuyas cabeceras X-Forwarded-For/-Proto se aceptan. Desde

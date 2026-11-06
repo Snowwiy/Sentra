@@ -4,9 +4,13 @@ import { detectionsApi, sentraApi } from "../api/sentra";
 import { searchApi, toolsApi } from "../api/sentra7b";
 import type { SearchResult, SearchUser, ToolExecutionOut, ToolOut } from "../api/types";
 import { useAuth } from "../auth/AuthContext";
+import { useAIStatus } from "../components/ai/AIAnalyzePanel";
 import { AddToCaseDialog, type CaseEvidenceKind } from "../components/console/AddToCaseDialog";
+import { ConsoleAssistant } from "../components/console/ConsoleAssistant";
 import { ExecutionStatus, ToolOutput } from "../components/console/ToolOutput";
 import { CATEGORY_LABELS, ToolRunner } from "../components/console/ToolRunner";
+import { Icon } from "../components/icons";
+import { EntityPicker } from "../components/lookup/EntityPicker";
 import { EmptyState, ErrorState, LoadingState } from "../components/StateViews";
 import { config } from "../config";
 import { errorMessage, formatRelative } from "../lib/format";
@@ -299,17 +303,81 @@ function ExecutionCard({
   );
 }
 
+function PermMark({ ok }: { ok: boolean }) {
+  return ok ? (
+    <span className="console-perms__ok" aria-label="concedido">
+      <Icon name="check" size={14} />
+    </span>
+  ) : (
+    <span className="muted" aria-label="no concedido">
+      <Icon name="lock" size={14} />
+    </span>
+  );
+}
+
+/** Fase 7C.4: catálogo como lista agrupada (Lectura, Investigación, Acción), no un desplegable. */
+function ToolCatalogList({
+  tools,
+  selected,
+  onSelect,
+}: {
+  tools: ToolOut[];
+  selected: string;
+  onSelect: (id: string) => void;
+}) {
+  return (
+    <div className="console-catalog__groups">
+      {(["read", "investigation", "action"] as const).map((category) => {
+        const items = tools.filter((t) => t.category === category);
+        if (items.length === 0) return null;
+        return (
+          <div key={category} role="group" aria-label={CATEGORY_LABELS[category]}>
+            <h3 className="eyebrow console-catalog__group">
+              {CATEGORY_LABELS[category]}
+              {category === "action" && <span className="chip chip--warn">vista previa</span>}
+            </h3>
+            <ul className="console-catalog__list">
+              {items.map((t) => {
+                const locked = !t.permitted || t.availability !== "available";
+                return (
+                  <li key={t.id}>
+                    <button
+                      type="button"
+                      className="console-catalog__item"
+                      aria-pressed={selected === t.id}
+                      title={locked ? (t.unavailable_reason ?? "Sin permiso") : t.description}
+                      onClick={() => onSelect(t.id)}
+                    >
+                      <span className="mono">{t.id}</span>
+                      <Icon name={locked || category === "action" ? "lock" : "eye"} size={14} aria-hidden="true" />
+                    </button>
+                  </li>
+                );
+              })}
+            </ul>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 /**
  * Analyst Console (Fase 7B.4). Una búsqueda global, un workspace con la entidad elegida
  * (activo o detección), atajos a las herramientas del motor 7A que encajan con ella, el
  * catálogo completo y el historial. No hay terminal ni consultas libres: cada botón es una
- * herramienta del registro cerrado, con RBAC, alcance de site y límites del servidor. La IA
- * no interviene.
+ * herramienta del registro cerrado, con RBAC, alcance de site y límites del servidor.
+ *
+ * Fase 7C: tres columnas (catálogo, workspace, historial y permisos), selección de entidades
+ * por nombre/IP sin ids y un asistente de IA local opcional que solo lee resultados ya
+ * ejecutados y marca su texto como sugerencia del modelo.
  */
 export function ConsolePage() {
   const auth = useAuth();
   const canExecute = auth.can("tools:execute");
-  const { scopeId } = useSite();
+  const site = useSite();
+  const { scopeId } = site;
+  const ai = useAIStatus();
   const [params, setParams] = useSearchParams();
   const q = params.get("q") ?? "";
   const assetParam = params.get("asset");
@@ -381,6 +449,12 @@ export function ConsolePage() {
   const preset: Record<string, string> = { ...context };
   const listed = entity && onlyCompatible ? tools.filter((t) => compatibleWith(t, context)) : tools;
   const tool = tools.find((t) => t.id === selectedTool);
+  const clearEntity = () => {
+    const next = new URLSearchParams(params);
+    next.delete("asset");
+    next.delete("detection");
+    setParams(next, { replace: true });
+  };
   const pickDetection = (id: string) => {
     const next = new URLSearchParams(params);
     if (assetContext) next.set("asset", assetContext);
@@ -398,43 +472,63 @@ export function ConsolePage() {
     }
   };
 
+  const kindLabel = current?.result ? KIND_LABELS[current.result.kind] : undefined;
+  const roleLabel = auth.user ? USER_ROLE_LABELS[auth.user.role] : undefined;
+  const resultPool = [...results, ...(history.data?.items ?? [])];
+
   return (
-    <div className="stack console-page">
-      <header className="page-header">
-        <h1>Consola de analista</h1>
-        <p className="muted small">
-          Búsqueda, contexto y herramientas del registro cerrado de Sentra. No ejecuta comandos, scripts ni consultas
-          libres; cada herramienta respeta tus permisos y el site elegido.
-        </p>
+    <div className="console-page">
+      <header className="page-head">
+        <div>
+          <p className="eyebrow">Seguridad</p>
+          <h1>Consola del analista</h1>
+          <p className="muted small">
+            Herramientas del registro cerrado de Sentra: sin comandos, scripts ni consultas libres. Cada herramienta respeta
+            tus permisos y el site elegido.
+          </p>
+        </div>
+        <div className="page-head__chips">
+          {roleLabel && <span className="chip">Rol: {roleLabel}</span>}
+          <span className="chip">
+            <Icon name="site" size={14} /> Site: {site.current?.name ?? "Todos"}
+          </span>
+        </div>
       </header>
 
-      <section className="panel panel--padded" aria-label="Búsqueda global">
+      <section aria-label="Búsqueda global">
         <form className="console-search" role="search" onSubmit={submit}>
-          <label className="field console-search__field">
-            <span>Buscar</span>
-            <input
-              className="input"
-              value={draft}
-              maxLength={128}
-              onChange={(e) => setDraft(e.target.value)}
-              placeholder="IP, MAC, SHA-256, regla (SCR-001), caso (INC-12), usuario o texto"
-            />
+          <Icon name="search" size={18} className="console-search__icon" />
+          <label className="sr-only" htmlFor="console-search">
+            Buscar
           </label>
+          <input
+            id="console-search"
+            className="input console-search__input"
+            value={draft}
+            maxLength={128}
+            onChange={(e) => setDraft(e.target.value)}
+            placeholder="IP, MAC, SHA-256, regla (SCR-001), caso (INC-12), usuario o texto"
+          />
+          {kindLabel && current?.query === draft.trim() && <span className="chip chip--accent">{kindLabel} detectada</span>}
           <button type="submit" className="button button--primary" disabled={draft.trim().length < 2}>
             Buscar
           </button>
         </form>
-        {searching && <LoadingState label="Buscando…" />}
-        {current?.error && (
-          <ErrorState
-            message={current.error}
-            onRetry={() => {
-              setSearch(undefined);
-              setRetry((n) => n + 1);
-            }}
-          />
+        {(searching || current) && (
+          <div className="panel panel--padded console-search__results">
+            {searching && <LoadingState label="Buscando…" />}
+            {current?.error && (
+              <ErrorState
+                message={current.error}
+                onRetry={() => {
+                  setSearch(undefined);
+                  setRetry((n) => n + 1);
+                }}
+              />
+            )}
+            {current?.result && <SearchResults result={current.result} onPick={pick} />}
+          </div>
         )}
-        {current?.result && <SearchResults result={current.result} onPick={pick} />}
       </section>
 
       {notice && (
@@ -446,187 +540,247 @@ export function ConsolePage() {
         </div>
       )}
 
-      {entity && (
-        <section className="panel panel--padded" aria-label="Workspace">
-          <h2>
-            Workspace: {entity.type === "asset" ? "activo" : "detección"}{" "}
-            {entityInfo ? (
-              <span>{entityInfo.label}</span>
+      <div className="console-grid">
+        <section className="panel console-col console-catalog" aria-label="Catálogo de herramientas">
+          <header className="console-col__head">
+            <h2>Catálogo de herramientas</h2>
+            {catalog.data?.enabled && <span className="small muted">{listed.length}</span>}
+          </header>
+          {!catalog.data ? (
+            catalog.error ? (
+              <ErrorState message={errorMessage(catalog.error)} onRetry={catalog.refresh} />
             ) : (
-              <span className="mono small" title={info.error ? errorMessage(info.error) : undefined}>
-                {entity.id}
-              </span>
-            )}
-          </h2>
-          <p className="small muted">
-            Contexto:{" "}
-            {context.asset_id && (
-              <Link to={`/assets/${context.asset_id}`}>activo</Link>
-            )}
-            {context.asset_id && context.detection_id && " · "}
-            {context.detection_id && <Link to={`/detections/${context.detection_id}`}>detección</Link>}
-            . Las herramientas reciben estos ids sin copiarlos.
-          </p>
-          <div className="actions">
-            <Link
-              className="button button--small"
-              to={entity.type === "asset" ? `/assets/${entity.id}` : `/detections/${entity.id}`}
-            >
-              Abrir ficha
-            </Link>
-            <button
-              type="button"
-              className="button button--small"
-              onClick={() =>
-                setAddTo({
-                  kind: entity.type,
-                  id: entity.id,
-                  label: `${entity.type === "asset" ? "Activo" : "Detección"} ${entity.id}`,
-                  assetId: entity.type === "asset" ? entity.id : undefined,
-                })
-              }
-              disabled={!canExecute}
-            >
-              Añadir al caso…
-            </button>
-          </div>
-          {canExecute ? (
-            <div className="console-shortcuts" role="group" aria-label="Herramientas para esta entidad">
-              {shortcuts.map((t) => (
-                <button
-                  key={t.id}
-                  type="button"
-                  className="button button--small"
-                  title={t.description}
-                  disabled={!t.permitted || t.availability !== "available"}
-                  onClick={() => void quickRun(t)}
-                >
-                  {t.name}
-                </button>
-              ))}
-            </div>
+              <LoadingState label="Cargando catálogo…" />
+            )
+          ) : !catalog.data.enabled ? (
+            <p className="muted small">Las herramientas de analista están desactivadas en este servidor.</p>
           ) : (
-            <p className="small muted">Tu rol puede consultar pero no ejecutar herramientas.</p>
-          )}
-          {context.asset_id && (
-            <AssetDetections assetId={context.asset_id} current={context.detection_id} onPick={pickDetection} />
+            <>
+              {entity && (
+                <label className="checkbox small">
+                  <input type="checkbox" checked={onlyCompatible} onChange={(e) => setOnlyCompatible(e.target.checked)} />{" "}
+                  Solo compatibles con el workspace ({listed.length} de {tools.length})
+                </label>
+              )}
+              <ToolCatalogList tools={listed} selected={selectedTool} onSelect={setSelectedTool} />
+            </>
           )}
         </section>
-      )}
 
-      {results.length > 0 && (
-        <section aria-label="Resultados" className="stack">
-          {results.map((execution) => (
-            <ExecutionCard
-              key={execution.execution_id}
-              execution={execution}
-              canExecute={canExecute}
-              onUpdate={addResult}
-              onAddToCase={(e) =>
-                setAddTo({
-                  kind: "tool_execution",
-                  id: e.execution_id,
-                  label: `${e.tool_name}${e.target_label ? ` · ${e.target_label}` : ""}`,
-                  assetId: e.asset_id ?? undefined,
-                })
-              }
-            />
-          ))}
-        </section>
-      )}
-
-      <section className="panel panel--padded" aria-label="Catálogo de herramientas">
-        <h2>Catálogo de herramientas</h2>
-        {!catalog.data ? (
-          catalog.error ? (
-            <ErrorState message={errorMessage(catalog.error)} onRetry={catalog.refresh} />
-          ) : (
-            <LoadingState label="Cargando catálogo…" />
-          )
-        ) : !catalog.data.enabled ? (
-          <p className="muted">Las herramientas de analista están desactivadas en este servidor.</p>
-        ) : (
-          <>
-            {entity && (
-              <label className="checkbox small">
-                <input type="checkbox" checked={onlyCompatible} onChange={(e) => setOnlyCompatible(e.target.checked)} /> Solo
-                herramientas compatibles con el workspace ({listed.length} de {tools.length})
-              </label>
-            )}
-            <label className="field">
-              <span>Herramienta</span>
-              <select className="input input--select" value={selectedTool} onChange={(e) => setSelectedTool(e.target.value)}>
-                <option value="">Elige una herramienta…</option>
-                {(["read", "investigation", "action"] as const).map((category) => (
-                  <optgroup key={category} label={CATEGORY_LABELS[category]}>
-                    {listed
-                      .filter((t) => t.category === category)
-                      .map((t) => (
-                        <option key={t.id} value={t.id}>
-                          {t.name} ({t.id})
-                        </option>
+        <div className="console-col console-work">
+          <section className="panel panel--padded console-workspace" aria-label="Workspace">
+            {entity ? (
+              <>
+                <div className="console-entity">
+                  <span className="console-entity__icon" aria-hidden="true">
+                    <Icon name={entity.type === "asset" ? "agent" : "detection"} size={18} />
+                  </span>
+                  <div className="console-entity__text">
+                    <h2>
+                      {entityInfo ? (
+                        entityInfo.label
+                      ) : (
+                        <span className="mono small" title={info.error ? errorMessage(info.error) : undefined}>
+                          {entity.id}
+                        </span>
+                      )}
+                    </h2>
+                    <p className="small muted">
+                      Workspace: {entity.type === "asset" ? "activo" : "detección"} · contexto{" "}
+                      {context.asset_id && <Link to={`/assets/${context.asset_id}`}>activo</Link>}
+                      {context.asset_id && context.detection_id && " · "}
+                      {context.detection_id && <Link to={`/detections/${context.detection_id}`}>detección</Link>}. Las
+                      herramientas reciben estos ids sin copiarlos.
+                    </p>
+                  </div>
+                  <div className="actions console-entity__actions">
+                    <Link
+                      className="button button--small"
+                      to={entity.type === "asset" ? `/assets/${entity.id}` : `/detections/${entity.id}`}
+                    >
+                      Abrir ficha
+                    </Link>
+                    <button
+                      type="button"
+                      className="button button--small"
+                      onClick={() =>
+                        setAddTo({
+                          kind: entity.type,
+                          id: entity.id,
+                          label: entityInfo?.label ?? `${entity.type === "asset" ? "Activo" : "Detección"} ${entity.id}`,
+                          assetId: entity.type === "asset" ? entity.id : undefined,
+                        })
+                      }
+                      disabled={!canExecute}
+                    >
+                      Añadir al caso…
+                    </button>
+                    <button type="button" className="button button--small" onClick={clearEntity}>
+                      Cambiar
+                    </button>
+                  </div>
+                </div>
+                {canExecute ? (
+                  shortcuts.length > 0 && (
+                    <div className="console-shortcuts" role="group" aria-label="Herramientas para esta entidad">
+                      {shortcuts.map((t) => (
+                        <button
+                          key={t.id}
+                          type="button"
+                          className="chip chip--button"
+                          title={t.description}
+                          disabled={!t.permitted || t.availability !== "available"}
+                          onClick={() => void quickRun(t)}
+                        >
+                          <Icon name="play" size={12} /> {t.name}
+                        </button>
                       ))}
-                  </optgroup>
-                ))}
-              </select>
-            </label>
-            {tool && (
+                    </div>
+                  )
+                ) : (
+                  <p className="small muted">Tu rol puede consultar pero no ejecutar herramientas.</p>
+                )}
+                {context.asset_id && (
+                  <AssetDetections assetId={context.asset_id} current={context.detection_id} onPick={pickDetection} />
+                )}
+              </>
+            ) : (
               <div className="stack">
-                <p className="small">
-                  Riesgo <strong>{tool.risk_level}</strong> · política <strong>{tool.policy}</strong> ·{" "}
+                <h2>Elige con qué trabajar</h2>
+                <p className="small muted">
+                  Escribe un nombre, una IP, una MAC o una regla: Sentra resuelve el elemento sin que tengas que copiar ids.
+                </p>
+                <div className="console-pickers">
+                  <EntityPicker
+                    kind="asset"
+                    label="Activo"
+                    value=""
+                    siteId={scopeId}
+                    onChange={(id) => id && pick({ type: "asset", id })}
+                  />
+                  <EntityPicker
+                    kind="detection"
+                    label="Detección"
+                    value=""
+                    siteId={scopeId}
+                    onChange={(id) => id && pick({ type: "detection", id })}
+                  />
+                </div>
+              </div>
+            )}
+          </section>
+
+          <section className="panel panel--padded" aria-label="Herramienta seleccionada">
+            {tool ? (
+              <div className="stack">
+                <header className="console-tool__head">
+                  <h2 className="mono">{tool.id}</h2>
+                  <span className="chip">{CATEGORY_LABELS[tool.category] ?? tool.category}</span>
+                  {tool.policy === "preview_confirm" && <span className="chip chip--warn">vista previa</span>}
+                </header>
+                <p className="small muted">
+                  {tool.name} · riesgo <strong>{tool.risk_level}</strong> ·{" "}
                   {`máximo ${count(tool.max_rows)} filas · ${count(tool.timeout_seconds)} s`} · fuentes:{" "}
                   {tool.sources.join(", ") || "—"}
                 </p>
-                <ToolRunner key={`${tool.id}-${entity?.id ?? ""}-${context.asset_id ?? ""}`} tool={tool} preset={preset} siteId={scopeId} onResult={addResult} />
+                <ToolRunner
+                  key={`${tool.id}-${entity?.id ?? ""}-${context.asset_id ?? ""}`}
+                  tool={tool}
+                  preset={preset}
+                  siteId={scopeId}
+                  onResult={addResult}
+                />
               </div>
+            ) : (
+              <p className="small muted">Elige una herramienta del catálogo para ver su formulario.</p>
             )}
-          </>
-        )}
-      </section>
+          </section>
 
-      <section className="panel panel--padded" aria-label="Historial de ejecuciones">
-        <h2>Historial</h2>
-        {!history.data ? (
-          history.error ? (
-            <ErrorState message={errorMessage(history.error)} onRetry={history.refresh} />
-          ) : (
-            <LoadingState label="Cargando historial…" />
-          )
-        ) : history.data.items.length === 0 ? (
-          <p className="muted small">Aún no has ejecutado ninguna herramienta.</p>
-        ) : (
-          <div className="table-wrap">
-            <table className="table table--compact">
-              <thead>
-                <tr>
-                  <th>Herramienta</th>
-                  <th>Objetivo</th>
-                  <th>Estado</th>
-                  <th>Cuándo</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody>
+          {results.length > 0 && (
+            <section aria-label="Resultados" className="stack">
+              {results.map((execution) => (
+                <ExecutionCard
+                  key={execution.execution_id}
+                  execution={execution}
+                  canExecute={canExecute}
+                  onUpdate={addResult}
+                  onAddToCase={(e) =>
+                    setAddTo({
+                      kind: "tool_execution",
+                      id: e.execution_id,
+                      label: `${e.tool_name}${e.target_label ? ` · ${e.target_label}` : ""}`,
+                      assetId: e.asset_id ?? undefined,
+                    })
+                  }
+                />
+              ))}
+            </section>
+          )}
+        </div>
+
+        <div className="console-col console-side">
+          <section className="panel panel--padded" aria-label="Historial de ejecuciones">
+            <header className="console-col__head">
+              <h2>Historial</h2>
+              <span className="small muted">auditado</span>
+            </header>
+            {!history.data ? (
+              history.error ? (
+                <ErrorState message={errorMessage(history.error)} onRetry={history.refresh} />
+              ) : (
+                <LoadingState label="Cargando historial…" />
+              )
+            ) : history.data.items.length === 0 ? (
+              <p className="muted small">Aún no has ejecutado ninguna herramienta.</p>
+            ) : (
+              <ul className="console-history">
                 {history.data.items.map((e) => (
-                  <tr key={e.execution_id}>
-                    <td>{e.tool_name}</td>
-                    <td className="small">{e.target_label ?? "—"}</td>
-                    <td>
-                      <ExecutionStatus status={e.status} />
-                    </td>
-                    <td className="small">{formatRelative(e.created_at)}</td>
-                    <td>
-                      <button type="button" className="button button--small" onClick={() => addResult(e)}>
-                        Ver
-                      </button>
-                    </td>
-                  </tr>
+                  <li key={e.execution_id}>
+                    <button type="button" className="console-history__item" onClick={() => addResult(e)}>
+                      <span className="mono">{e.tool_name}</span>
+                      <span className="small muted">
+                        <ExecutionStatus status={e.status} /> {e.target_label ?? ""} · {formatRelative(e.created_at)}
+                      </span>
+                    </button>
+                  </li>
                 ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-      </section>
+              </ul>
+            )}
+          </section>
+
+          <section className="panel panel--padded" aria-label="Permisos">
+            <header className="console-col__head">
+              <h2>
+                <Icon name="lock" size={14} /> Permisos
+              </h2>
+            </header>
+            <ul className="console-perms small">
+              <li>
+                <span className="mono">tools:read</span>
+                <PermMark ok={auth.can("tools:read")} />
+              </li>
+              <li>
+                <span className="mono">tools:execute</span>
+                <PermMark ok={canExecute} />
+              </li>
+              <li>
+                <span>Acciones</span>
+                <span className="muted">vista previa + confirmación</span>
+              </li>
+            </ul>
+            <p className="small muted">Sin comandos libres: solo herramientas del catálogo con esquema cerrado.</p>
+          </section>
+
+          <ConsoleAssistant
+            status={ai.status}
+            statusError={ai.error}
+            canUse={auth.can("ai:use") && auth.can("tools:execute")}
+            executions={resultPool}
+            assetId={context.asset_id}
+            detectionId={context.detection_id}
+          />
+        </div>
+      </div>
 
       {addTo && (
         <AddToCaseDialog

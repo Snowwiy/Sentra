@@ -292,7 +292,7 @@ def effective_ai_config(session: Session, settings: Settings) -> AIConfig:
     model = session.get(AILocalModel, row.active_model_id)
     if model is None or model.runtime != (row.runtime or settings.ai_runtime):
         return config
-    return replace(config, model=model.runtime_model_id)
+    return replace(config, model=model.runtime_model_id, model_source="local_manager")
 
 
 class LocalModelService:

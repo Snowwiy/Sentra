@@ -137,6 +137,8 @@ function makeOverview(overrides: Partial<SecurityOverview> = {}): SecurityOvervi
     })),
     new_devices: { window_days: 7, count: 0, items: [] },
     exposed_ports: { open_ports: 12, assets_with_open_ports: 4, top: [{ port: 445, protocol: "tcp", assets: 3 }] },
+    activity_24h: [],
+    top_risk: null,
     ...overrides,
   };
 }
@@ -433,5 +435,63 @@ describe("Panel: postura y gráficos (Fase 7A.7)", () => {
     expect(ports).toHaveTextContent("12 puertos abiertos en 4 activos.");
     expect(within(ports).getByText("445/tcp")).toBeInTheDocument();
     expect(screen.getByRole("region", { name: "Dispositivos nuevos" })).toHaveTextContent("Ningún dispositivo nuevo");
+  });
+});
+
+describe("Panel: indicadores, actividad y riesgo (Fase 7C.4)", () => {
+  it("los indicadores operativos salen del resumen y enlazan a su vista", async () => {
+    renderPage();
+    const kpis = await screen.findByRole("region", { name: "Resumen operativo" });
+    expect(within(kpis).getByRole("link", { name: /Activos monitorizados\s*10000/ })).toHaveAttribute("href", "/network/devices");
+    expect(within(kpis).getByRole("link", { name: /Alertas abiertas/ })).toHaveAttribute("href", "/alerts");
+    expect(within(kpis).getByRole("link", { name: /Detecciones por revisar/ })).toHaveAttribute("href", "/detections");
+  });
+
+  it("dibuja la actividad real de 24 h y el activo con más riesgo con cada punto explicado", async () => {
+    const start = Date.UTC(2026, 9, 28, 0);
+    overview = makeOverview({
+      activity_24h: Array.from({ length: 24 }, (_, i) => ({
+        hour: new Date(start + i * 3_600_000).toISOString(),
+        detections: i === 5 ? 3 : 0,
+        events: i === 5 ? 40 : 2,
+      })),
+      top_risk: {
+        asset_id: "a1",
+        name: "pc-01",
+        primary_ip: "10.0.0.5",
+        score: 82.4,
+        level: "critical",
+        confidence: "high",
+        calculated_at: iso(),
+        factors: [
+          { label: "Script de PowerShell sospechoso", category: "detection", points: 30, rule_id: "SCR-001", detection_id: "d1" },
+          { label: "Mantenimiento aprobado", category: "maintenance", points: -5, rule_id: null, detection_id: null },
+        ],
+        other_points: 2.5,
+      },
+    });
+    renderPage();
+    const chart = await screen.findByRole("figure", { name: "Actividad por hora" });
+    expect(within(chart).getByRole("img", { name: "86 eventos y 3 detecciones en 24 horas" })).toBeInTheDocument();
+    expect(chart).toHaveTextContent(/Pico: 40 eventos/);
+    const risk = screen.getByRole("region", { name: "Activo con más riesgo" });
+    expect(within(risk).getByLabelText("Puntuación 82 de 100")).toBeInTheDocument();
+    expect(within(risk).getByRole("link", { name: "pc-01" })).toHaveAttribute("href", "/assets/a1?tab=risk");
+    expect(within(risk).getByText("+30")).toBeInTheDocument();
+    expect(within(risk).getByText("-5")).toBeInTheDocument();
+    expect(within(risk).getByRole("link", { name: "Script de PowerShell sospechoso" })).toHaveAttribute("href", "/detections/d1");
+    expect(risk).toHaveTextContent("no un compromiso confirmado");
+  });
+
+  it("sin agentes no inventa eventos y sin riesgo calculado no desglosa nada", async () => {
+    overview = makeOverview({
+      activity_24h: [{ hour: iso(), detections: 1, events: null }],
+      top_risk: null,
+    });
+    renderPage();
+    const chart = await screen.findByRole("figure", { name: "Actividad por hora" });
+    expect(within(chart).getByRole("heading", { name: "Detecciones por hora" })).toBeInTheDocument();
+    expect(chart).toHaveTextContent("Eventos: no medido");
+    expect(screen.getByRole("region", { name: "Activo con más riesgo" })).toHaveTextContent("Ningún activo tiene riesgo calculado");
   });
 });

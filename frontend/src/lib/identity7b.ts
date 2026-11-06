@@ -1,7 +1,14 @@
 // Fase 7B.2: textos de la identidad de dispositivos (estado, niveles, evidencias de
 // coincidencia y motivos de bloqueo de una asociación manual). Los códigos llegan del servidor
 // en inglés; aquí solo se traducen. Un código desconocido se muestra tal cual, nunca se oculta.
-import type { CandidateEvidence, IdentityComparison, IdentityState, IdentityStrength, MacProfile } from "../api/types";
+import type {
+  CandidateEvidence,
+  IdentityComparison,
+  IdentityEvidenceCode,
+  IdentityState,
+  IdentityStrength,
+  MacProfile,
+} from "../api/types";
 
 export const IDENTITY_STATE_LABELS: Record<IdentityState, string> = {
   confirmed: "Confirmada",
@@ -96,7 +103,8 @@ export const STRENGTH_CLASS: Record<IdentityStrength, string> = {
   weak: "badge--muted",
 };
 
-const EVIDENCE_LABELS: Record<string, string> = {
+// Tipado con IdentityEvidenceCode: un código nuevo del servidor sin etiqueta no compila.
+const EVIDENCE_LABELS: Record<IdentityEvidenceCode, string> = {
   same_machine_id: "Mismo identificador de máquina",
   same_agent_lineage: "Mismo linaje de agente",
   manual_link: "Asociación manual",
@@ -107,6 +115,8 @@ const EVIDENCE_LABELS: Record<string, string> = {
   same_ip: "Misma IP",
   same_vendor: "Mismo fabricante",
   same_os: "Mismo sistema operativo",
+  same_dhcp_client_id: "Mismo identificador de cliente DHCP",
+  private_mac_rotation: "Posible rotación de MAC privada (periodos sin solape)",
 };
 
 export function evidenceText(evidence: CandidateEvidence): string {

@@ -178,6 +178,15 @@ os.environ["AI_RATE_LIMIT_GLOBAL_PER_MINUTE"] = "30"
 os.environ["AI_MAX_CONCURRENT"] = "2"
 os.environ["AI_MAX_CONTEXT_ITEMS"] = "40"
 os.environ["AI_MAX_OUTPUT_TOKENS"] = "1200"
+# Fase 7C: asistente de la consola y compatibilidad open-weight con sus valores por defecto,
+# por la misma razón (un .env de desarrollo con otro modo de prompt o presupuesto cambiaría lo
+# que comprueban los tests).
+os.environ["AI_CONSOLE_ASSIST_ENABLED"] = "false"
+os.environ["AI_SYSTEM_PROMPT_MODE"] = "system"
+os.environ["AI_MAX_PROMPT_CHARS"] = "24000"
+os.environ["AI_CONSOLE_MAX_EXECUTIONS"] = "6"
+# 7C-Fix2: sin reasoning_effort por defecto (Jesus lo usa con llama.cpp en su .env).
+os.environ["AI_REASONING_EFFORT"] = ""
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta

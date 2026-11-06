@@ -43,10 +43,27 @@ export type IconName =
   | "layout-sidebar"
   | "layout-top"
   | "layout-auto"
-  | "console";
+  | "console"
+  // Fase 7C.4: consola en tres columnas y panel.
+  | "lock"
+  | "eye"
+  | "search"
+  | "play"
+  | "check"
+  | "copy"
+  | "clock"
+  | "activity";
 
 const PATHS: Record<IconName, string> = {
   console: "M4 5h16v14H4zM8 9l3 3-3 3M13 15h4",
+  lock: "M6 11h12v10H6zM8.5 11V8a3.5 3.5 0 0 1 7 0v3",
+  eye: "M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12zM12 12m-3 0a3 3 0 1 0 6 0 3 3 0 1 0-6 0",
+  search: "M11 4a7 7 0 1 0 0 14 7 7 0 0 0 0-14zM20 20l-4-4",
+  play: "M7 4l13 8-13 8z",
+  check: "M5 12l5 5 9-10",
+  copy: "M9 9h11v11H9zM5 15H4V4h11v1",
+  clock: "M12 3a9 9 0 1 0 0 18 9 9 0 0 0 0-18zM12 7v5l3 2",
+  activity: "M3 12h4l3-8 4 16 3-8h4",
   menu: "M4 6h16M4 12h16M4 18h16",
   close: "M6 6l12 12M18 6L6 18",
   "chevron-down": "M6 9l6 6 6-6",

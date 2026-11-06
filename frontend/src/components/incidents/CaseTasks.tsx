@@ -26,6 +26,7 @@ import {
 } from "../../lib/caseOperations";
 import { errorMessage, formatDateTime, formatRelative } from "../../lib/format";
 import { usePolling } from "../../lib/usePolling";
+import { EntityPicker } from "../lookup/EntityPicker";
 import { Modal } from "../Modal";
 import { EmptyState, ErrorState, LoadingState } from "../StateViews";
 
@@ -220,7 +221,10 @@ function EvidenceDialog({ task, run, onClose }: { task: TaskRead; run: TaskRunne
           <select
             className="input input--select"
             value={type}
-            onChange={(e) => setType(e.target.value as CaseEvidenceType)}
+            onChange={(e) => {
+              setType(e.target.value as CaseEvidenceType);
+              setId("");
+            }}
             aria-label="Tipo de evidencia"
           >
             {(Object.keys(EVIDENCE_TYPE_LABELS) as CaseEvidenceType[]).map((value) => (
@@ -230,17 +234,31 @@ function EvidenceDialog({ task, run, onClose }: { task: TaskRead; run: TaskRunne
             ))}
           </select>
         </label>
-        <label>
-          <span className="muted small">Identificador</span>
-          <input
-            className="input mono"
+        {type === "detection" || type === "asset" ? (
+          // Fase 7C.3: detecciones y activos se eligen por nombre, IP o regla; sin pegar ids.
+          <EntityPicker
+            key={type}
+            kind={type}
+            label={EVIDENCE_TYPE_LABELS[type]}
             value={id}
-            onChange={(e) => setId(e.target.value)}
-            aria-label="Identificador de la evidencia"
-            placeholder="00000000-0000-0000-0000-000000000000"
+            required
+            onChange={(picked) => setId(picked)}
           />
-        </label>
-        {id && !valid && <p className="small text-crit">El identificador no es válido.</p>}
+        ) : (
+          <>
+            <label>
+              <span className="muted small">Identificador</span>
+              <input
+                className="input mono"
+                value={id}
+                onChange={(e) => setId(e.target.value)}
+                aria-label="Identificador de la evidencia"
+                placeholder="00000000-0000-0000-0000-000000000000"
+              />
+            </label>
+            {id && !valid && <p className="small text-crit">El identificador no es válido.</p>}
+          </>
+        )}
         <div className="modal__actions">
           <button type="button" className="button" onClick={onClose} disabled={busy}>
             Cancelar

@@ -3,9 +3,10 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import "@testing-library/jest-dom/vitest";
 import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { Role, ToolExecutionOut, ToolOut } from "../api/types";
+import type { LookupItem, Role, ToolExecutionOut, ToolOut } from "../api/types";
 import { WithRole } from "../test/auth";
 import { installFetch, type Call, type Handler } from "../test/sites";
+import { lookupItem, lookupResult } from "../test/lookup";
 import { buildInput, fieldsOf, initialValues } from "../lib/toolSchema";
 import { ConsolePage } from "./ConsolePage";
 
@@ -116,6 +117,9 @@ function execution(overrides: Partial<ToolExecutionOut> = {}): ToolExecutionOut 
   };
 }
 
+const INCIDENT_ITEM: LookupItem = lookupItem({ kind: "incident", id: INCIDENT, label: "INC-000001 · Intrusión", match_field: "number" });
+const ASSET_ITEM: LookupItem = lookupItem({ kind: "asset", id: ASSET, label: "ravenslg", secondary: "192.168.50.10", match_field: "name" });
+
 let routes: Record<string, Handler>;
 let calls: Call[];
 
@@ -124,6 +128,9 @@ beforeEach(() => {
     "GET /tools": () => ({ body: { items: CATALOG, enabled: true } }),
     "GET /tools/executions": () => ({ body: { items: [], total: 0 } }),
     [`GET /assets/${ASSET}`]: () => ({ body: { asset_id: ASSET, display_name: "ravenslg", primary_ip: "192.168.50.10" } }),
+    "GET /ai/status": () => ({ body: { enabled: false, available: false, reason: "IA desactivada", console_assist_available: false, console_max_executions: 6 } }),
+    "GET /lookup/incident": (_init, url) => ({ body: lookupResult(url, INCIDENT_ITEM) }),
+    "GET /lookup/asset": (_init, url) => ({ body: lookupResult(url, ASSET_ITEM) }),
     "GET /search": (_init, url) => ({
       body: {
         query: url.searchParams.get("q"),
@@ -168,7 +175,7 @@ describe("toolSchema", () => {
     const values = initialValues(fields, { asset_id: ASSET });
     expect(values).toEqual({ asset_id: ASSET, hours: "24" });
     expect(buildInput(fields, values)).toEqual({ input: { asset_id: ASSET, hours: 24 } });
-    expect(buildInput(fields, { asset_id: "", hours: "" })).toEqual({ error: "Falta «Activo (id)»." });
+    expect(buildInput(fields, { asset_id: "", hours: "" })).toEqual({ error: "Falta «Activo»." });
     expect(buildInput(fields, { asset_id: ASSET, hours: "1.5" })).toEqual({ error: "«Horas hacia atrás» debe ser un número entero." });
     // Un opcional vacío no se envía: el servidor aplica su valor por defecto.
     expect(buildInput(fields, { asset_id: ASSET, hours: "" })).toEqual({ input: { asset_id: ASSET } });
@@ -214,11 +221,16 @@ describe("ConsolePage (Fase 7B.4)", () => {
     });
     renderConsole("analyst");
     const catalog = await screen.findByRole("region", { name: "Catálogo de herramientas" });
-    fireEvent.change(await within(catalog).findByLabelText("Herramienta"), { target: { value: "case.link_evidence" } });
-    fireEvent.change(within(catalog).getByLabelText("Caso (id) *"), { target: { value: INCIDENT } });
-    fireEvent.change(within(catalog).getByLabelText("Tipo *"), { target: { value: "asset" } });
-    fireEvent.change(within(catalog).getByLabelText("Evidencia (id) *"), { target: { value: ASSET } });
-    fireEvent.click(within(catalog).getByRole("button", { name: "Vista previa" }));
+    fireEvent.click(await within(catalog).findByRole("button", { name: "case.link_evidence" }));
+    expect(within(catalog).getByRole("button", { name: "case.link_evidence" })).toHaveAttribute("aria-pressed", "true");
+    const panel = screen.getByRole("region", { name: "Herramienta seleccionada" });
+    // Fase 7C.3: el caso se elige por número o título; el id se resuelve sin teclearlo.
+    fireEvent.change(await within(panel).findByRole("combobox", { name: "Caso *" }), { target: { value: "INC-1" } });
+    fireEvent.click(await within(panel).findByRole("option", { name: /INC-000001/ }));
+    expect(await within(panel).findByText("INC-000001 · Intrusión")).toBeInTheDocument();
+    fireEvent.change(within(panel).getByLabelText("Tipo *"), { target: { value: "asset" } });
+    fireEvent.change(within(panel).getByLabelText("Evidencia (id) *"), { target: { value: ASSET } });
+    fireEvent.click(within(panel).getByRole("button", { name: "Vista previa" }));
     const card = await screen.findByRole("article", { name: "Resultado de Añadir evidencia al caso" });
     expect(within(card).getByText("Se vincula la evidencia al caso INC-000001")).toBeInTheDocument();
     expect(posts("/tools/case.link_evidence/preview")[0]).toMatchObject({
@@ -267,8 +279,9 @@ describe("ConsolePage (Fase 7B.4)", () => {
     const workspace = await screen.findByRole("region", { name: "Workspace" });
     expect(within(workspace).getByText("Tu rol puede consultar pero no ejecutar herramientas.")).toBeInTheDocument();
     const catalog = screen.getByRole("region", { name: "Catálogo de herramientas" });
-    fireEvent.change(await within(catalog).findByLabelText("Herramienta"), { target: { value: "asset.profile" } });
-    expect(within(catalog).getByRole("button", { name: "Ejecutar" })).toBeDisabled();
-    expect(within(catalog).getByText("Tu rol no tiene permiso para esta herramienta.")).toBeInTheDocument();
+    fireEvent.click(await within(catalog).findByRole("button", { name: "asset.profile" }));
+    const panel = screen.getByRole("region", { name: "Herramienta seleccionada" });
+    expect(within(panel).getByRole("button", { name: "Ejecutar" })).toBeDisabled();
+    expect(within(panel).getByText("Tu rol no tiene permiso para esta herramienta.")).toBeInTheDocument();
   });
 });

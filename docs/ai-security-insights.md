@@ -14,6 +14,10 @@ la misma máquina o en una LAN privada autorizada. Ninguna función de Sentra ne
 Anthropic, Gemini, Azure OpenAI, AWS Bedrock ni ningún proveedor cloud, y por defecto ningún
 dato de seguridad sale de la infraestructura de Sentra.
 
+> Fase 7C: compatibilidad con modelos open-weight (razonamiento `<think>`, JSON con prosa,
+> plantillas sin rol system, presupuesto de prompt) y asistente de la Analyst Console en
+> [open-weight-model.md](open-weight-model.md).
+
 ## Arquitectura recomendada: Sentra Server + Local Model Server
 
 ```
@@ -322,7 +326,10 @@ cualquier cambio exige además `ai:manage`, que solo tiene admin: [local-model-m
 - Errores controlados, sin cuerpo del proveedor ni secretos: `ai_timeout` (504),
   `ai_provider_unavailable`, `ai_provider_auth_failed`, `ai_invalid_response`,
   `ai_ungrounded_response` (502), `ai_provider_rate_limited` (503), `ai_not_configured` y
-  `ai_destination_blocked` (409).
+  `ai_destination_blocked` (409). 7C-Fix2: `ai_invalid_response` trae `details[0].reason`
+  (`truncated_reasoning`, `truncated`, `reasoning_only`, `empty_answer`, `invalid_json`,
+  `schema_mismatch`, `unexpected_body`); las respuestas cortadas no se reintentan. Con modelos
+  "thinking" en llama.cpp, `AI_REASONING_EFFORT=none` (ver docs/fase-7c-fix2.md).
 
 ## Caché y estado stale
 

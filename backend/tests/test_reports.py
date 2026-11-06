@@ -472,8 +472,8 @@ def test_g_cutoff_excludes_data_created_after_it(
     meta = stored.snapshot["meta"]
     # Fase 6D.5: los informes nuevos usan la plantilla v2 (la versión queda en el snapshot y
     # en la fila; los v1 ya generados conservan la suya).
-    assert meta["cutoff_at"] and meta["template_version"] == 2 and meta["timezone"] == "UTC"
-    assert stored.template_version == 2
+    assert meta["cutoff_at"] and meta["template_version"] == 3 and meta["timezone"] == "UTC"
+    assert stored.template_version == 3
     assert seed["asset"]
 
 

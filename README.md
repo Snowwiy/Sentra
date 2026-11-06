@@ -32,11 +32,11 @@ Cada componente tiene su versión; no hay una versión global.
 
 | Componente | Versión | Notas |
 | --- | --- | --- |
-| Servidor (backend) | 0.4.0 | API `/api/v1` |
-| Frontend | 0.4.0 | Requiere servidor 0.4.0 |
-| Agente | 0.6.0 | Compatible con servidores anteriores |
+| Servidor (backend) | 0.6.2 | API `/api/v1` |
+| Frontend | 0.6.2 | Requiere servidor 0.6.2 |
+| Agente | 0.6.2 | Compatible con servidores anteriores |
 | Sensor | 0.7.0 | Compatible con servidores anteriores |
-| Migraciones Alembic | 0047 | Siguiente libre: 0048 |
+| Migraciones Alembic | 0050 | Siguiente libre: 0051 |
 
 Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
@@ -45,9 +45,8 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
 | Fase | Estado |
 | --- | --- |
 | 1-6E | Completadas y publicadas (inventario, detección, riesgo, IA local opcional, incidentes, producción, reglas Sigma, vulnerabilidades, threat intelligence, respuesta, informes, sensores, SNMP, topología, telemetría de endpoint, forense y aislamiento seguro) |
-| **7A** | **Completada en esta entrega**, pendiente de validación en el equipo real: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles en los casos, gráficas del dashboard, contexto de PowerShell |
-| 7B | Siguiente: consola del analista sobre el Analyst Tool Engine |
-| 7C | Planificada: modelo local ("Rabanito") como cliente del mismo motor de herramientas, sin permisos implícitos |
+| 7A y 7B | Completadas y publicadas: Analyst Tool Engine, hub Red, tareas y controles en los casos, atribución de detecciones con mantenimiento autorizado, identidad por niveles y Analyst Console |
+| **7C** | **Completada en esta entrega**, pendiente de validación en el equipo real: modelo open-weight opcional con asistente de la consola, selectores sin ids tecleados, rediseño de consola y panel, informes v3 con gráficas e identidad sin SNMP ([docs/fase-7c.md](docs/fase-7c.md)) |
 
 ## 6. Funcionalidades implementadas
 
@@ -80,8 +79,12 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
   auditoría, evidencias y vista previa obligatoria antes de cualquier acción.
 - Response Engine y playbooks con humano en el bucle; forense de solo lectura; aislamiento
   mediante helper privilegiado separado, desactivado por defecto.
-- Informes PDF/HTML con SHA-256; IA local opcional como capa de análisis (desactivada por
-  defecto, nunca requisito).
+- Analyst Console con búsqueda global, catálogo de herramientas, historial y asistente de IA
+  local que resume, explica el riesgo, propone hipótesis y redacta borradores citando datos de
+  Sentra, sin ejecutar nada.
+- Selectores por nombre, IP, MAC, regla o número de caso en lugar de identificadores.
+- Informes PDF/HTML con SHA-256 y gráficas circulares; IA local opcional como capa de análisis
+  (desactivada por defecto, nunca requisito, sin fallback a Internet).
 
 **Plataforma**
 
@@ -92,9 +95,6 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
 
 ## 7. Funcionalidades planificadas
 
-- 7B: consola del analista (investigación guiada sobre el Analyst Tool Engine).
-- 7C: modelo local como cliente del motor de herramientas, con los mismos permisos que su
-  usuario y sin ejecución de órdenes propias.
 - Puntos de control de red reales (firewall, DNS o proxy integrados) para aplicar las
   solicitudes aprobadas; hoy Sentra solo las registra.
 - MSI firmado del agente, actualizaciones en vivo (WebSockets/SSE), integraciones opcionales
@@ -216,6 +216,12 @@ Esto es un entorno de **desarrollo**. Para un servidor central (HTTPS con Caddy,
   ([docs/discovery.md](docs/discovery.md), [docs/sites.md](docs/sites.md)).
 - Módulos opcionales apagados por defecto: IA (`AI_ENABLED=false`), descargas de threat
   intelligence (`THREAT_INTEL_SYNC_ENABLED=false`), aislamiento (`ISOLATION_ENABLED=false`).
+- IA local (opcional): servidor de modelo OpenAI-compatible en el propio equipo o la LAN
+  (llama.cpp, Ollama, LM Studio, vLLM) y `AI_ENABLED=true`, `AI_BASE_URL`, `AI_MODEL`. El
+  asistente de la consola se activa aparte (`AI_CONSOLE_ASSIST_ENABLED=true`) y solo con un
+  modelo en el propio servidor (loopback), revisando lo que se envía. Pasos, modelos
+  recomendados y límites en [docs/open-weight-model.md](docs/open-weight-model.md) y
+  [docs/fase-7c-security-fix1.md](docs/fase-7c-security-fix1.md).
 - Frontend: `frontend/.env.example` (copiar a `frontend/.env.local` si hace falta; por defecto
   usa la API en `http://localhost:8000` a través del proxy de Vite).
 
@@ -361,13 +367,12 @@ Pruebas e2e y de rendimiento contra una instalación de prueba: [qa/README.md](q
 | Red | [discovery](docs/discovery.md), [discovery avanzado](docs/advanced-network-discovery.md), [inteligencia de dispositivos](docs/device-intelligence.md), [identidad DHCP](docs/dhcp-identity.md), [SNMP](docs/snmp-network-intelligence.md), [topología](docs/topology-engine.md), [historial](docs/topology-history.md) |
 | Detección y riesgo | [motor de detección](docs/detection-engine.md), [reglas personalizadas](docs/custom-detection-rules.md), [Sigma](docs/sigma-support.md), [comportamiento](docs/behavioral-detection.md), [PowerShell](docs/powershell-detections.md), [riesgo](docs/risk-engine.md), [vulnerabilidades](docs/vulnerability-management.md), [threat intelligence](docs/threat-intelligence.md) |
 | Casos y respuesta | [incidentes](docs/incident-management.md), [tareas y controles](docs/case-operations.md), [Analyst Tool Engine](docs/analyst-tool-engine.md), [Response](docs/response-engine.md), [playbooks](docs/playbooks.md), [forense](docs/forensic-investigation.md), [aislamiento](docs/safe-isolation.md) |
-| Panel e informes | [vista de seguridad](docs/security-dashboard.md), [informes](docs/reporting.md), [IA local](docs/ai-security-insights.md) |
+| Panel e informes | [vista de seguridad](docs/security-dashboard.md), [informes](docs/reporting.md), [IA local](docs/ai-security-insights.md), [modelo open-weight](docs/open-weight-model.md), [consola](docs/analyst-console.md), [selectores](docs/contextual-selectors.md), [Fase 7C](docs/fase-7c.md) |
 | Producción | [despliegue](docs/production-deployment.md), [seguridad de red](docs/network-security.md), [copias](docs/backup-restore.md), [observabilidad](docs/observability.md), [autenticación](docs/authentication.md) |
 
 ## 24. Roadmap
 
-1. Validar 7A en el equipo real y en el laboratorio.
-2. 7B consola del analista; 7C modelo local como cliente del Analyst Tool Engine.
-3. Integración de un punto de control de red real para aplicar solicitudes aprobadas.
-4. MSI firmado del agente y actualizaciones en vivo.
-5. Integraciones opcionales (Wazuh, Suricata, Syslog) sin convertirse en núcleo.
+1. Validar 7C en el equipo real (modelo local real, suites en Windows, revisión visual).
+2. Integración de un punto de control de red real para aplicar solicitudes aprobadas.
+3. MSI firmado del agente y actualizaciones en vivo.
+4. Integraciones opcionales (Wazuh, Suricata, Syslog) sin convertirse en núcleo.

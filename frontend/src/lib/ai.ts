@@ -12,6 +12,10 @@ export const KIND_LABELS: Record<InsightKind, string> = {
   incident_evidence: "Evidencia de incidente",
   incident_next_steps: "Siguientes pasos de incidente",
   vulnerability_analysis: "Análisis de vulnerabilidad",
+  console_summary: "Resumen de la consola",
+  console_risk: "Explicación del riesgo (consola)",
+  console_hypotheses: "Hipótesis (consola)",
+  console_draft: "Borrador de nota (consola)",
 };
 
 // El lenguaje refleja la certeza: "posible" nunca se pinta igual que "detectado".
@@ -37,6 +41,7 @@ export const REF_TYPE_LABELS: Record<string, string> = {
   note: "Nota del analista",
   vulnerability: "Vulnerabilidad",
   threat_match: "Coincidencia de inteligencia",
+  tool_execution: "Resultado de herramienta",
 };
 
 export const STALE_LABELS: Record<NonNullable<Insight["stale_reason"]>, string> = {

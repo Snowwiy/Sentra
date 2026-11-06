@@ -215,6 +215,16 @@ INTERFACES = {
     "Insight": "InsightRead",
     "InsightList": "InsightList",
     "AIStatus": "AIStatus",
+    # Fase 7C: asistente de consola, panel y selectores contextuales.
+    "InsightHypothesis": "InsightHypothesis",
+    "ActivityHour": "ActivityHour",
+    "TopRiskFactor": "TopRiskFactor",
+    "TopRiskAsset": "TopRiskAsset",
+    "LookupItem": "LookupItem",
+    "LookupResult": "LookupResult",
+    # 7C-Security-Fix1: revisión del contexto de la consola.
+    "ConsoleContextItem": "ConsoleContextItem",
+    "ConsoleContextPreview": "ConsoleContextPreview",
     # Fase 4J.2: gestor de modelos locales.
     "LocalCPU": "CPURead",
     "LocalGPU": "GPURead",

@@ -6,6 +6,7 @@ el riesgo de cada día desde el ledger (risk_snapshots).
 """
 
 from datetime import UTC, datetime, time, timedelta
+from itertools import pairwise
 from uuid import uuid4
 
 import pytest
@@ -237,3 +238,54 @@ def test_access_and_validation(client: TestClient, engine: Engine) -> None:
     with TestClient(client.app) as viewer:
         authenticate(viewer, engine, "viewer")
         assert viewer.get(URL).status_code == 200
+
+
+# --- Fase 7C.4: actividad por hora y activo de mayor riesgo ------------------------------------
+
+
+def test_activity_24h_buckets_and_unmeasured_events(client: TestClient, engine: Engine) -> None:
+    with Session(engine) as db:
+        asset = _asset(db, "10.9.0.1")
+        _detection(db, asset, "DEF-001", 30, DetectionStatus.OPEN)
+        _detection(db, asset, "DEF-002", 35, DetectionStatus.OPEN)
+        _detection(db, asset, "DEF-003", 60 * 30, DetectionStatus.OPEN)  # fuera de 24 h
+    body = client.get(URL).json()
+    activity = body["activity_24h"]
+    assert len(activity) == 24
+    assert sum(p["detections"] for p in activity) == 2
+    # Sin activos con agente los eventos no se miden: None, no ceros.
+    assert all(p["events"] is None for p in activity)
+    hours = [datetime.fromisoformat(p["hour"]) for p in activity]
+    assert all(b - a == timedelta(hours=1) for a, b in pairwise(hours))
+
+
+def test_top_risk_lists_factors_with_their_points(client: TestClient, engine: Engine) -> None:
+    with Session(engine) as db:
+        assert _service(db).top_risk() is None
+        low = _asset(db, "10.9.0.2")
+        _risk(db, low, 12, RiskLevel.LOW)
+        high = _asset(db, "10.9.0.3", device_name="pc-finanzas-14")
+        db.add(
+            AssetRisk(
+                asset_id=high.id,
+                score=62,
+                level=RiskLevel.MEDIUM,
+                confidence=RiskConfidence.MEDIUM,
+                calculated_at=datetime.now(UTC),
+                contributions=[
+                    {"label": "Puerto 5432 accesible", "category": "exposure", "points": 22},
+                    {"label": "Absorbida", "category": "detection", "points": 0},
+                    {"label": "Mantenimiento aprobado", "category": "maintenance", "points": -6},
+                    {"label": "SCR-001", "rule_id": "SCR-001", "points": 12.04},
+                ]
+                + [{"label": f"f{i}", "points": 1} for i in range(6)],
+            )
+        )
+        db.commit()
+    top = client.get(URL).json()["top_risk"]
+    assert top["name"] == "pc-finanzas-14" and top["score"] == 62
+    labels = [f["label"] for f in top["factors"]]
+    assert labels[:3] == ["Puerto 5432 accesible", "SCR-001", "Mantenimiento aprobado"]
+    assert "Absorbida" not in labels and len(labels) == 6
+    assert top["factors"][1]["points"] == 12.0 and top["factors"][1]["rule_id"] == "SCR-001"
+    assert top["other_points"] == 3.0

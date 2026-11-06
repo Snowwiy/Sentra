@@ -140,6 +140,38 @@ $env:SENTRA_QA_BACKEND_DIR = "$PWD\backend"   # opcional: escenario 5
 backend\.venv\Scripts\python.exe qa\e2e_threat_intel.py
 ```
 
+`qa/e2e_console_assist.py` (Fase 7C): selectores (`/lookup/asset` exacto por hostname,
+ambiguo con dos equipos de la misma IP, resolución de ids, `/lookup/incident`), una
+herramienta de lectura y el asistente de la consola (`/ai/console/assist`: origen marcado,
+hipótesis con evidencia, referencias inventadas descartadas); sin IA comprueba que falla con
+un error claro. Un viewer usa los selectores pero no ejecuta herramientas. Para probar el
+asistente sin modelo real, `qa/console_assist_fake_llm.py` simula un servidor
+OpenAI-compatible en 127.0.0.1 (`--mode thinking` con `<think>` y JSON en bloque, `plain` o
+`broken`) y la API QA se arranca con `AI_ENABLED=true`,
+`AI_BASE_URL=http://127.0.0.1:8899/v1`, `AI_MODEL=qwen-local-test` y
+`AI_CONSOLE_ASSIST_ENABLED=true` (7C-Security-Fix1: apagado por defecto y solo loopback; el
+script comprueba también que sin revisión previa o con otra huella no se envía nada).
+
+```powershell
+Start-Process backend\.venv\Scripts\python.exe "qa\console_assist_fake_llm.py --port 8899"
+backend\.venv\Scripts\python.exe qa\e2e_console_assist.py
+```
+
+`qa/e2e_ai_insights_reasoning.py` (7C-Fix2): pide un análisis de AI Security Insights de un
+equipo de QA y muestra el resultado o el motivo de `ai_invalid_response`
+(`truncated_reasoning`, `schema_mismatch`...). Con el simulador en `--mode llamacpp` (imita a
+llama.cpp con un modelo que razona) se espera `--expect truncated_reasoning` sin
+`AI_REASONING_EFFORT` y un análisis válido con `AI_REASONING_EFFORT=none`. Sirve también
+contra el llama.cpp real de una instancia QA. `qa/diagnose_service_detections.sql` (solo
+lectura) lista de dónde salen las PER-001 y CORR-002 de servicios (7045 o inventario).
+
+```powershell
+Start-Process backend\.venv\Scripts\python.exe "qa\console_assist_fake_llm.py --port 8899 --mode llamacpp"
+backend\.venv\Scripts\python.exe qa\e2e_ai_insights_reasoning.py --expect truncated_reasoning
+# API QA reiniciada con AI_REASONING_EFFORT=none:
+backend\.venv\Scripts\python.exe qa\e2e_ai_insights_reasoning.py
+```
+
 ## 4. Rendimiento del motor de detección
 
 ```powershell

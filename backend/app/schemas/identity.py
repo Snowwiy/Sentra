@@ -24,10 +24,12 @@ CandidateReason = Literal[
     "agent_reported_mac",
     "same_universal_mac",
     "mac_in_history",
+    "same_dhcp_client_id",
     "same_device_name",
     "same_ip",
     "same_vendor",
     "same_os",
+    "private_mac_rotation",
 ]
 Classification = Literal[
     "same_agent_reinstalled",
