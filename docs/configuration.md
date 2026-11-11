@@ -15,15 +15,23 @@ Root `.env` (template: `.env.example`, never committed):
 | `TEST_DATABASE_URL` | Separate database used by the test suite |
 | `CORS_ORIGINS` | Comma separated browser origins allowed to call the API |
 | `MAX_REQUEST_BYTES` | Largest accepted request body, default 4 MiB (413 above it) |
-| `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens |
+| `AGENT_ENROLLMENT_KEY` | Legacy shared secret agents can enroll with (min 24 chars; unset disables key-based enrollment). New agents should use one-time enrollment tokens. Desde 7D.1 solo da de alta agent_id NUEVOS: nunca sustituye la credencial de un agente existente |
+| `AGENT_ENROLLMENT_KEY_EXPIRES_AT` | Fase 7D.1: fecha ISO 8601 con zona a partir de la cual la clave legacy deja de aceptarse también para altas nuevas (retirada progresiva). Vacío = sin fecha |
+| `AGENT_RECOVERY_TOKEN_TTL_MINUTES` | Fase 7D.1: vigencia por defecto de una autorización de recuperación de identidad (15, de 1 a 60) |
 | `ENROLLMENT_TOKEN_TTL_MINUTES` | Default lifetime of one-time enrollment tokens (default 15, max 1440) |
 | `ADMIN_API_KEY` | Legacy: operator key (`X-Admin-Key`) for the administration API (enrollment tokens), only for scripts on the server; unset = those endpoints disabled (403). The dashboard and the CLI do not use it |
 | `SESSION_TTL_HOURS`, `SESSION_IDLE_MINUTES` | Duración absoluta (12 h) e inactividad (60 min) de las sesiones del dashboard |
 | `SESSION_COOKIE_SECURE`, `SESSION_COOKIE_SAMESITE` | Cookie `Secure` (por defecto solo con `ENVIRONMENT=production`, que debe ir por HTTPS) y `strict`/`lax` |
 | `LOGIN_RATE_WINDOW_MINUTES`, `LOGIN_MAX_FAILURES_PER_USER_IP`, `LOGIN_MAX_ATTEMPTS_PER_IP`, `LOGIN_MAX_FAILURES_PER_USER` | Límites de intentos de login (15 min; 5, 30, 50) |
 | `AGENT_REGISTER_MAX_PER_MINUTE` | `POST /agents/register` por IP y minuto (30) |
+| `AGENT_QUOTA_ENABLED` | Cuotas de ingesta por agente y globales (7D.2, H06). `true` por defecto |
+| `AGENT_QUOTA_REQUESTS_PER_MINUTE`, `AGENT_QUOTA_EVENTS_PER_MINUTE`, `AGENT_QUOTA_BYTES_PER_MINUTE` | Presupuesto por identidad de agente (120 peticiones, 6000 eventos, 16 MiB por minuto). Heartbeat, rotación y comandos solo gastan peticiones. 0 = sin límite en esa dimensión |
+| `AGENT_QUOTA_BURST_MINUTES` | Ráfaga permitida en minutos de presupuesto (3). Eventos por minuto × ráfaga debe ser al menos 2500 para que quepa el backlog de un ciclo de Windows |
+| `AGENT_QUOTA_MAX_CONCURRENT` | Peticiones simultáneas por agente y proceso del servidor (4) |
+| `INGEST_GLOBAL_REQUESTS_PER_MINUTE`, `INGEST_GLOBAL_EVENTS_PER_MINUTE`, `INGEST_GLOBAL_BYTES_PER_MINUTE`, `INGEST_GLOBAL_BURST_MINUTES` | Límite global de ingesta de datos (6000 peticiones, 200000 eventos, 512 MiB por minuto; ráfaga 1 minuto). Las rutas de control no lo gastan |
+| `INGEST_MAX_CONCURRENT` | Peticiones de ingesta simultáneas por proceso (32); por encima se responde 429 antes de autenticar |
 | `ALLOWED_HOSTS` | Nombres de `Host` aceptados (vacío = cualquiera; recomendado en producción) |
-| `AGENT_SERVER_URL` | URL agents use to reach this server, shown in the dashboard's install command (unset = suggested from local addresses) |
+| `AGENT_SERVER_URL` | URL agents use to reach this server, shown in the dashboard's install command (unset = suggested from local addresses). Desde 7D.1 debe ser `https://` (o http a loopback): el agente 0.7.0 rechaza http hacia otra máquina (docs/agent-https-migration.md) |
 | `HEARTBEAT_TIMEOUT_SECONDS` | Seconds without contact before an asset is `offline` (default 90) |
 | `ALERT_CPU_PERCENT`, `ALERT_RAM_PERCENT`, `ALERT_DISK_PERCENT` | Alert thresholds (default 90) |
 | `ALERT_SUSTAINED_SAMPLES` | Consecutive samples over threshold before CPU/RAM alert (default 3) |
@@ -51,3 +59,10 @@ Root `.env` (template: `.env.example`, never committed):
 | `MAINTENANCE_AUTO_RECOGNITION` | `true` (por defecto): una operación de mantenimiento aprobada reconoce sola las detecciones nuevas cuya evidencia casa exactamente; las anteriores a la aprobación solo cambian con vista previa y aplicar. `false`: toda reclasificación pasa por revisión explícita. [docs/detection-attribution.md](detection-attribution.md) |
 
 Frontend variables are documented in `frontend/.env.example`.
+
+### Capacidad y retención (7D.2)
+
+`python -m app.cli capacity-report [--exact] [--output fichero.json]` informa del tamaño de las
+tablas de telemetría, eventos y evidencias y de los días de retención configurados. Es de solo
+lectura. Las purgas (programadas o `purge-old-data`) registran ahora un evento de auditoría
+`retention_purge` con los recuentos borrados. Ver docs/fase-7d2.md.

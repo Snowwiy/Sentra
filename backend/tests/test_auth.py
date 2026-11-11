@@ -659,6 +659,7 @@ NON_SESSION_ROUTES = {
     ("POST", "/api/v1/auth/login"),  # por definición, sin sesión
     ("POST", "/api/v1/agents/register"),  # token/clave de enrollment
     ("POST", "/api/v1/agents/heartbeat"),  # token de agente
+    ("POST", "/api/v1/agents/credentials/rotate"),  # token de agente (Fase 7D.1)
     ("POST", "/api/v1/telemetry"),
     ("POST", "/api/v1/inventory"),
     ("POST", "/api/v1/processes"),
@@ -703,6 +704,8 @@ def _concrete(path: str) -> str:
         "link_id", "node_id",
         # Fase 6E: historial de topología, DHCP, procesos, forense y aislamiento.
         "snapshot_id", "change_id", "dhcp_source_id", "instance_id", "investigation_id",
+        # Fase 7D.1: autorizaciones de recuperación de agentes.
+        "recovery_id",
         "artifact_id", "package_id", "note_id", "isolation_id", "exclusion_id",
         # Fase 7A.6: tareas de caso y solicitudes de control de red.
         "task_id", "control_id",

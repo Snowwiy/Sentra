@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
+from app.core.evidence_policy import endpoint_detection_clause, safe_detection_summary
 from app.core.metrics import REGISTRY
 from app.detection import text
 from app.detection.config import DetectionConfig
@@ -764,6 +765,20 @@ class DetectionEngine:
         if asset is None:
             return
         self._session.flush()
+        # Fase 7D.1 (H02): la alerta la lee cualquiera con monitoring:read. Una detección de
+        # actividad del endpoint solo deja en ella el resumen operativo (sin ejecutable,
+        # usuario ni destino); el detalle sigue en la detección, con telemetry:read.
+        endpoint = bool(
+            self._session.scalar(
+                select(func.count())
+                .select_from(Detection)
+                .where(
+                    Detection.id == detection.id,
+                    endpoint_detection_clause(Detection, DetectionEvidence),
+                )
+            )
+        )
+        alert_summary = safe_detection_summary(detection.title) if endpoint else detection.summary
         self._alerts.raise_alert(
             asset,
             AlertRule.SECURITY_DETECTION,
@@ -778,7 +793,7 @@ class DetectionEngine:
                 "rule_id": detection.rule_id,
                 "severity": detection.severity.value,
                 "confidence": detection.confidence.value,
-                "summary": detection.summary[:300],
+                "summary": alert_summary[:300],
             },
         )
         alert = AlertRepository(self._session).get_active(

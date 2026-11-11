@@ -125,7 +125,7 @@ if [ "$BUILD_DEB" = "1" ] && command -v dpkg-deb >/dev/null 2>&1; then
   install_lf 0644 "$HERE/isolation.toml.example" "$DEB/opt/sentra-agent/share/isolation.toml.example"
   install -m 0644 "$STAGE/README.md" "$DEB/usr/share/doc/sentra-agent/README.md"
   install_lf 0755 "$HERE/debian/sentra-agent-setup" "$DEB/usr/sbin/sentra-agent-setup"
-  for script in postinst prerm postrm; do
+  for script in preinst postinst prerm postrm; do
     install_lf 0755 "$HERE/debian/$script" "$DEB/DEBIAN/$script"
   done
   tr -d '\r' < "$HERE/debian/control.in" | sed -e "s/@VERSION@/$VERSION/" -e "s/@ARCH@/$DEB_ARCH/" \

@@ -113,6 +113,8 @@ function execution(overrides: Partial<ToolExecutionOut> = {}): ToolExecutionOut 
     deadline_at: null,
     duration_ms: 12,
     version: 1,
+    content_withheld: false,
+    withheld_permissions: [],
     ...overrides,
   };
 }

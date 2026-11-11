@@ -47,6 +47,22 @@ class AgentRegisterResponse(ResponseModel):
     agent_token: str
 
 
+class AgentRotateRequest(RequestModel):
+    agent_id: UUID
+
+
+class AgentRotateResponse(ResponseModel):
+    """Fase 7D.1 (H01): credencial nueva del agente, devuelta una sola vez.
+
+    Queda pendiente hasta su primer uso; mientras tanto la anterior sigue valiendo, así una
+    respuesta perdida no deja al agente sin identidad.
+    """
+
+    asset_id: UUID
+    agent_token: str
+    issued_at: datetime
+
+
 class IsolationReport(BaseModel):
     """Fase 6E.7: estado del helper de aislamiento visto por el agente 0.5.0. Ignora claves
     nuevas para que un agente más moderno no pierda el heartbeat."""
@@ -80,3 +96,6 @@ class HeartbeatResponse(ResponseModel):
     # Fase 5D: comandos de Response en cola para este agente. Solo si es > 0 el agente pide
     # sus comandos (POST /agents/commands/poll): sin sondeo extra en cada ciclo.
     pending_commands: int = 0
+    # Fase 7D.1: el servidor pide rotar la credencial (transporte inseguro detectado o
+    # petición de un admin). Un agente anterior ignora el campo.
+    rotate_credential: bool = False

@@ -6,6 +6,7 @@ import logging
 import sys
 import threading
 import uuid
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -176,6 +177,11 @@ def test_reinstated_agent_recovers_with_same_identity(
         agent.cycle()
 
     state.revoked.clear()
+    # Fase 7D.1: rehabilitado, vuelve con una autorización de recuperación del admin.
+    recovery = "sentra_et_rec_" + "Y" * 43
+    state.recovery_tokens.add(recovery)
+    agent.config = replace(agent.config, enrollment_token=recovery)
+    agent._bootstrap_spent = False
     agent.cycle()
 
     assert agent.identity.asset_id == asset_id
@@ -361,7 +367,9 @@ def test_token_never_written_to_log_file(
     try:
         agent = build_agent(config)
         agent.cycle()
+        # Base de datos reiniciada: 401 y nuevo registro (también deja rastro en el log).
         state.tokens.pop(str(agent.identity.agent_id))
+        state.agents.pop(str(agent.identity.agent_id))
         agent.cycle()  # 401 + re-enrollment path logs too
         logging.getLogger("sentra_agent").error("oops %s", agent.identity.token)
     finally:

@@ -30,7 +30,11 @@ from app.services.asset_lifecycle_policy import LifecyclePolicy
 from app.services.asset_lifecycle_service import AssetLifecycleService
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.retention_6e import purge_phase_6e
-from app.services.retention_service import RetentionPolicy, RetentionService
+from app.services.retention_service import (
+    RetentionPolicy,
+    RetentionService,
+    record_purge_audit,
+)
 from app.threat_intel.config import ThreatIntelConfig
 from app.threat_intel.matching import SYSTEM as THREAT_INTEL_ACTOR
 from app.threat_intel.matching import ThreatIntelMatcher
@@ -263,6 +267,8 @@ def purge_old_data() -> None:
         from app.services.tool_service import ToolEngine
 
         extra["tool_executions"] = ToolEngine(session, settings).purge()
+        # Fase 7D.2: toda purga que borró algo queda en la auditoría (solo recuentos).
+        record_purge_audit(session, {**result.counts(), **extra}, "scheduled")
     if any(extra.values()):
         logger.info("phase 6e data purged", extra={f"purged_{k}": v for k, v in extra.items()})
     if result.total:

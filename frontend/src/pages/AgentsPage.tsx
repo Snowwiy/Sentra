@@ -3,6 +3,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { consoleApi, sentraApi } from "../api/sentra";
 import type { Agent } from "../api/types";
 import { AddAgentWizard } from "../components/agents/AddAgentWizard";
+import { TransportBadge } from "../components/agents/AgentIdentityDialogs";
 import { AgentActions } from "../components/agents/AgentActions";
 import {
   AgentStateBadge,
@@ -129,6 +130,35 @@ export function AgentsPage() {
         </div>
       )}
 
+      {/* Fase 7D.1 (H04): los agentes por HTTP en claro siguen monitorizados, pero se señalan. */}
+      {!!summary?.insecure_transport && (
+        <div className="banner banner--warn" role="alert">
+          {summary.insecure_transport === 1
+            ? "1 agente habla con Sentra por HTTP en claro"
+            : `${summary.insecure_transport} agentes hablan con Sentra por HTTP en claro`}
+          : su credencial viaja sin cifrar. Siguen monitorizados; migra a HTTPS y rota sus credenciales
+          (docs/agent-https-migration.md).
+        </div>
+      )}
+      {/* Fase 7D.2 (H06): limitar no corta al agente; reenvía desde su buffer cuando hay cupo. */}
+      {!!summary?.throttled && (
+        <div className="banner banner--warn" role="status">
+          {summary.throttled === 1
+            ? "1 agente ha superado su cuota de ingesta"
+            : `${summary.throttled} agentes han superado su cuota de ingesta`}{" "}
+          en los últimos 15 minutos. Sentra rechaza temporalmente parte de sus datos y el agente los
+          reenvía desde su buffer; si se repite, revisa el volumen de ese equipo o los límites
+          AGENT_QUOTA_* (docs/fase-7d2.md).
+        </div>
+      )}
+      {!!summary?.legacy_key && (
+        <div className="banner" role="status">
+          {summary.legacy_key === 1 ? "1 agente se registró" : `${summary.legacy_key} agentes se registraron`} con
+          la clave de registro heredada. Rota su credencial y fija AGENT_ENROLLMENT_KEY_EXPIRES_AT para
+          retirarla.
+        </div>
+      )}
+
       <section className="stats stats--5" aria-label="Agentes por estado">
         {CARDS.map((card) => (
           <button
@@ -181,6 +211,7 @@ export function AgentsPage() {
                   <th>Método</th>
                   <th>Agent ID</th>
                   <th title="Estado del token del agente (revocar no archiva)">Credencial</th>
+                  <th title="Transporte del último heartbeat">Transporte</th>
                   <th title="Estado del activo (archivar no revoca)">Activo</th>
                   <th aria-label="Acciones" />
                 </tr>
@@ -225,6 +256,9 @@ export function AgentsPage() {
                     </td>
                     <td>
                       <CredentialBadge status={agent.credential_status} />
+                    </td>
+                    <td>
+                      <TransportBadge agent={agent} />
                     </td>
                     <td>
                       {agent.asset_state === "archived" ? (

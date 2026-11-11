@@ -309,6 +309,15 @@ describe("filtro de site en las páginas", () => {
     lifecycle_version: 0,
     site_id: siteId,
     site_name: siteName,
+    credential_source: "enrollment_token",
+    rotation_pending: false,
+    rotation_requested_at: null,
+    rotation_reason: null,
+    transport: "https",
+    transport_at: null,
+    insecure_transport_at: null,
+    ingest_throttled_at: null,
+    ingest_rejections: 0,
   });
 
   function renderAgents() {

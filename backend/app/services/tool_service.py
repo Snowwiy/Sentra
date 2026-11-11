@@ -44,6 +44,7 @@ from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.evidence_policy import missing_permissions
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -266,6 +267,7 @@ class ToolEngine:
             actor_user_id=op.user.id,
             input={},
             input_sha256=sha256_of(raw),
+            read_permissions=sorted(p.value for p in tool.read_permissions),
             error_code="permission_denied",
             error_message="Missing: " + ", ".join(sorted(p.value for p in missing)),
             created_at=now,
@@ -426,6 +428,7 @@ class ToolEngine:
             actor_user_id=op.user.id,
             input=payload,
             input_sha256=sha256_of(payload),
+            read_permissions=sorted(p.value for p in tool.read_permissions),
             target_type=target.type,
             target_public_id=target.public_id,
             target_label=target.label,
@@ -490,7 +493,7 @@ class ToolEngine:
         input_hash = sha256_of(params.model_dump(mode="json"))
         existing = self._by_idempotency(op, body.idempotency_key, tool, input_hash)
         if existing is not None:
-            return self.execution_out(existing, deduplicated=True)
+            return self.execution_out(existing, op.permissions, deduplicated=True)
         now = _now()
         self._check_concurrency(op, now)
         running = self._session.scalar(
@@ -503,7 +506,7 @@ class ToolEngine:
         )
         if running is not None:
             self._session.commit()
-            return self.execution_out(running, deduplicated=True)
+            return self.execution_out(running, op.permissions, deduplicated=True)
         row = self._new_row(
             op,
             tool,
@@ -531,9 +534,9 @@ class ToolEngine:
             ) or self._by_idempotency(op, body.idempotency_key, tool, input_hash)
             if other is None:
                 raise
-            return self.execution_out(other, deduplicated=True)
+            return self.execution_out(other, op.permissions, deduplicated=True)
         self._run(op, tool, params, row, site_id, incident, body.idempotency_key)
-        return self.execution_out(row)
+        return self.execution_out(row, op.permissions)
 
     def _run(
         self,
@@ -609,6 +612,7 @@ class ToolEngine:
             with Session(bind=conn, expire_on_commit=False) as work:
                 ctx = self._context(op, work, site_id, incident, key)
                 output = tool.handler(ctx, params)
+                output.content_permissions |= ctx.content_permissions
                 # Se serializa dentro de la transacción: los atributos perezosos se leen aquí.
                 self._serialize(tool, output)
             conn.rollback()
@@ -630,6 +634,7 @@ class ToolEngine:
         )
         ctx = self._context(op, self._session, site_id, incident, key)
         output = tool.handler(ctx, params)
+        output.content_permissions |= ctx.content_permissions
         self._serialize(tool, output)
         return output
 
@@ -704,6 +709,9 @@ class ToolEngine:
             row.output = payload
             row.truncated = False
         row.output_sha256 = hashlib.sha256(encoded).hexdigest()
+        row.read_permissions = sorted(
+            set(row.read_permissions or []) | {p.value for p in output.content_permissions}
+        )
         row.summary = clean_text(output.summary, SUMMARY_MAX)
         row.evidence = [ref.as_dict() for ref in output.evidence[:EVIDENCE_MAX]]
         provenance["generated_at"] = _now().isoformat()
@@ -719,7 +727,7 @@ class ToolEngine:
         input_hash = sha256_of(params.model_dump(mode="json"))
         existing = self._by_idempotency(op, body.idempotency_key, tool, input_hash)
         if existing is not None:
-            return self.execution_out(existing, deduplicated=True)
+            return self.execution_out(existing, op.permissions, deduplicated=True)
         ctx = self._context(op, self._session, site_id, incident, body.idempotency_key)
         result: ToolPreview = tool.preview(ctx, params)
         now = _now()
@@ -760,7 +768,7 @@ class ToolEngine:
             commit=False,
         )
         self._session.commit()
-        return self.execution_out(row)
+        return self.execution_out(row, op.permissions)
 
     def _lock(self, public_id: UUID) -> ToolExecution:
         row = self._session.scalar(
@@ -842,7 +850,7 @@ class ToolEngine:
         )
         self._session.commit()
         self._run(op, tool, params, row, site_id, incident, row.idempotency_key)
-        return self.execution_out(row)
+        return self.execution_out(row, op.permissions)
 
     # --- Cancelación -----------------------------------------------------------------------------
 
@@ -874,7 +882,7 @@ class ToolEngine:
                 delegated.version,
                 "Cancelled from the Analyst Tool Engine",
             )
-            return self.execution_out(row)
+            return self.execution_out(row, op.permissions)
         else:
             raise ToolStateError(f"The execution is {row.status} and cannot be cancelled")
         row.cancelled_by = op.actor.name[:64]
@@ -900,7 +908,7 @@ class ToolEngine:
             if still_running == pid:
                 self._session.execute(text("SELECT pg_cancel_backend(:pid)"), {"pid": pid})
                 self._session.commit()
-        return self.execution_out(row)
+        return self.execution_out(row, op.permissions)
 
     # --- Lecturas del historial ----------------------------------------------------------------
 
@@ -911,7 +919,7 @@ class ToolEngine:
         if row is None:
             raise NotFoundError("Tool execution not found")
         self._visible(op, row)
-        return self.execution_out(row)
+        return self.execution_out(row, op.permissions)
 
     def list(
         self,
@@ -952,10 +960,26 @@ class ToolEngine:
             .limit(limit)
             .offset(offset)
         ).all()
-        return ToolExecutionList(items=[self.execution_out(r) for r in rows], total=int(total or 0))
+        return ToolExecutionList(
+            items=[self.execution_out(r, op.permissions) for r in rows], total=int(total or 0)
+        )
 
-    def execution_out(self, row: ToolExecution, *, deduplicated: bool = False) -> ToolExecutionOut:
+    def execution_out(
+        self,
+        row: ToolExecution,
+        permissions: frozenset[Permission],
+        *,
+        deduplicated: bool = False,
+    ) -> ToolExecutionOut:
+        """Serializa una ejecución revalidando los permisos de lectura de su contenido (H03).
+
+        `permissions` son los ACTUALES de quien lee. Si le falta alguno de los guardados con
+        la ejecución, solo se devuelven metadatos inocuos (herramienta, estado, fechas,
+        objetivo) y `content_withheld=True`: ni entrada, ni salida, ni resumen, ni evidencia,
+        ni procedencia. Así un usuario degradado no recupera lo que obtuvo con más permisos.
+        """
         tool = get_tool(row.tool_id)
+        withheld = missing_permissions(row.read_permissions, permissions)
         site = self._session.get(Site, row.site_id) if row.site_id else None
         asset = self._session.get(Asset, row.asset_id) if row.asset_id else None
         incident = self._session.get(Incident, row.incident_id) if row.incident_id else None
@@ -975,17 +999,19 @@ class ToolEngine:
             status=row.status,
             invoker=row.invoker,
             actor=row.actor,
-            input=row.input or {},
+            input={} if withheld else (row.input or {}),
             input_sha256=row.input_sha256,
-            output=row.output,
+            output=None if withheld else row.output,
             output_sha256=row.output_sha256,
             output_bytes=row.output_bytes,
             truncated=row.truncated,
-            summary=row.summary,
-            evidence=list(row.evidence or []),
-            provenance=row.provenance,
+            summary=None if withheld else row.summary,
+            evidence=[] if withheld else list(row.evidence or []),
+            provenance=None if withheld else row.provenance,
             error_code=row.error_code,
-            error_message=row.error_message,
+            error_message=None if withheld else row.error_message,
+            content_withheld=bool(withheld),
+            withheld_permissions=withheld,
             target_type=row.target_type,
             target_id=row.target_public_id,
             target_label=row.target_label,

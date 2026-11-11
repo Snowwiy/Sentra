@@ -47,7 +47,7 @@ from app.models.discovery import (
     DiscoveryTrigger,
 )
 from app.models.endpoint import DetectionExclusion, EndpointActivity, ProcessInstance
-from app.models.enrollment import AgentEnrollmentToken, EnrollmentTokenState
+from app.models.enrollment import AgentEnrollmentToken, AgentRecoveryToken, EnrollmentTokenState
 from app.models.event import EventLevel, SystemEvent
 from app.models.exposure import AssetPort, PortStateValue
 from app.models.forensics import (
@@ -68,6 +68,7 @@ from app.models.incident import (
     IncidentThreatMatch,
     IncidentVulnerability,
 )
+from app.models.ingest_quota import IngestQuotaBucket
 from app.models.inventory import AssetInventory
 from app.models.isolation import IsolationSession
 from app.models.network import (
@@ -147,6 +148,7 @@ __all__ = [
     "AIModelBenchmark",
     "AgentCommand",
     "AgentEnrollmentToken",
+    "AgentRecoveryToken",
     "Alert",
     "AlertRule",
     "AlertSeverity",
@@ -208,6 +210,7 @@ __all__ = [
     "IncidentTask",
     "IncidentThreatMatch",
     "IncidentVulnerability",
+    "IngestQuotaBucket",
     "Investigation",
     "InvestigationNote",
     "IsolationSession",

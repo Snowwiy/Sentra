@@ -127,15 +127,16 @@ def no_env_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_new_token_reenrolls_an_agent_whose_own_token_is_dead(
     fake_api: tuple[str, FakeApiState], tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Revoked then reinstated (or server reset): the installer run with a new one-time
-    token must enroll again as the same agent instead of saying "already enrolled"."""
+    """Revoked then reinstated: the installer run with a recovery authorization (Fase 7D.1;
+    an ordinary token no longer re-enrolls an existing agent_id) must enroll again as the
+    same agent instead of saying "already enrolled"."""
     url, state = fake_api
     state.enrollment_tokens.add(TOKEN)
     assert _enroll_cli(url, tmp_path, _write_token(tmp_path / "t1", TOKEN)) == 0
     agent_id, asset_id = next(iter(state.agents.items()))
     state.tokens.pop(agent_id)  # the server no longer accepts the stored token
-    second = "sentra_et_" + "R" * 43
-    state.enrollment_tokens.add(second)
+    second = "sentra_et_rec_" + "R" * 43
+    state.recovery_tokens.add(second)
     capsys.readouterr()
 
     token_file = _write_token(tmp_path / "t2", second)
@@ -143,7 +144,7 @@ def test_new_token_reenrolls_an_agent_whose_own_token_is_dead(
 
     assert capsys.readouterr().out.startswith("enrolled:")
     assert list(state.agents.items()) == [(agent_id, asset_id)]  # same agent, same asset
-    assert second not in state.enrollment_tokens and not token_file.exists()
+    assert second not in state.recovery_tokens and not token_file.exists()
 
 
 @pytest.mark.usefixtures("no_env_credentials")

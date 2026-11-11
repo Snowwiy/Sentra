@@ -14,12 +14,14 @@ from sentra_agent.inventory import _clip, collect_inventory
 
 def test_config_precedence_file_env_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     config_file = tmp_path / "agent.toml"
-    config_file.write_text('api_url = "http://file:8000"\ninterval_seconds = 60\nbuffer_size = 7\n')
+    config_file.write_text(
+        'api_url = "https://file:8000"\ninterval_seconds = 60\nbuffer_size = 7\n'
+    )
     monkeypatch.setenv("SENTRA_AGENT_INTERVAL_SECONDS", "45")
 
-    config = load_config(config_file, {"api_url": "http://cli:8000"})
+    config = load_config(config_file, {"api_url": "https://cli:8000"})
 
-    assert config.api_url == "http://cli:8000"
+    assert config.api_url == "https://cli:8000"
     assert config.interval_seconds == 45
     assert config.buffer_size == 7
 

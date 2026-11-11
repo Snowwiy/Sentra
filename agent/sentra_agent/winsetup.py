@@ -25,6 +25,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any
 from urllib.parse import urlsplit
 
+from sentra_agent.config import insecure_url_reason
 from sentra_agent.enrollment import STATUS_FILE
 from sentra_agent.identity import FORMAT_VERSION, IDENTITY_FILE, write_atomic
 from sentra_agent.isolation.policy import PolicyError, render_default_policy
@@ -67,7 +68,7 @@ class ServerUrl:
 def normalize_server_url(raw: str) -> ServerUrl:
     url = raw.strip().rstrip("/")
     if not SERVER_URL.fullmatch(url):
-        raise SetupError(f"server URL is not valid: {raw!r} (expected http(s)://host[:port])")
+        raise SetupError(f"server URL is not valid: {raw!r} (expected https://host[:port])")
     try:
         host = (urlsplit(url).hostname or "").lower()
     except ValueError as exc:  # p. ej. "[::1" sin cerrar
@@ -291,6 +292,13 @@ def plan(
     else:
         raise SetupError("-Server is required for a first installation")
     api_url = parsed.url if parsed else existing_api_url(existing or "")
+    # Fase 7D.1 (H04): el agente 0.7.0 no arranca con http:// fuera de loopback. Se detiene
+    # aquí, ANTES de parar o sustituir el servicio: en un upgrade el agente anterior sigue
+    # funcionando y el administrador recibe el diagnóstico con el camino de migración.
+    reason = insecure_url_reason(api_url) if api_url else None
+    if reason is not None:
+        origin = "-Server" if parsed else f"the existing {existing_config}"
+        raise SetupError(f"{origin}: {reason}")
     return {
         "service_name": SERVICE_NAME,
         "display_name": DISPLAY_NAME,

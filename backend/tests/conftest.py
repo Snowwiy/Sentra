@@ -11,6 +11,23 @@ os.environ["AGENT_ENROLLMENT_KEY"] = TEST_ENROLLMENT_KEY
 # Same idea for the administration API (enrollment tokens).
 TEST_ADMIN_KEY = "test-admin-key-0123456789abcdef-xyz"
 os.environ["ADMIN_API_KEY"] = TEST_ADMIN_KEY
+# Fase 7D.1: sin caducidad de la clave legacy y TTL de recuperación fijo, aunque el .env de
+# desarrollo los cambie.
+os.environ["AGENT_ENROLLMENT_KEY_EXPIRES_AT"] = ""
+os.environ["AGENT_RECOVERY_TOKEN_TTL_MINUTES"] = "15"
+# Fase 7D.2 (H06): cuotas de ingesta con sus valores por defecto, para que un .env de
+# desarrollo con otros límites no cambie los tests. Los tests de cuotas construyen sus ajustes.
+os.environ["AGENT_QUOTA_ENABLED"] = "true"
+os.environ["AGENT_QUOTA_REQUESTS_PER_MINUTE"] = "120"
+os.environ["AGENT_QUOTA_EVENTS_PER_MINUTE"] = "6000"
+os.environ["AGENT_QUOTA_BYTES_PER_MINUTE"] = str(16 * 1024 * 1024)
+os.environ["AGENT_QUOTA_BURST_MINUTES"] = "3"
+os.environ["AGENT_QUOTA_MAX_CONCURRENT"] = "4"
+os.environ["INGEST_GLOBAL_REQUESTS_PER_MINUTE"] = "6000"
+os.environ["INGEST_GLOBAL_EVENTS_PER_MINUTE"] = "200000"
+os.environ["INGEST_GLOBAL_BYTES_PER_MINUTE"] = str(512 * 1024 * 1024)
+os.environ["INGEST_GLOBAL_BURST_MINUTES"] = "1"
+os.environ["INGEST_MAX_CONCURRENT"] = "32"
 # Fase 5C: la sincronización por red es opt-in (false por defecto). Se fija aquí porque las
 # variables de entorno del proceso ganan al .env: un .env de desarrollo con
 # THREAT_INTEL_SYNC_ENABLED=true (pruebas reales) no debe cambiar lo que comprueban los tests.
@@ -260,7 +277,7 @@ class AgentClient(TestClient):
             elif agent_id in self.tokens:
                 headers = {"Authorization": f"Bearer {self.tokens[agent_id]}"}
         response = super().post(url, json=json, headers=headers, **kwargs)
-        if is_register and response.status_code in (200, 201):
+        if is_register and response.status_code in (200, 201) and agent_id is not None:
             self.tokens[str(agent_id)] = response.json()["agent_token"]
         return response
 
@@ -341,6 +358,7 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 " alerts, telemetry_samples, assets,"
                 " discovery_jobs, agent_enrollment_tokens, audit_events, user_sessions, users,"
                 " ai_local_settings, ai_model_benchmarks, ai_local_models, rate_limit_hits,"
+                " ingest_quota_buckets,"
                 " detection_rules, detection_rule_stats, vulnerability_sources, playbooks,"
                 " reports, site_networks, sensor_enrollment_tokens, sensors,"
                 " network_devices, snmp_credential_profiles, wlan_observations,"
@@ -373,6 +391,29 @@ def agent_payload(**overrides: Any) -> dict[str, Any]:
     }
     payload.update(overrides)
     return payload
+
+
+# Fase 7D.1: las operaciones de credencial de agentes exigen HTTPS (o HTTP en loopback). El
+# TestClient habla por http://testserver; estas URL absolutas simulan la llegada por HTTPS.
+HTTPS_API = "https://testserver/api/v1"
+RECOVERY_REASON = "Reinstalación de prueba del agente"
+
+
+def authorize_recovery(client: TestClient, asset_id: str, **overrides: Any) -> dict[str, Any]:
+    """Autorización de recuperación emitida por el admin del `client` (devuelve el cuerpo)."""
+    body: dict[str, Any] = {"reason": RECOVERY_REASON, "confirm": True, **overrides}
+    response = client.post(f"/api/v1/console/agents/{asset_id}/recovery-tokens", json=body)
+    assert response.status_code == 201, response.text
+    created: dict[str, Any] = response.json()
+    return created
+
+
+def recover_agent(client: TestClient, asset_id: str, payload: dict[str, Any]) -> Any:
+    """Recupera la identidad de un agente existente como lo haría el instalador (H01)."""
+    token = authorize_recovery(client, asset_id)["token"]
+    return client.post(
+        f"{HTTPS_API}/agents/register", json=payload, headers={"X-Enrollment-Token": token}
+    )
 
 
 @pytest.fixture

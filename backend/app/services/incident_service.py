@@ -25,6 +25,7 @@ from uuid import UUID
 from sqlalchemy import Select, func, select, text, update
 from sqlalchemy.orm import Session
 
+from app.core.evidence_policy import endpoint_detection_clause, safe_detection_summary
 from app.core.exceptions import (
     IncidentAlreadyLinkedError,
     IncidentConflictError,
@@ -43,7 +44,7 @@ from app.models.case_operations import (
     IncidentTask,
     NetworkControlRequest,
 )
-from app.models.detection import Detection
+from app.models.detection import Detection, DetectionEvidence
 from app.models.incident import (
     ACTIVE_STATUSES,
     Incident,
@@ -368,9 +369,25 @@ class IncidentService:
         now = _now()
         severity = workflow.severity_from_detection(detection.severity)
         priority = payload.priority or self._suggested_priority(severity, [asset])
+        # Fase 7D.1 (H02): la descripción del caso la lee cualquiera con incidents:read
+        # (también viewer). Si la detección es de actividad del endpoint, su resumen
+        # interpola ejecutable, usuario o destino: el caso copia solo el resumen operativo y
+        # el detalle sigue en la detección, protegido por telemetry:read.
+        default_description = (
+            safe_detection_summary(detection.title)
+            if self._session.scalar(
+                select(func.count())
+                .select_from(Detection)
+                .where(
+                    Detection.id == detection.id,
+                    endpoint_detection_clause(Detection, DetectionEvidence),
+                )
+            )
+            else detection.summary
+        )
         incident = self._new_incident(
             payload.title or detection.title[:200],
-            payload.description if payload.description is not None else detection.summary,
+            payload.description if payload.description is not None else default_description,
             severity,
             priority,
             workflow.confidence_from_detections([detection.confidence]),

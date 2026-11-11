@@ -27,6 +27,12 @@ from uuid import UUID
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 
+from app.core.evidence_policy import (
+    ENDPOINT_PERMISSION,
+    EvidenceAccess,
+    endpoint_detection_clause,
+    missing_permissions,
+)
 from app.core.exceptions import NotFoundError, PermissionDeniedError
 from app.core.permissions import Permission
 from app.detection.config import DetectionConfig
@@ -38,6 +44,7 @@ from app.models.change import ChangeCategory
 from app.models.detection import (
     Detection,
     DetectionConfidence,
+    DetectionEvidence,
     DetectionSeverity,
     DetectionStatus,
 )
@@ -395,8 +402,15 @@ class DetectionSearchIn(RequestModel):
     limit: int = Field(default=50, ge=1, le=200)
 
 
+def _note_endpoint_content(ctx: ToolContext, access: EvidenceAccess, endpoint: bool) -> None:
+    """Fase 7D.1: si la salida lleva detalle de endpoint completo, leerla exige lo mismo."""
+    if endpoint and access.endpoint:
+        ctx.content_permissions.add(ENDPOINT_PERMISSION)
+
+
 def detections_search(ctx: ToolContext, params: DetectionSearchIn) -> ToolOutput:
     asset = load_asset(ctx, params.asset_id) if params.asset_id else None
+    access = EvidenceAccess.of(ctx.permissions)
     result = DetectionService(ctx.session, DetectionConfig.from_settings(ctx.settings)).list(
         DetectionFilter(
             status=params.status,
@@ -409,7 +423,12 @@ def detections_search(ctx: ToolContext, params: DetectionSearchIn) -> ToolOutput
             site_id=ctx.site_id,
         ),
         params.limit,
+        access=access,
     )
+    # Una detección de endpoint servida completa es contenido protegido; servida restringida
+    # (restricted=True) ya no lo es. Con acceso completo nunca hay filas restringidas, así que
+    # se mira la clasificación real con la misma condición que usa el listado.
+    _note_endpoint_content(ctx, access, _any_endpoint(ctx, [d.detection_id for d in result.items]))
     refs = [
         _ref("detection", d.detection_id, f"{d.rule_id} {d.title}", d.last_seen_at)
         for d in result.items[:EVIDENCE_REFS]
@@ -426,10 +445,27 @@ class DetectionRef(RequestModel):
     detection_id: UUID
 
 
-def detection_get(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
-    detail = DetectionService(ctx.session, DetectionConfig.from_settings(ctx.settings)).get(
-        params.detection_id
+def _any_endpoint(ctx: ToolContext, public_ids: list[UUID]) -> bool:
+    if not public_ids:
+        return False
+    return bool(
+        ctx.session.scalar(
+            select(func.count())
+            .select_from(Detection)
+            .where(
+                Detection.public_id.in_(public_ids),
+                endpoint_detection_clause(Detection, DetectionEvidence),
+            )
+        )
     )
+
+
+def detection_get(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
+    access = EvidenceAccess.of(ctx.permissions)
+    detail = DetectionService(ctx.session, DetectionConfig.from_settings(ctx.settings)).get(
+        params.detection_id, access
+    )
+    _note_endpoint_content(ctx, access, _any_endpoint(ctx, [detail.detection_id]))
     asset = load_asset(ctx, detail.asset_id)
     refs = [_asset_ref(asset), _ref("detection", detail.detection_id, detail.rule_id)]
     return ToolOutput(
@@ -1087,12 +1123,24 @@ def case_link(ctx: ToolContext, params: CaseLinkIn) -> ToolOutput:
         assert execution is not None  # noqa: S101  (comprobado arriba)
         if execution.actor_user_id != ctx.user.id and not ctx.has(Permission.TOOLS_MANAGE):
             raise PermissionDeniedError("Only your own tool executions can be linked")
+        # Fase 7D.1 (H03): no se vincula lo que quien vincula ya no puede leer.
+        if missing_permissions(execution.read_permissions, ctx.permissions):
+            raise PermissionDeniedError("You can no longer read this tool execution")
         linked = execution.incident_id != incident.id
         execution.incident_id = incident.id
+        # La nota del caso la lee cualquiera con incidents:read: solo se copia el resumen si la
+        # ejecución no exige más que monitoring:read; si no, la nota remite a la ejecución
+        # (que revalida los permisos de cada lector).
+        protected = set(execution.read_permissions or []) - {Permission.MONITORING_READ.value}
+        summary = (
+            f"resumen protegido (requiere {', '.join(sorted(protected))})"
+            if protected
+            else execution.summary or execution.status
+        )
         service.add_note(
             params.incident_id,
             f"Evidencia de herramienta {execution.tool_id} v{execution.tool_version}"
-            f" ({execution.public_id}): {execution.summary or execution.status}."
+            f" ({execution.public_id}): {summary}."
             f" SHA-256 de la salida: {execution.output_sha256 or 'sin salida'}",
         )
     out = CaseLinkOut(
@@ -1164,7 +1212,9 @@ def operations_history(ctx: ToolContext, params: OperationsIn) -> ToolOutput:
             tool_version=r.tool_version,
             status=r.status,
             actor=r.actor,
-            summary=r.summary,
+            # Fase 7D.1 (H03): el resumen es contenido; se retiene si el lector ya no tiene
+            # los permisos guardados con esa ejecución.
+            summary=None if missing_permissions(r.read_permissions, ctx.permissions) else r.summary,
             output_sha256=r.output_sha256,
             created_at=r.created_at,
             finished_at=r.finished_at,
@@ -1210,8 +1260,25 @@ def _detection_in_scope(ctx: ToolContext, public_id: UUID) -> Detection:
     return detection
 
 
+def _endpoint_gate(ctx: ToolContext, detection: Detection) -> None:
+    """Fase 7D.1 (H02): herramientas cuya salida sale del detalle de la detección.
+
+    La atribución y las claves causales se construyen con `details` (rutas y hashes de
+    script, servicios): en una detección de endpoint no hay versión parcial útil, así que
+    sin telemetry:read se deniega; con él, la ejecución queda protegida con ese permiso.
+    """
+    if not _any_endpoint(ctx, [detection.public_id]):
+        return
+    if ENDPOINT_PERMISSION not in ctx.permissions:
+        raise PermissionDeniedError(
+            "This detection holds endpoint activity details: telemetry:read is required"
+        )
+    ctx.content_permissions.add(ENDPOINT_PERMISSION)
+
+
 def attribution_explain(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
     detection = _detection_in_scope(ctx, params.detection_id)
+    _endpoint_gate(ctx, detection)
     out = AttributionService(ctx.session).detection_attribution(detection.public_id)
     verdict = out.verdict or "sin evaluar"
     missing = len((out.attribution or {}).get("missing_evidence") or [])
@@ -1245,6 +1312,7 @@ def detections_related(ctx: ToolContext, params: DetectionRef) -> ToolOutput:
     """Otras detecciones con la misma clave causal: el mismo script (hash o ruta) o el mismo
     servicio, en este u otros equipos del site. Responde a "¿dónde más ha pasado esto?"."""
     detection = _detection_in_scope(ctx, params.detection_id)
+    _endpoint_gate(ctx, detection)
     details = detection.details or {}
     keys = sorted(
         causal_keys(
