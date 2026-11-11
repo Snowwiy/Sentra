@@ -94,6 +94,8 @@ function execution(id: string, overrides: Partial<ToolExecutionOut> = {}): ToolE
     deadline_at: null,
     duration_ms: 5,
     version: 1,
+    content_withheld: false,
+    withheld_permissions: [],
     ...overrides,
   };
 }

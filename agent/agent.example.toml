@@ -1,11 +1,22 @@
 # Sentra agent configuration. All keys are optional.
 # Precedence: defaults < this file < SENTRA_AGENT_* environment variables < CLI flags.
 
+# Fase 7D.1 (agente 0.7.0): https:// obligatorio. http:// solo hacia 127.0.0.1, ::1 o
+# localhost (agente en el propio servidor). No hay opción para relajarlo; ver
+# docs/agent-https-migration.md para migrar instalaciones con http://.
 api_url = "http://127.0.0.1:8000"
+# api_url = "https://sentra.empresa.lan"
 interval_seconds = 30
 inventory_interval_seconds = 900
 processes_interval_seconds = 60
 request_timeout_seconds = 10
+# Plazo total de una petición (conectar, enviar y leer la respuesta), en segundos.
+request_deadline_seconds = 60
+# Tamaño máximo de una respuesta del servidor (bytes, 64 KiB - 64 MiB). Se lee por trozos.
+max_response_bytes = 4194304
+# CA privada adicional (PEM) si el certificado del servidor lo emite una CA interna. Se
+# añade a las del sistema; la verificación de certificado y nombre nunca se desactiva.
+# ca_bundle = "C:/ProgramData/Sentra/Agent/config/sentra-ca.pem"
 max_backoff_seconds = 300
 buffer_size = 120
 log_level = "INFO"

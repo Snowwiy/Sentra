@@ -46,6 +46,9 @@ class DetectionRead(ResponseModel):
     # Fase 7B.1: veredicto de atribución vigente (el del analista si lo fijó). None si la regla
     # no evalúa atribución o la detección es anterior a 7B.
     attribution_verdict: str | None = None
+    # Fase 7D.1 (H02): True si el resumen original se sustituyó porque la detección es de
+    # actividad del endpoint y quien lee no tiene telemetry:read.
+    restricted: bool = False
 
 
 class DetectionList(ResponseModel):
@@ -64,11 +67,17 @@ class DetectionEvidenceRead(ResponseModel):
     occurred_at: datetime
     summary: str
     data: dict[str, Any] | None
+    # Fase 7D.1 (H02): evidencia de endpoint servida sin su detalle (falta telemetry:read) y
+    # nombres de los campos retenidos (nunca sus valores).
+    restricted: bool = False
+    withheld_fields: list[str] = Field(default_factory=list)
 
 
 class DetectionDetail(DetectionRead):
     # Hechos estructurados de la conclusión (cuenta, contadores, ventana...).
     details: dict[str, Any] | None
+    # Fase 7D.1 (H02): claves de `details` retenidas por la política de endpoint.
+    withheld_details: list[str] = Field(default_factory=list)
     # Del catálogo de reglas: qué detecta, por qué importa y qué revisar (defensivo).
     description: str
     why: str

@@ -1,7 +1,7 @@
 from datetime import timedelta
 from typing import Annotated
 
-from fastapi import Depends, Header
+from fastapi import Depends, Header, Request
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session
 
@@ -47,7 +47,11 @@ Detection = Annotated[DetectionConfig, Depends(get_detection_config)]
 
 def get_agent_service(session: DbSession, settings: AppSettings) -> AgentService:
     key = settings.agent_enrollment_key
-    return AgentService(session, key.get_secret_value() if key else None)
+    return AgentService(
+        session,
+        key.get_secret_value() if key else None,
+        enrollment_key_expires_at=settings.agent_enrollment_key_expires_at,
+    )
 
 
 # auto_error=False: a missing header must reach the service, which answers with the same
@@ -94,9 +98,14 @@ def get_enrollment_token_service(
 
 
 def get_agent_management_service(
-    session: DbSession, settings: AppSettings
+    request: Request, session: DbSession, settings: AppSettings
 ) -> AgentManagementService:
-    return AgentManagementService(session, timedelta(seconds=settings.heartbeat_timeout_seconds))
+    quota = getattr(request.app.state, "ingest_quota", None)
+    return AgentManagementService(
+        session,
+        timedelta(seconds=settings.heartbeat_timeout_seconds),
+        throttle=quota.store.throttled if quota is not None else None,
+    )
 
 
 def get_asset_service(session: DbSession, settings: AppSettings) -> AssetService:

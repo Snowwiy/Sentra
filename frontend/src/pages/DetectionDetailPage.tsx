@@ -56,6 +56,9 @@ function EvidenceItem({ item }: { item: DetectionEvidence }) {
             ))}
           </dl>
         )}
+        {item.withheld_fields.length > 0 && (
+          <p className="muted small">Campos protegidos (requieren telemetry:read): {item.withheld_fields.join(", ")}.</p>
+        )}
       </div>
     </li>
   );
@@ -222,6 +225,15 @@ export function DetectionDetailPage() {
       {error && (
         <div className="banner banner--warn" role="alert">
           Fallo al actualizar: {errorMessage(error)}. Se muestran los últimos datos recibidos.
+        </div>
+      )}
+
+      {d.restricted && (
+        <div className="banner" role="status" data-testid="detection-restricted">
+          Detección de endpoint con contenido protegido: tu rol no incluye telemetry:read, así que se
+          muestran solo los datos seguros (activo, regla, severidad y fechas). La evidencia original se
+          conserva íntegra.
+          {d.withheld_details.length > 0 && ` Detalles omitidos: ${d.withheld_details.join(", ")}.`}
         </div>
       )}
 

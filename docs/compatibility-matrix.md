@@ -1,3 +1,45 @@
+# Matriz de compatibilidad (Fase 7D.2, Sentra 0.7.1)
+
+Servidor, frontend y agente 0.7.1; sensor 0.7.0 sin cambios. Migración 0052 (cabeza 0052).
+Detalle en docs/fase-7d2.md.
+
+| Componente | Versión 7D.2 | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.7.1 | Sí | Cuotas de ingesta por agente y globales (429 + Retry-After), auditoría de purgas, `capacity-report` |
+| Frontend | 0.7.1 | Sí | Aviso de agentes limitados y campo "Cuota de ingesta"; override de minimatch |
+| Agente | 0.7.1 | Sí | Jitter sobre Retry-After; registro claro del 429 |
+| Sensor | 0.7.0 | No | Sus rutas no tienen cuota nueva |
+
+| Cliente | Servidor 0.7.0 | Servidor 0.7.1 |
+| --- | --- | --- |
+| Agente 0.6.x / 0.7.0 | Completo | Compatible: ya respetaban Retry-After y conservan el buffer |
+| Agente 0.7.1 | Completo (nunca recibe 429 de cuota) | Completo |
+| Frontend 0.7.0 | Completo | Compatible: ignora los campos nuevos |
+| Frontend 0.7.1 | Los campos de cuota faltan: se muestra "Sin limitar" | Completo |
+| Sensor 0.7.0 | Compatible | Compatible |
+
+# Matriz de compatibilidad (Fase 7D.1, Sentra 0.7.0)
+
+Servidor, frontend y agente 0.7.0; sensor 0.7.0 sin cambios. Migración 0051 (cabeza 0051).
+Detalle en docs/fase-7d1.md.
+
+| Componente | Versión 7D.1 | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.7.0 | Sí | Registro, rotación y recuperación separados; allowlist de evidencias; permisos de contenido en copias; transporte por petición |
+| Frontend | 0.7.0 | Sí | Recuperación, rotación, transporte, avisos de contenido protegido; asistente solo HTTPS |
+| Agente | 0.7.0 | Sí | Solo HTTPS (http a loopback), sin redirecciones, respuestas acotadas, rotación |
+| Sensor | 0.7.0 | No | Ya exigía HTTPS y rechazaba redirecciones |
+
+| Cliente | Servidor 0.6.2 | Servidor 0.7.0 |
+| --- | --- | --- |
+| Agente 0.6.x por HTTPS | Completo | Completo (no rota solo) |
+| Agente 0.6.x por HTTP remoto | Completo | Sigue enviando datos; marcado como inseguro, rotación pendiente hasta HTTPS |
+| Agente 0.6.x reinstalado con token ordinario | Recupera la identidad | 403 `agent_recovery_required`: hace falta autorización de recuperación |
+| Agente 0.7.0 (por HTTPS) | Funciona; ese servidor nunca pide rotación | Completo |
+| Frontend 0.6.x | Completo | Compatible: ignora los campos nuevos; un token de su asistente de re-registro ya no sirve para un agente existente |
+| Frontend 0.7.0 | Las acciones nuevas devuelven 404 | Completo |
+| Sensor 0.7.0 | Compatible | Compatible |
+
 # Matriz de compatibilidad (Fase 7C, Sentra 0.6.0, 7C-Security-Fix1 0.6.1 y 7C-Fix2 0.6.2)
 
 7C-Fix2 (0.6.2): cambios aditivos. `ai_invalid_response` añade `details[0].reason`; un frontend

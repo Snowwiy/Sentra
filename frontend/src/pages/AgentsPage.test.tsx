@@ -37,6 +37,15 @@ function agent(overrides: Partial<Agent>): Agent {
     lifecycle_version: 0,
     site_id: "00000000-0000-0000-0000-00000000d5f1",
     site_name: "Principal",
+    credential_source: "enrollment_token",
+    rotation_pending: false,
+    rotation_requested_at: null,
+    rotation_reason: null,
+    transport: "https",
+    transport_at: null,
+    insecure_transport_at: null,
+    ingest_throttled_at: null,
+    ingest_rejections: 0,
     ...overrides,
   };
 }
@@ -88,7 +97,7 @@ beforeEach(() => {
     "GET /console": () => ({
       body: {
         enrollment_token_ttl_minutes: 15,
-        suggested_server_urls: ["http://192.168.50.201:8000"],
+        suggested_server_urls: ["https://192.168.50.201:8443"],
         server_url_configured: false,
       },
     }),
@@ -232,12 +241,12 @@ describe("Add agent wizard", () => {
     fireEvent.click(within(dialog).getByRole("radio", { name: /Windows/ }));
     fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
     expect(dialog).toHaveTextContent("Plataforma Windows · un solo uso");
-    fireEvent.change(within(dialog).getByPlaceholderText("http://192.168.1.10:8000"), {
+    fireEvent.change(within(dialog).getByPlaceholderText("https://sentra.example.local"), {
       target: { value: "http://localhost:8000" },
     });
     expect(dialog).toHaveTextContent("localhost/127.0.0.1 es el propio equipo Windows");
-    fireEvent.change(within(dialog).getByPlaceholderText("http://192.168.1.10:8000"), {
-      target: { value: "http://192.168.50.201:8000" },
+    fireEvent.change(within(dialog).getByPlaceholderText("https://sentra.example.local"), {
+      target: { value: "https://192.168.50.201:8443" },
     });
     fireEvent.click(within(dialog).getByRole("button", { name: "Generar token de instalación" }));
     await within(dialog).findByLabelText("Token de instalación");
@@ -248,7 +257,7 @@ describe("Add agent wizard", () => {
     const text = commands().join("\n");
     expect(text).not.toContain(TOKEN);
     expect(text).toContain(
-      "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1 -Server 'http://192.168.50.201:8000'",
+      "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1 -Server 'https://192.168.50.201:8443'",
     );
     expect(text).not.toContain("-Reenroll");
     expect(text).toContain("Get-Service SentraAgent");
@@ -303,18 +312,24 @@ describe("Add agent wizard", () => {
     await waitFor(() => expect(within(tokens).getByText("macOS")).toBeInTheDocument());
   });
 
-  it("suggests the server URL, warns about HTTP and loopback and validates it", async () => {
+  it("suggests the server URL, refuses HTTP to another machine and validates it (7D.1 H04)", async () => {
     const dialog = await openWizard();
     fireEvent.click(within(dialog).getByRole("button", { name: "Continuar" }));
-    const url = within(dialog).getByPlaceholderText("http://192.168.1.10:8000");
-    expect(url).toHaveValue("http://192.168.50.201:8000");
-    expect(dialog).toHaveTextContent("HTTP no cifra las credenciales durante el transporte. Use HTTPS en producción.");
+    const url = within(dialog).getByPlaceholderText("https://sentra.example.local");
+    const generate = () => within(dialog).getByRole("button", { name: "Generar token de instalación" });
+    expect(url).toHaveValue("https://192.168.50.201:8443");
+    expect(generate()).toBeEnabled();
+    fireEvent.change(url, { target: { value: "http://192.168.50.201:8000" } });
+    expect(dialog).toHaveTextContent("El agente exige HTTPS fuera del propio equipo");
+    expect(generate()).toBeDisabled();
     fireEvent.change(url, { target: { value: "http://localhost:8000" } });
     expect(dialog).toHaveTextContent("localhost/127.0.0.1 es el propio equipo Linux");
+    expect(dialog).not.toHaveTextContent("El agente exige HTTPS");
     fireEvent.change(url, { target: { value: "https://sentra.lan" } });
-    expect(dialog).not.toHaveTextContent("HTTP no cifra");
+    expect(dialog).not.toHaveTextContent("El agente exige HTTPS");
+    expect(generate()).toBeEnabled();
     fireEvent.change(url, { target: { value: "no es una url" } });
-    expect(within(dialog).getByRole("button", { name: "Generar token de instalación" })).toBeDisabled();
+    expect(generate()).toBeDisabled();
   });
 
   it("generates a one-time Linux token, shows it once with the expiry warning", async () => {
@@ -346,7 +361,7 @@ describe("Add agent wizard", () => {
 
     expect(commands().join("\n")).not.toContain(TOKEN);
     expect(commands().join("\n")).toContain("--token-file ./enrollment.token");
-    expect(commands().join("\n")).toContain("--server 'http://192.168.50.201:8000'");
+    expect(commands().join("\n")).toContain("--server 'https://192.168.50.201:8443'");
 
     fireEvent.click(within(dialog).getByRole("tab", { name: "Método rápido (--token)" }));
     expect(commands().join("\n")).toContain(`--token '${TOKEN}'`);
@@ -458,11 +473,12 @@ describe("Revocation", () => {
     expect(await within(dialog).findByRole("alert")).toHaveTextContent("database down");
   });
 
-  it("reinstating a revoked agent requires a new token (re-enrollment)", async () => {
+  it("reinstating a revoked agent leads to an identity recovery authorization (7D.1 H01)", async () => {
     const revoked = REVOKED;
     routes[`POST /console/agents/${revoked.asset_id}/reinstate`] = () => ({
       body: { ...revoked, credential_status: "re_enrollment_required" },
     });
+    routes[`GET /console/agents/${revoked.asset_id}/recovery-tokens`] = () => ({ body: { items: [] } });
     renderPage();
     await screen.findByText("linux-revoked");
     const row = screen.getAllByRole("row").find((r) => r.textContent?.includes("linux-revoked"))!;
@@ -472,43 +488,94 @@ describe("Revocation", () => {
     expect(confirm).toHaveTextContent("Requiere volver a registrarse");
     fireEvent.click(within(confirm).getByRole("button", { name: "Reactivar" }));
 
-    const wizard = await screen.findByRole("dialog", { name: "Añadir agente" });
-    expect(within(wizard).getByPlaceholderText("p. ej. pc-ana")).toHaveValue("linux-revoked");
-    expect(wizard).toHaveTextContent("conservará su identidad");
+    const recovery = await screen.findByRole("dialog", { name: "Recuperar identidad de linux-revoked" });
+    expect(recovery).toHaveTextContent("ya no puede volver a registrar un agente existente");
+    expect(screen.queryByRole("dialog", { name: "Añadir agente" })).toBeNull();
   });
 
-  it("re-enrolls a Windows agent with a windows token and the -Reenroll installer", async () => {
-    const windows = agent({
+  it("authorizes a recovery only with a reason and explicit confirmation, and shows the token once", async () => {
+    const lost = agent({
       hostname: "pc-win",
       display_name: "pc-win",
-      os_name: "Windows",
       platform: "windows",
       status: "offline",
       credential_status: "re_enrollment_required",
     });
-    routes["GET /agents"] = () => ({ body: { summary: SUMMARY, items: [windows] } });
-    routes["POST /console/enrollment-tokens"] = () => ({
+    const RECOVERY = "sentra_et_rec_TEST-not-a-real-token_0123456789";
+    routes["GET /agents"] = () => ({ body: { summary: SUMMARY, items: [lost] } });
+    routes[`GET /console/agents/${lost.asset_id}/recovery-tokens`] = () => ({ body: { items: [] } });
+    routes[`POST /console/agents/${lost.asset_id}/recovery-tokens`] = () => ({
       status: 201,
-      body: { ...tokenRow({ expected_platform: "windows", expected_hostname: "pc-win" }), token: TOKEN },
+      body: {
+        recovery_id: "22222222-2222-2222-2222-222222222222",
+        asset_id: lost.asset_id,
+        agent_id: lost.agent_id,
+        state: "active",
+        reason: "Reinstalación tras cambio de disco",
+        expected_hostname: "pc-win",
+        created_by: "admin",
+        created_at: iso(0),
+        expires_at: iso(15 * 60_000),
+        consumed_at: null,
+        revoked_at: null,
+        token: RECOVERY,
+      },
     });
     renderPage();
     await screen.findByText("pc-win");
     const row = screen.getAllByRole("row").find((r) => r.textContent?.includes("pc-win"))!;
-    const button = within(row).getByRole("button", { name: "Nuevo token…" });
+    const button = within(row).getByRole("button", { name: "Recuperar…" });
     await waitFor(() => expect(button).toBeEnabled());
     fireEvent.click(button);
 
-    const wizard = await screen.findByRole("dialog", { name: "Añadir agente" });
-    expect(wizard).toHaveTextContent("Plataforma Windows");
-    fireEvent.click(within(wizard).getByRole("button", { name: "Generar token de instalación" }));
-    await within(wizard).findByLabelText("Token de instalación");
-    const create = calls.find((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")!;
-    expect(JSON.parse(create.init.body as string)).toMatchObject({
-      expected_platform: "windows",
+    const dialog = screen.getByRole("dialog", { name: "Recuperar identidad de pc-win" });
+    const submit = within(dialog).getByRole("button", { name: "Autorizar recuperación" });
+    expect(submit).toBeDisabled();
+    fireEvent.change(within(dialog).getByRole("textbox", { name: /Motivo/ }), {
+      target: { value: "Reinstalación tras cambio de disco" },
+    });
+    expect(submit).toBeDisabled(); // falta la confirmación explícita
+    fireEvent.click(within(dialog).getByRole("checkbox", { name: /Confirmo que este equipo es/ }));
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+
+    expect(await within(dialog).findByTestId("recovery-token")).toHaveTextContent(RECOVERY);
+    expect(dialog).toHaveTextContent("no se volverá a mostrar");
+    const create = calls.find((c) => c.method === "POST" && c.path.endsWith("/recovery-tokens"))!;
+    expect(JSON.parse(create.init.body as string)).toEqual({
+      reason: "Reinstalación tras cambio de disco",
+      confirm: true,
       expected_hostname: "pc-win",
     });
-    const install = within(wizard).getByText(/install-sentra-agent\.ps1/, { selector: "pre" });
-    expect(install.textContent).toContain("-Reenroll");
+    // Nada de tokens de instalación ordinarios para un agente que ya existe.
+    expect(calls.some((c) => c.method === "POST" && c.path === "/console/enrollment-tokens")).toBe(false);
+  });
+
+  it("flags agents on cleartext HTTP and legacy-key credentials without hiding them", async () => {
+    const http = agent({ hostname: "pc-http", transport: "http_remote" });
+    routes["GET /agents"] = () => ({
+      body: { summary: { ...SUMMARY, insecure_transport: 1, legacy_key: 2 }, items: [http] },
+    });
+    renderPage();
+    await screen.findByText("pc-http");
+    expect(screen.getByText(/1 agente habla con Sentra por HTTP en claro/)).toBeInTheDocument();
+    expect(screen.getByText(/2 agentes se registraron/)).toBeInTheDocument();
+    const row = screen.getAllByRole("row").find((r) => r.textContent?.includes("pc-http"))!;
+    expect(within(row).getByText("HTTP en claro")).toHaveClass("badge--warn");
+  });
+
+  it("warns about agents throttled by the ingest quota (7D.2 H06)", async () => {
+    const noisy = agent({ hostname: "pc-noisy", ingest_throttled_at: new Date().toISOString(), ingest_rejections: 3 });
+    routes["GET /agents"] = () => ({ body: { summary: { ...SUMMARY, throttled: 1 }, items: [noisy] } });
+    renderPage();
+    await screen.findByText("pc-noisy");
+    expect(screen.getByText(/1 agente ha superado su cuota de ingesta/)).toBeInTheDocument();
+  });
+
+  it("shows no quota banner when no agent is throttled", async () => {
+    renderPage();
+    await screen.findAllByRole("row");
+    expect(screen.queryByText(/cuota de ingesta/)).not.toBeInTheDocument();
   });
 
   it("lists installation tokens without their value and revokes an active one", async () => {

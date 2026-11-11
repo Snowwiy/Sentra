@@ -269,6 +269,20 @@ def test_upgrade_and_reinstall_keep_the_identity(
     assert any("systemctl stop" in c for c in host.calls())  # stopped before replacing
 
 
+def test_upgrade_over_an_http_config_is_refused_before_touching_the_agent(host: Host) -> None:
+    # Fase 7D.1: un agente 0.6.x configurado con http:// hacia otro equipo sigue funcionando;
+    # el instalador 0.7.0 se detiene antes de parar el servicio y explica la migración.
+    config = host.path("etc/sentra-agent/agent.toml")
+    config.parent.mkdir(parents=True, exist_ok=True)
+    config.write_text('api_url = "http://192.168.50.201:8000"\n')
+
+    result = host.install("--upgrade")
+
+    assert result.returncode != 0
+    assert "outside loopback" in result.stderr and "https://" in result.stderr
+    assert config.read_text() == 'api_url = "http://192.168.50.201:8000"\n'
+
+
 def test_upgrade_without_installation_is_refused(host: Host) -> None:
     result = host.install("--upgrade")
     assert result.returncode != 0 and "existing installation" in result.stderr
@@ -281,9 +295,12 @@ def test_upgrade_without_installation_is_refused(host: Host) -> None:
         (["--server", "ftp://x"], "must start with http"),
         (["--server", "http://a b"], "not a valid URL"),
         (["--server", "http://x;reboot"], "not a valid URL"),
-        (["--server", "http://x", "--token", "abc"], "not a Sentra enrollment token"),
-        (["--server", "http://x", "--token-file", "/nonexistent"], "token file not found"),
-        (["--server", "http://x", "--token", TOKEN, "--token-file", "/x"], "not both"),
+        # Fase 7D.1 (H04): http:// solo hacia loopback.
+        (["--server", "http://10.0.0.5:8000"], "outside loopback"),
+        (["--server", "http://sentra.lan"], "docs/agent-https-migration.md"),
+        (["--server", "https://x", "--token", "abc"], "not a Sentra enrollment token"),
+        (["--server", "https://x", "--token-file", "/nonexistent"], "token file not found"),
+        (["--server", "https://x", "--token", TOKEN, "--token-file", "/x"], "not both"),
         (["--bogus"], "unknown option"),
     ],
 )
@@ -537,5 +554,47 @@ def test_build_from_a_crlf_checkout_produces_lf_packages(tmp_path: Path) -> None
         assert b"\r" not in control and f"Version: {__version__}".encode() in control
         extract = tmp_path / "deb"
         subprocess.run([dpkg_deb, "-e", str(deb), str(extract)], check=True)  # noqa: S603
-        for script in ("postinst", "prerm", "postrm"):
+        for script in ("preinst", "postinst", "prerm", "postrm"):
             assert b"\r" not in (extract / script).read_bytes()
+
+
+@pytest.mark.parametrize(
+    ("script", "shell"),
+    [
+        ("agent/packaging/linux/debian/preinst", "sh"),
+        ("agent/packaging/macos/scripts/preinstall", "bash"),
+    ],
+)
+@pytest.mark.parametrize(
+    ("api_url", "allowed"),
+    [
+        ("https://sentra.lan", True),
+        ("http://127.0.0.1:8000", True),
+        ("http://localhost:8000", True),
+        ("http://[::1]:8000", True),
+        ("http://192.168.50.201:8000", False),
+        ("http://localhost.evil.example", False),
+        ("http://127.evil.example", False),
+    ],
+)
+def test_package_upgrade_with_http_config_is_cancelled_before_replacing_the_agent(
+    tmp_path: Path, script: str, shell: str, api_url: str, allowed: bool
+) -> None:
+    """Fase 7D.1 (H04): el .deb (preinst) y el .pkg (preinstall) cancelan la actualización
+    si el agente instalado usa http:// fuera de loopback: dpkg / Installer dejan la versión
+    anterior funcionando en lugar de instalar una que no arrancaría."""
+    executable = shutil.which(shell)
+    if executable is None:
+        pytest.skip(f"{shell} not available")
+    config = tmp_path / "agent.toml"
+    config.write_text(f'api_url = "{api_url}"\ninterval_seconds = 30\n')
+    result = subprocess.run(  # noqa: S603
+        [executable, str(AGENT_DIR.parent / script), "upgrade"],
+        capture_output=True,
+        text=True,
+        env={"PATH": os.environ.get("PATH", ""), "SENTRA_AGENT_PREINST_CONFIG": str(config)},
+        check=False,
+    )
+    assert (result.returncode == 0) is allowed, result.stderr
+    if not allowed:
+        assert "https" in result.stderr

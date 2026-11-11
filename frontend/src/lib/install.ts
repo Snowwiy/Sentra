@@ -20,7 +20,10 @@ export interface ServerUrlCheck {
   /** Normalized URL (trimmed, no trailing slash). */
   url: string;
   valid: boolean;
-  /** http://: credentials travel unencrypted. */
+  /**
+   * Fase 7D.1 (H04): http:// hacia otra máquina. El agente 0.7.0 y sus instaladores lo
+   * rechazan (la credencial viajaría sin cifrar), así que la URL no es válida.
+   */
   insecure: boolean;
   /** localhost/127.x/::1: another machine cannot reach it. */
   loopback: boolean;
@@ -34,17 +37,20 @@ const TOKEN = /^sentra_et_[A-Za-z0-9_-]{20,200}$/;
 
 export function checkServerUrl(raw: string): ServerUrlCheck {
   const url = raw.trim().replace(/\/+$/, "");
-  const valid = SERVER_URL.test(url);
+  const wellFormed = SERVER_URL.test(url);
   let loopback = false;
-  if (valid) {
+  if (wellFormed) {
     try {
       const host = new URL(url).hostname.replace(/^\[|\]$/g, "").toLowerCase();
-      loopback = host === "localhost" || host === "::1" || /^127\./.test(host);
+      // 127.x solo como literal IPv4: "127.evil.example" es un nombre DNS cualquiera.
+      loopback = host === "localhost" || host === "::1" || /^127(\.\d{1,3}){3}$/.test(host);
     } catch {
       return { url, valid: false, insecure: false, loopback: false };
     }
   }
-  return { url, valid, insecure: valid && url.startsWith("http://"), loopback };
+  // Misma regla que el agente (config.insecure_url_reason): https, o http solo a loopback.
+  const insecure = wellFormed && url.startsWith("http://") && !loopback;
+  return { url, valid: wellFormed && !insecure, insecure, loopback };
 }
 
 export function isEnrollmentToken(value: string): boolean {

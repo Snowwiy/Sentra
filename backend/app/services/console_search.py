@@ -11,14 +11,15 @@ import re
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.evidence_policy import RESTRICTED, EvidenceAccess, endpoint_detection_clause
 from app.core.passwords import normalize_username
 from app.discovery.probes import normalize_mac
 from app.models.asset import Asset
 from app.models.attribution import MaintenanceArtifact, MaintenanceOperation
-from app.models.detection import Detection
+from app.models.detection import Detection, DetectionEvidence
 from app.models.incident import ACTIVE_STATUSES, Incident
 from app.models.user import User
 from app.schemas.console_search import (
@@ -71,7 +72,12 @@ class ConsoleSearch:
         return stmt.where(Asset.site_id == site_id) if site_id is not None else stmt
 
     def search(
-        self, query: str, site_id: int | None, *, include_users: bool = False
+        self,
+        query: str,
+        site_id: int | None,
+        *,
+        include_users: bool = False,
+        access: EvidenceAccess = RESTRICTED,
     ) -> SearchResult:
         text = " ".join(query.split())
         kind = classify_query(text)
@@ -99,7 +105,7 @@ class ConsoleSearch:
                 for a in listed.items
             ]
         if kind in ("sha256", "rule", "text"):
-            detections = self._detections(text, kind, site_id)
+            detections = self._detections(text, kind, site_id, access)
         if kind == "sha256":
             operations = self._operations(text.lower(), site_id)
         if kind in ("case", "text"):
@@ -118,7 +124,9 @@ class ConsoleSearch:
             users_visible=include_users,
         )
 
-    def _detections(self, text: str, kind: str, site_id: int | None) -> list[SearchDetection]:
+    def _detections(
+        self, text: str, kind: str, site_id: int | None, access: EvidenceAccess
+    ) -> list[SearchDetection]:
         condition: Any
         if kind == "sha256":
             digest = text.lower()
@@ -126,14 +134,23 @@ class ConsoleSearch:
                 func.lower(Detection.details["script"]["script_sha256"].astext) == digest,
                 Detection.details["scripts"].contains([{"script": {"script_sha256": digest}}]),
             )
+            if not access.endpoint:
+                # `details.script` no está en la allowlist de endpoint: tampoco es buscable.
+                condition = and_(
+                    condition, ~endpoint_detection_clause(Detection, DetectionEvidence)
+                )
         elif kind == "rule":
             condition = Detection.rule_id == text.upper()
         else:
             pattern = _like(text)
-            condition = or_(
-                Detection.title.ilike(pattern, escape="\\"),
-                Detection.summary.ilike(pattern, escape="\\"),
-            )
+            summary_match: Any = Detection.summary.ilike(pattern, escape="\\")
+            if not access.endpoint:
+                # Fase 7D.1 (H02): sin telemetry:read el resumen de una detección de endpoint
+                # no sirve de oráculo (buscar un texto de la línea de comando y ver si sale).
+                summary_match = and_(
+                    summary_match, ~endpoint_detection_clause(Detection, DetectionEvidence)
+                )
+            condition = or_(Detection.title.ilike(pattern, escape="\\"), summary_match)
         stmt = (
             select(Detection, Asset)
             .join(Asset, Asset.id == Detection.asset_id)

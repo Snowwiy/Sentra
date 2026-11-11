@@ -89,14 +89,22 @@ enviar telemetry, heartbeat, inventory y events.* Then:
 ## Bring a revoked agent back (re-enrollment)
 
 The old credential is never restored. **Reactivar…** → confirmation → the block is lifted
-(credential `Re-enrollment required`) and the wizard opens with the hostname prefilled for a
-**new** one-time token. Run the installer again on that host with the new token: the agent
-keeps its `agent_id`, so it is the **same asset** with its history, and its credential is
-`Active` again. (If the agent still holds its old, now dead, token, the installer's
-enrollment step notices it with one heartbeat and enrolls with the new token.)
+(credential `Re-enrollment required`) and the **Recuperar identidad…** dialog opens. Since
+Fase 7D.1 an ordinary one-time token can no longer re-enroll an existing `agent_id`
+(`agent_recovery_required`): the admin issues a **recovery authorization** for that asset
+(reason, explicit confirmation, single use, 15 minutes, optionally pinned to the hostname)
+and the installer runs again on that host with it. The agent keeps its `agent_id`, so it is
+the **same asset** with its history. Procedure: docs/fase-7d1-recovery.md.
 
-Reinstating alone lets nothing in: the host still needs a new token issued by the operator
-(or the legacy shared key, if configured). If the host is gone, leave it revoked.
+Reinstating alone lets nothing in. If the host is gone, leave it revoked.
+
+## Credential rotation and transport (Fase 7D.1)
+
+- **Rotar credencial…** asks the agent (0.7.0) to rotate on its next HTTPS heartbeat, with no
+  monitoring gap: the old credential works until the new one is used.
+- The **Transporte** column and the asset panel show how the last heartbeat arrived
+  (`HTTPS`, `HTTP local`, `HTTP en claro`). Agents on cleartext HTTP keep working, are counted
+  in a warning and get a rotation request (docs/agent-https-migration.md).
 
 ## Security model
 
@@ -125,9 +133,14 @@ del navegador ni en ninguna petición. Los `GET` de agentes requieren sesión
 | POST | `/api/v1/console/enrollment-tokens/{id}/revoke` | Revoke an unused token (409 if consumed) |
 | POST | `/api/v1/console/agents/{asset_id}/revoke` | Revoke an agent (keeps its history) |
 | POST | `/api/v1/console/agents/{asset_id}/reinstate` | Lift a revocation (409 if not revoked); re-enrollment required |
+| POST | `/api/v1/console/agents/{asset_id}/recovery-tokens` | Fase 7D.1: recovery authorization (admin; reason, `confirm: true`); the only response with the token |
+| GET | `/api/v1/console/agents/{asset_id}/recovery-tokens` | Recovery authorizations and their state (never the token) |
+| POST | `/api/v1/console/agents/recovery-tokens/{recovery_id}/revoke` | Revoke an unused recovery authorization |
+| POST | `/api/v1/console/agents/{asset_id}/rotate-credential` | Fase 7D.1: ask the agent to rotate its credential |
 
 Console responses are `Cache-Control: no-store`, like every API response. Token creation and
 agent revocation/reinstatement are logged with ids, never with the token.
 
 The CLI keeps working for the same operations: `create-/list-/revoke-enrollment-token`,
-`list-agents`, `revoke-agent`, `reinstate-agent`.
+`list-agents`, `revoke-agent`, `reinstate-agent`, and since 7D.1
+`authorize-agent-recovery`.

@@ -40,6 +40,10 @@ class MetricsRegistry:
         self._jobs: dict[tuple[str, str], int] = defaultdict(int)
         self._job_last: dict[str, tuple[float, float]] = {}
         self._rate_limited: dict[str, int] = defaultdict(int)
+        # Fase 7D.2 (H06): rechazos de cuota de ingesta por CLASE de ruta y motivo. Nunca por
+        # agente: la cardinalidad crecería con la flota (el detalle por agente está en
+        # GET /agents, campo ingest_throttle).
+        self._ingest_rejected: dict[tuple[str, str], int] = defaultdict(int)
         # Fase 5A: evaluaciones de reglas por ORIGEN (builtin, custom, sigma). Nunca por regla:
         # con cientos de reglas personalizadas la cardinalidad se dispararía; el detalle por
         # regla está en GET /detection-rules (detection_rule_stats).
@@ -97,6 +101,10 @@ class MetricsRegistry:
         with self._lock:
             for outcome, count in totals.items():
                 self._intel_matches[outcome] += count
+
+    def ingest_rejected(self, route: str, reason: str) -> None:
+        with self._lock:
+            self._ingest_rejected[(route, reason)] += 1
 
     def rate_limited(self, scope: str) -> None:
         with self._lock:
@@ -159,6 +167,14 @@ class MetricsRegistry:
             ]
             for scope, count in sorted(self._rate_limited.items()):
                 lines.append(f"sentra_rate_limited_total{_labels((('scope', scope),))} {count}")
+            lines += [
+                "# HELP sentra_ingest_quota_rejections_total Rechazos de cuota de ingesta de"
+                " agentes por clase de ruta y motivo.",
+                "# TYPE sentra_ingest_quota_rejections_total counter",
+            ]
+            for (route, reason), count in sorted(self._ingest_rejected.items()):
+                labels = _labels((("route", route), ("reason", reason)))
+                lines.append(f"sentra_ingest_quota_rejections_total{labels} {count}")
             for index, (name, help_text) in enumerate(
                 (
                     ("sentra_detection_rule_evaluations_total", "Evaluaciones de reglas."),

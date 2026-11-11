@@ -9,9 +9,19 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import ColumnElement, Select, and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
+from app.core.evidence_policy import (
+    RESTRICTED,
+    EvidenceAccess,
+    endpoint_detection_clause,
+    evidence_summary,
+    filter_details,
+    filter_evidence_data,
+    is_endpoint_evidence,
+    safe_detection_summary,
+)
 from app.core.exceptions import ConflictError, NotFoundError
 from app.detection.config import DetectionConfig
 from app.detection.engine import resolve_detection_alert
@@ -71,15 +81,32 @@ class DetectionService:
 
     # --- Lecturas --------------------------------------------------------------------------
 
-    def _base(self) -> Select[Detection, Asset, UUID]:
+    def _base(self) -> Select[Detection, Asset, UUID, bool]:
         alert = aliased(Alert)
+        # Fase 7D.1 (H02): la clasificación de endpoint se calcula en la misma consulta para
+        # que cada fila del listado sepa si su resumen se puede entregar tal cual.
         return (
-            select(Detection, Asset, alert.public_id)
+            select(
+                Detection,
+                Asset,
+                alert.public_id,
+                endpoint_detection_clause(Detection, DetectionEvidence).label("endpoint"),
+            )
             .join(Asset, Detection.asset_id == Asset.id)
             .outerjoin(alert, Detection.alert_id == alert.id)
         )
 
-    def list(self, f: DetectionFilter, limit: int, offset: int = 0) -> DetectionList:
+    def list(
+        self,
+        f: DetectionFilter,
+        limit: int,
+        offset: int = 0,
+        access: EvidenceAccess = RESTRICTED,
+    ) -> DetectionList:
+        """Listado filtrado. `access` sale de los permisos ACTUALES de quien lee.
+
+        Por defecto RESTRICTED: un llamador nuevo que olvide pasar el acceso falla cerrado.
+        """
         stmt = self._base()
         if f.status is not None:
             stmt = stmt.where(Detection.status == f.status)
@@ -110,10 +137,17 @@ class DetectionService:
             stmt = stmt.where(Detection.last_seen_at <= f.until)
         if f.search:
             pattern = f"%{escape_like(f.search)}%"
+            summary_match: ColumnElement[bool] = Detection.summary.ilike(pattern, escape="\\")
+            if not access.endpoint:
+                # Sin telemetry:read el resumen de una detección de endpoint no se entrega, y
+                # tampoco puede usarse como oráculo (buscar "mimikatz" y ver si aparece).
+                summary_match = and_(
+                    summary_match, ~endpoint_detection_clause(Detection, DetectionEvidence)
+                )
             stmt = stmt.where(
                 or_(
                     Detection.title.ilike(pattern, escape="\\"),
-                    Detection.summary.ilike(pattern, escape="\\"),
+                    summary_match,
                     Detection.rule_id.ilike(pattern, escape="\\"),
                     Asset.hostname.ilike(pattern, escape="\\"),
                     Asset.primary_ip.ilike(pattern, escape="\\"),
@@ -125,13 +159,16 @@ class DetectionService:
             .limit(limit)
             .offset(offset)
         )
-        return DetectionList(items=[_read(row[0], row[1], row[2]) for row in page], total=total)
+        return DetectionList(
+            items=[_read(row[0], row[1], row[2], access, bool(row[3])) for row in page],
+            total=total,
+        )
 
-    def get(self, public_id: UUID) -> DetectionDetail:
+    def get(self, public_id: UUID, access: EvidenceAccess = RESTRICTED) -> DetectionDetail:
         row = self._session.execute(self._base().where(Detection.public_id == public_id)).first()
         if row is None:
             raise NotFoundError("Detection not found")
-        detection, asset, alert_id = row[0], row[1], row[2]
+        detection, asset, alert_id, endpoint = row[0], row[1], row[2], bool(row[3])
         evidence = self._session.scalars(
             select(DetectionEvidence)
             .where(DetectionEvidence.detection_id == detection.id)
@@ -149,14 +186,16 @@ class DetectionService:
         # Textos de la versión de la regla que alimentó la detección por última vez (custom y
         # Sigma); las built-in, del código.
         texts = rule_text(self._session, detection.rule_id, _last_version(detection))
+        details, withheld = filter_details(detection.details, access, endpoint)
         return DetectionDetail(
-            **_read(detection, asset, alert_id).model_dump(),
-            details=detection.details,
+            **_read(detection, asset, alert_id, access, endpoint).model_dump(),
+            details=details,
+            withheld_details=withheld,
             description=texts.description if texts else "",
             why=texts.why if texts else "",
             recommendations=list(texts.recommendations) if texts else [],
             required_data=list(texts.required_data) if texts else [],
-            evidence=[DetectionEvidenceRead.model_validate(item) for item in evidence],
+            evidence=[evidence_read(item, access) for item in evidence],
             evidence_total=total,
             asset_context=context_values(self._session, [asset])[asset.id].brief(),
         )
@@ -216,8 +255,31 @@ def _last_version(detection: Detection) -> int:
     return value if isinstance(value, int) and value > 0 else detection.rule_version
 
 
-def _read(detection: Detection, asset: Asset, alert_id: UUID | None) -> DetectionRead:
+def evidence_read(item: DetectionEvidence, access: EvidenceAccess) -> DetectionEvidenceRead:
+    """Serializa una evidencia aplicando la política de endpoint (H02)."""
+    data, withheld = filter_evidence_data(item.data, item.source_type, access)
+    return DetectionEvidenceRead(
+        signal_kind=item.signal_kind,
+        role=item.role,
+        source_type=item.source_type,
+        source_id=item.source_id,
+        occurred_at=item.occurred_at,
+        summary=evidence_summary(item.summary, item.signal_kind, item.source_type, access),
+        data=data,
+        restricted=not access.endpoint and is_endpoint_evidence(item.source_type),
+        withheld_fields=withheld,
+    )
+
+
+def _read(
+    detection: Detection,
+    asset: Asset,
+    alert_id: UUID | None,
+    access: EvidenceAccess = RESTRICTED,
+    endpoint: bool = True,
+) -> DetectionRead:
     meta = _meta(detection.rule_id)
+    restricted = endpoint and not access.endpoint
     return DetectionRead(
         detection_id=detection.public_id,
         asset_id=asset.public_id,
@@ -232,7 +294,8 @@ def _read(detection: Detection, asset: Asset, alert_id: UUID | None) -> Detectio
         confidence=detection.confidence,
         status=detection.status,
         title=detection.title,
-        summary=detection.summary,
+        summary=safe_detection_summary(detection.title) if restricted else detection.summary,
+        restricted=restricted,
         mitre_tactic=detection.mitre_tactic,
         mitre_technique=detection.mitre_technique,
         mitre_subtechnique=detection.mitre_subtechnique,

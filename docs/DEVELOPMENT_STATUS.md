@@ -1,7 +1,7 @@
 # Sentra development status
 
 Handoff document: enough to continue the project without prior conversation context.
-Last updated: 2026-10-30 (7C-Fix2: `AI_REASONING_EFFORT` opcional para modelos "thinking" en llama.cpp, motivo concreto de `ai_invalid_response` sin contenido, sin reintento de respuestas cortadas; revisión de CORR-002/PER-001 sin cambios de reglas y hueco del 7045 documentado; servidor y frontend 0.6.2, sin migraciones). Anterior: 2026-10-29 (7C-Security-Fix1: asistente de la consola solo con modelo en loopback, apagado por defecto, revisión del documento con huella antes de enviar, sin secretos, tools:execute y auditoría; servidor y frontend 0.6.1, sin migraciones). Anterior: 2026-10-29 (Fase 7C: modelo open-weight opcional con asistente de la Analyst Console, selectores contextuales sin ids tecleados, rediseño de consola y panel, informes v3 con gráficas circulares e identidad sin SNMP; servidor y frontend 0.6.0, agente 0.6.2 y sensor 0.7.0 sin cambios, sin migraciones). Anterior: 2026-10-27 (Fase 7B-Fix1: CORR-002 v5 con relación causal demostrable, PER-001 v3 con instancias de servicio por usuario verificables, riesgo v7, identidad y topología con lo que falta explícito, hipótesis de duplicados, consola con contexto; migración 0050, agente 0.6.2). Anterior: 2026-10-26 (Fase 7B: atribución verificable de detecciones con operaciones de mantenimiento autorizadas, riesgo v6 sin doble conteo causal, identidad de dispositivos por niveles con MAC privadas y asociación manual auditada, tabla SOC de dispositivos con panel lateral, Analyst Console sobre el motor 7A; servidor y frontend 0.5.0, agente 0.6.1, sensor 0.7.0). Anterior: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
+Last updated: 2026-11-09 (Fase 7D.2: cuotas de ingesta por agente autenticado en PostgreSQL, 429 con Retry-After, agente 0.7.1 con jitter sobre Retry-After, purgas auditadas e informe de capacidad, minimatch 11.0.5 por override, CI con acciones por SHA, pip-audit, npm audit, SBOM e higiene de secretos, guía de Rulesets; migración 0052, servidor, frontend y agente 0.7.1, sensor sin cambios; docs/fase-7d2.md). Anterior: 2026-11-07 (Fase 7D.1: identidad, acceso y transporte. Registro, rotación y recuperación de agentes separados, allowlist central de evidencias de endpoint, historial de herramientas con permisos actuales, agente solo por HTTPS sin redirecciones y con respuestas acotadas; migración 0051, servidor, frontend y agente 0.7.0, sensor sin cambios; docs/fase-7d1.md). Anterior: 2026-10-30 (7C-Fix2: `AI_REASONING_EFFORT` opcional para modelos "thinking" en llama.cpp, motivo concreto de `ai_invalid_response` sin contenido, sin reintento de respuestas cortadas; revisión de CORR-002/PER-001 sin cambios de reglas y hueco del 7045 documentado; servidor y frontend 0.6.2, sin migraciones). Anterior: 2026-10-29 (7C-Security-Fix1: asistente de la consola solo con modelo en loopback, apagado por defecto, revisión del documento con huella antes de enviar, sin secretos, tools:execute y auditoría; servidor y frontend 0.6.1, sin migraciones). Anterior: 2026-10-29 (Fase 7C: modelo open-weight opcional con asistente de la Analyst Console, selectores contextuales sin ids tecleados, rediseño de consola y panel, informes v3 con gráficas circulares e identidad sin SNMP; servidor y frontend 0.6.0, agente 0.6.2 y sensor 0.7.0 sin cambios, sin migraciones). Anterior: 2026-10-27 (Fase 7B-Fix1: CORR-002 v5 con relación causal demostrable, PER-001 v3 con instancias de servicio por usuario verificables, riesgo v7, identidad y topología con lo que falta explícito, hipótesis de duplicados, consola con contexto; migración 0050, agente 0.6.2). Anterior: 2026-10-26 (Fase 7B: atribución verificable de detecciones con operaciones de mantenimiento autorizadas, riesgo v6 sin doble conteo causal, identidad de dispositivos por niveles con MAC privadas y asociación manual auditada, tabla SOC de dispositivos con panel lateral, Analyst Console sobre el motor 7A; servidor y frontend 0.5.0, agente 0.6.1, sensor 0.7.0). Anterior: 2026-10-24 (Fase 7A: Analyst Tool Engine, inteligencia de dispositivos sin agente, hub Red, tareas y controles de red en los casos, gráficas del dashboard y contexto de PowerShell; servidor y frontend 0.4.0, agente 0.6.0, sensor 0.7.0).
 
 ## Current state
 
@@ -12,7 +12,7 @@ outage during which the agent buffered samples and delivered them on reconnectio
 | Component | State |
 |-----------|-------|
 | Backend API (FastAPI) | Done: agents (enrollment with one-time tokens or legacy shared key + per-agent tokens; admin API for enrollment tokens behind ADMIN_API_KEY), assets, telemetry + history, inventory + change detection, process snapshots, events (filters), alerts (lifecycle, filters, detail), retention, health; hybrid monitoring: agentless network discovery (allowlisted networks only), exposed ports with baseline, agent/discovery reconciliation, exposure correlation |
-| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0050 |
+| Database (PostgreSQL 18 native, Alembic) | Done: migrations 0001–0052 |
 | Agent (Python, Windows-first) | Done: identity + token (DPAPI-encrypted at rest), heartbeat (+ host refresh), telemetry, inventory incl. disks, network connections, gateways/DNS, local accounts, service pid, software install date/architecture (15 min; on Linux also systemd services and dpkg/rpm packages), process snapshots (60 s), Windows Event Log System/Application/Security/PowerShell (60 s), compatibility with older servers (drops unknown fields), buffering persisted across restarts, backoff + jitter + Retry-After, re-enrollment, revocation handling (403), rotating logs with secret redaction |
 | Agent management (dashboard) | Done: Agentes page (summary, agents with credential status, installation tokens), Add agent wizard (Linux one-time token, install command, live registration), revoke / reinstate with confirmation, Agent section in asset detail. Admin operations through `/api/v1/console` (sesión + rol admin desde cualquier equipo, Fase 4G) |
 | Autenticación del dashboard | Fase 4G: usuarios locales (Argon2id), roles admin/analyst/viewer con permisos centralizados, sesiones de servidor en cookie HttpOnly (caducidad, inactividad, rotación, revocación), CSRF (Origin + token), límites de intentos en login y registro de agentes, página Usuarios, auditoría (`audit_events`), bootstrap y recuperación por CLI (`create-admin`, `reset-password`). Migración 0017. [authentication.md](authentication.md) |
@@ -196,6 +196,18 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
 
 ## Known issues and limitations
 
+- Fase 7D.2: con `RATE_LIMIT_BACKEND=memory` (por defecto fuera de producción) las cuotas de
+  ingesta son por proceso; con varios workers solo `database` da un límite global. La
+  concurrencia de ingesta es siempre por worker. Los valores por defecto no se han medido aún
+  contra la flota real de Jesus. H08 sigue abierto hasta aplicar y verificar el Ruleset de
+  `main` en GitHub (docs/github-rulesets.md). `minimatch` va fijado por `overrides` hasta que
+  eslint y typescript-eslint acepten la 11.x.
+- Fase 7D.1: los agentes 0.6.x por HTTP siguen funcionando con la credencial en claro hasta
+  migrarlos (decisión deliberada para no cortar la monitorización; el dashboard lo marca y
+  la rotación se entrega al pasar a HTTPS). Un instalador 0.6.x aún puede dar de alta un
+  equipo NUEVO por HTTP. `AGENT_SERVER_URL` http no se rechaza en el arranque. Los eventos
+  del sistema operativo siguen con `monitoring:read` (no son telemetría 6E). Riesgos y
+  matriz completos en docs/fase-7d1-auditoria.md.
 - Fase 7C: el asistente solo se ha probado con un servidor OpenAI-compatible simulado
   (`qa/console_assist_fake_llm.py`); la calidad con modelos pequeños es limitada y Sentra
   descarta más respuestas por formato o grounding. Sin streaming. Los selectores no usan
@@ -442,6 +454,43 @@ cd frontend; npm test; npm run typecheck; npm run lint; npm run build
   the dashboard shows its metrics as "—". On-demand: `python -m app.cli purge-old-data`.
 
 ## Recommended next phase
+
+Fase 7D.2 implementada sobre Dev `5ad952c` + 7D.1 (migración 0052, siguiente libre 0053;
+servidor, frontend y agente 0.7.1; sensor 0.7.0 sin cambios; once ajustes opcionales
+`AGENT_QUOTA_*`/`INGEST_*` fijados en conftest; sin dependencias de ejecución nuevas). Corrige
+H06 (cuotas por identidad con cubos de tokens atómicos en PostgreSQL, clase `control` aparte
+para que el heartbeat no se limite por datos, concurrencia por worker, 429 antes de escribir,
+estado de limitación en `GET /agents` y métricas), H07 (`npm audit` 0/0 con `minimatch` 11.0.5,
+`pip-audit` limpio) y deja H08 implementado en CI (acciones por SHA, `supply-chain`,
+`repo-hygiene`, mypy win32, migraciones) con la guía docs/github-rulesets.md para aplicar el
+Ruleset a mano. Purgas de retención auditadas (`retention_purge`) y
+`python -m app.cli capacity-report [--exact]` de solo lectura. Pendiente en Windows: QA
+integral conjunta 7D.1 + 7D.2 (qa/windows/), carga con varios agentes, Ruleset verificado.
+Siguiente: retomar el roadmap funcional; trabajo posterior de seguridad en docs/fase-7d2.md.
+
+Fase 7D.1 implementada sobre main `265f63f` = Dev `5ad952c` (migración 0051, siguiente libre
+0052; servidor, frontend y agente 0.7.0; sensor 0.7.0 sin cambios; sin dependencias nuevas;
+ajustes opcionales `AGENT_ENROLLMENT_KEY_EXPIRES_AT` y `AGENT_RECOVERY_TOKEN_TTL_MINUTES`
+fijados en conftest). Corrige H01-H05 del informe de seguridad del 2026-11-05:
+
+- H01: un token ordinario o la clave legacy solo dan de alta `agent_id` nuevos (403
+  `agent_recovery_required`); rotación con la credencial vigente
+  (`POST /agents/credentials/rotate`, pendiente hasta su primer uso); recuperación con una
+  autorización de admin de un solo uso ligada al activo (dashboard o
+  `python -m app.cli authorize-agent-recovery`). Ver docs/fase-7d1-recovery.md.
+- H02/H03: política central `app/core/evidence_policy.py` (allowlist; sin `telemetry:read`
+  solo campos operativos de lo que es de endpoint), aplicada a detecciones, incidentes,
+  alertas, búsqueda, herramientas, IA e informes, con los permisos actuales del lector y
+  permisos de contenido guardados en cada copia.
+- H04/H05: agente 0.7.0 solo HTTPS (http solo a loopback), sin redirecciones, respuesta
+  acotada en bytes y plazo; instaladores que se niegan antes de parar el servicio; el
+  servidor marca a los agentes 0.6.x por HTTP sin cortarlos (docs/agent-https-migration.md).
+
+Pendiente en hardware real: suites en Windows, Caddy con CA interna y agentes reales,
+actualización 0.6.2 → 0.7.0 en los tres sistemas, recuperación en un equipo reinstalado.
+`AGENT_SERVER_URL` del `.env` de Jesus debe pasar a `https://`. Siguiente: Fase 7D.2
+(docs/fase-7d2-plan.md: cuotas por agente, minimatch, guía de protección de ramas, CI con
+acciones por SHA, escaneo de dependencias y secretos, SBOM).
 
 7C-Fix2 implementado sobre 7C + 7C-Security-Fix1 (servidor y frontend 0.6.2, sin migraciones:
 siguiente libre 0051). `AI_REASONING_EFFORT` (vacío = no se envía), motivos de

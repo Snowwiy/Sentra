@@ -119,3 +119,10 @@ class AIInsight(Base):
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     # Pasada esta fecha el insight es stale aunque los datos no hayan cambiado.
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    # Fase 7D.1 (H02/H03): permisos que exige LEER este insight además de los de su ruta
+    # (p. ej. telemetry:read si el contexto llevó evidencia de endpoint completa). Se
+    # comparan con los permisos actuales del lector en cada listado, detalle y acierto de
+    # caché. Lista vacía = sin requisitos adicionales.
+    content_permissions: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )

@@ -29,6 +29,16 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.ai.redaction import Redactor
+from app.core.evidence_policy import (
+    RESTRICTED,
+    EvidenceAccess,
+    endpoint_detection_clause,
+    evidence_summary,
+    filter_details,
+    filter_evidence_data,
+    is_endpoint_evidence,
+    safe_detection_summary,
+)
 from app.core.exceptions import NotFoundError
 from app.core.redaction import REDACTED, redact_value
 from app.detection.rules import RULES_BY_ID
@@ -199,8 +209,16 @@ class ContextBuilder:
         max_items: int,
         redactor: Redactor,
         now: datetime | None = None,
+        access: EvidenceAccess = RESTRICTED,
     ) -> None:
         self._session = session
+        # Fase 7D.1 (H02): el modelo recibe solo lo que el usuario que pide el análisis puede
+        # leer. Por defecto restringido: un llamador nuevo sin acceso explícito falla cerrado.
+        self._access = access
+        # True si el contexto llevó detalle de endpoint completo: el insight resultante se
+        # guarda exigiendo telemetry:read para leerlo (caché compartida incluida).
+        self.endpoint_content = False
+        self._endpoint_cache: dict[int, bool] = {}
         self._risk = RiskService(session, risk_config, heartbeat_timeout)
         self._timeout = heartbeat_timeout
         self._max_items = max_items
@@ -354,6 +372,32 @@ class ContextBuilder:
             }
         return data
 
+    def _is_endpoint(self, d: Detection) -> bool:
+        cached = self._endpoint_cache.get(d.id)
+        if cached is None:
+            cached = bool(
+                self._session.scalar(
+                    select(func.count())
+                    .select_from(Detection)
+                    .where(
+                        Detection.id == d.id,
+                        endpoint_detection_clause(Detection, DetectionEvidence),
+                    )
+                )
+            )
+            self._endpoint_cache[d.id] = cached
+        return cached
+
+    def _restricted(self, d: Detection) -> bool:
+        endpoint = self._is_endpoint(d)
+        if endpoint and self._access.endpoint:
+            self.endpoint_content = True
+        return endpoint and not self._access.endpoint
+
+    def _details(self, d: Detection) -> dict[str, Any]:
+        details, _ = filter_details(d.details or {}, self._access, self._is_endpoint(d))
+        return details or {}
+
     def _detection_item(self, d: Detection, asset: Asset) -> dict[str, Any] | None:
         public = str(d.public_id)
         key = self._ref("detection", public, f"{d.rule_id}: {d.title}", str(asset.public_id))
@@ -368,7 +412,9 @@ class ContextBuilder:
             "kind": d.kind,
             "category": d.rule_category or (meta.category if meta else None),
             "title": self._text(d.title, 200),
-            "summary": self._text(d.summary),
+            "summary": self._text(
+                safe_detection_summary(d.title) if self._restricted(d) else d.summary
+            ),
             "severity": d.severity.value,
             "confidence": d.confidence.value,
             "status": d.status.value,
@@ -624,7 +670,7 @@ class ContextBuilder:
                 if texts
                 else None
             )
-        item["details"] = self._safe(detection.details or {})
+        item["details"] = self._safe(self._details(detection))
         item["acknowledged"] = detection.acknowledged_at is not None
         item["resolution_note"] = self._text(detection.resolution_note, 200)
         data["detection"] = item
@@ -689,10 +735,14 @@ class ContextBuilder:
         public = str(asset.public_id)
         items = []
         for index, r in enumerate(rows):
+            summary = evidence_summary(r.summary, r.signal_kind, r.source_type, self._access)
+            data, _ = filter_evidence_data(r.data or {}, r.source_type, self._access)
+            if self._access.endpoint and is_endpoint_evidence(r.source_type):
+                self.endpoint_content = True
             if r.source_id in existing:
-                key = self._ref("event", str(r.source_id), r.summary, public)
+                key = self._ref("event", str(r.source_id), summary, public)
             else:
-                key = self._ref("evidence", f"{detection.public_id}#{r.id}", r.summary, public)
+                key = self._ref("evidence", f"{detection.public_id}#{r.id}", summary, public)
             if key is None:
                 break
             items.append(
@@ -702,8 +752,8 @@ class ContextBuilder:
                     "role": r.role,
                     "source_type": r.source_type,
                     "occurred_at": r.occurred_at,
-                    "summary": self._text(r.summary),
-                    "data": self._safe(r.data or {}),
+                    "summary": self._text(summary),
+                    "data": self._safe(data or {}),
                     "order": index + 1,
                 }
             )
@@ -1209,7 +1259,7 @@ class ContextBuilder:
             detection, owner = found[0], found[1]
             data["asset"] = self._asset_item(owner)
             item = self._detection_item(detection, owner) or {}
-            item["details"] = self._safe(minimal(detection.details or {}))
+            item["details"] = self._safe(minimal(self._details(detection)))
             data["detection"] = item
             asset_pk, detection_pk = owner.id, detection.id
         elif asset_id is not None:

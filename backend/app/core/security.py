@@ -33,6 +33,17 @@ def generate_enrollment_token() -> str:
     return ENROLLMENT_TOKEN_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)
 
 
+# Fase 7D.1 (H01): autorización de recuperación de un agente existente. Comparte el prefijo
+# de los tokens de enrolamiento a propósito: los instaladores y agentes ya publicados solo
+# aceptan `sentra_et_...` y la envían en X-Enrollment-Token, así que una instalación 0.6.x
+# también puede recuperarse sin actualizar antes. El servidor la distingue por su tabla.
+RECOVERY_TOKEN_PREFIX = "sentra_et_rec_"  # noqa: S105  (un prefijo, no un secreto)
+
+
+def generate_recovery_token() -> str:
+    return RECOVERY_TOKEN_PREFIX + secrets.token_urlsafe(TOKEN_BYTES)
+
+
 def hash_token(token: str) -> str:
     return hashlib.sha256(token.encode()).hexdigest()
 

@@ -198,12 +198,16 @@ Para el servicio, sustituye `runtime\` y `lib\`, conserva configuración, `agent
 individual y logs, y lo arranca. **No vuelve a enrolar.** Ejecutar el instalador sobre una
 instalación existente sin token hace lo mismo. `-Server URL` además cambia `api_url`.
 
-## Re-enrolamiento (agente revocado)
+## Re-enrolamiento (agente revocado o equipo reinstalado)
 
-1. En **Agentes**, **Reactivar…** el agente (queda *Re-enrollment required*) y el asistente
-   genera un token Windows para ese hostname.
-2. En el equipo: `install-sentra-agent.ps1 -Server URL -Reenroll` (el asistente ya añade
-   `-Reenroll`).
+Desde la Fase 7D.1, un token de instalación ordinario ya no sirve para un equipo que ya es
+un activo (respuesta `agent_recovery_required`). Hace falta una autorización de recuperación
+(docs/fase-7d1-recovery.md):
+
+1. En **Agentes**, **Reactivar…** el agente si está revocado. Se abre **Recuperar
+   identidad…**: motivo, confirmación y autorización de un solo uso (15 minutos).
+2. En el equipo: `install-sentra-agent.ps1 -Server https://… -Reenroll` y pega la
+   autorización en el aviso oculto (o pásala con `-TokenFile`).
 3. El servicio vuelve a enrolar con el **mismo agent_id**: mismo activo, con su historial.
 
 Un agente revocado y **no** reactivado recibe `rejected` (`agent revoked by an operator`).
@@ -285,7 +289,7 @@ recuperación del SCM y desinstalación. Checklist:
 12. Upgrade: sube `version` en `agent/pyproject.toml` y `sentra_agent/__init__.py`, reconstruye,
     ejecuta `-Upgrade` → mismo `agent_id`, sin registro nuevo en Tokens, sin activo duplicado.
 13. Revoca el agente en Agentes → el log muestra `API refused agent credentials`. Reactívalo →
-    nuevo token → `-Reenroll` → mismo activo, historial intacto.
+    autorización de recuperación → `-Reenroll` → mismo activo, historial intacto.
 14. Desinstala sin `-Purge` → servicio y Program Files fuera, ProgramData intacto; reinstala sin
     token → mismo activo. Desinstala con `-Purge` → `C:\ProgramData\Sentra\Agent` no existe.
 15. Equipo de desarrollo con agente manual previo: instala → mensaje "identidad importada" y

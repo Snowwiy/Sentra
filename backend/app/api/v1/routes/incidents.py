@@ -21,6 +21,7 @@ from app.api.auth import actor, require_permission
 from app.api.deps import DbSession
 from app.api.params import text_query
 from app.api.responses import error_responses
+from app.core.evidence_policy import EvidenceAccess
 from app.core.exceptions import SentraError
 from app.core.permissions import Permission
 from app.incidents.workflow import incident_key
@@ -173,7 +174,7 @@ def get_incident_detail(incident_id: UUID, _: Reader, session: DbSession) -> Inc
 )
 def incident_timeline(
     incident_id: UUID,
-    _: Reader,
+    ctx: Reader,
     session: DbSession,
     limit: Annotated[int, Query(ge=1, le=200)] = 50,
     cursor: Annotated[str | None, Query(max_length=200)] = None,
@@ -181,7 +182,9 @@ def incident_timeline(
     until: datetime | None = None,
 ) -> IncidentTimeline:
     """Timeline unificado, más reciente primero, paginado con `cursor` (next_cursor)."""
-    return IncidentQueries(session).timeline(incident_id, limit, cursor, since, until)
+    return IncidentQueries(session, ctx.user, EvidenceAccess.of(ctx.permissions)).timeline(
+        incident_id, limit, cursor, since, until
+    )
 
 
 @router.get(
@@ -189,8 +192,10 @@ def incident_timeline(
     response_model=IncidentEvidence,
     responses=error_responses(404),
 )
-def incident_evidence(incident_id: UUID, _: Reader, session: DbSession) -> IncidentEvidence:
-    return IncidentQueries(session).evidence(incident_id)
+def incident_evidence(incident_id: UUID, ctx: Reader, session: DbSession) -> IncidentEvidence:
+    return IncidentQueries(session, ctx.user, EvidenceAccess.of(ctx.permissions)).evidence(
+        incident_id
+    )
 
 
 @router.get(

@@ -1,5 +1,6 @@
 """Agent configuration: defaults < TOML file < environment variables < CLI flags."""
 
+import ipaddress
 import os
 import re
 import sys
@@ -15,6 +16,53 @@ INSTALLATION_METHOD = re.compile(r"[a-z][a-z0-9_]{0,31}")
 # Fase 6E: política de línea de comandos de la telemetría (gana la más restrictiva entre
 # agente y servidor; el agente nunca envía más de lo que dice aquí).
 CMDLINE_POLICIES = ("off", "redacted", "full")
+
+
+# Fase 7D.1 (H04/H05): límites del transporte. La respuesta se lee por trozos y nunca pasa
+# de max_response_bytes; la operación completa (conectar, enviar y leer) tiene un plazo total.
+DEFAULT_MAX_RESPONSE_BYTES = 4 * 1024 * 1024
+MIN_RESPONSE_BYTES = 64 * 1024
+MAX_RESPONSE_BYTES_LIMIT = 64 * 1024 * 1024
+DEFAULT_REQUEST_DEADLINE = 60.0
+MIGRATION_DOC = "docs/agent-https-migration.md"
+
+
+def is_loopback_host(host: str | None) -> bool:
+    """127.0.0.0/8, ::1 o localhost: el tráfico no sale del equipo."""
+    if not host:
+        return False
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host.strip("[]")).is_loopback
+    except ValueError:
+        return False
+
+
+def insecure_url_reason(url: str) -> str | None:
+    """Por qué `url` no es aceptable como api_url (None si lo es).
+
+    Fase 7D.1 (H04): HTTPS obligatorio con validación TLS normal; http:// solo contra
+    loopback (agente junto al servidor o desarrollo). No hay ninguna opción para relajarlo:
+    el token del agente viaja en cada petición y por HTTP en claro cualquiera en el camino
+    podría copiarlo y suplantar al equipo.
+    """
+    parsed = urlparse(url.strip())
+    if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        return f"api_url must be an https:// URL, got {url!r}"
+    if parsed.username or parsed.password:
+        return "api_url must not embed credentials (user:password@)"
+    if parsed.query or parsed.fragment:
+        return "api_url must not have a query string or fragment"
+    if parsed.scheme == "http" and not is_loopback_host(parsed.hostname):
+        return (
+            f"api_url uses http:// to {parsed.hostname}, outside loopback: the agent token"
+            " would travel unencrypted. Since agent 0.7.0 only https:// is accepted (http://"
+            " only for 127.0.0.1, ::1 or localhost). Publish the Sentra server over HTTPS,"
+            ' set api_url = "https://<server>" (and ca_bundle for a private CA), then rotate'
+            f" the agent credential. See {MIGRATION_DOC}."
+        )
+    return None
 
 
 def default_state_dir() -> Path:
@@ -152,6 +200,15 @@ class AgentConfig:
     # latest snapshot is kept by the server.
     processes_interval_seconds: int = 60
     request_timeout_seconds: float = 10.0
+    # Fase 7D.1: plazo total de una petición (conexión, envío y lectura). El timeout de
+    # arriba vale por operación de socket; sin este, un servidor que goteara un byte cada
+    # pocos segundos retendría el ciclo indefinidamente.
+    request_deadline_seconds: float = DEFAULT_REQUEST_DEADLINE
+    # Tamaño máximo de una respuesta: un proxy roto o malicioso no puede agotar la memoria.
+    max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES
+    # CA privada adicional (PEM) para un servidor con certificado de una CA interna. Se AÑADE
+    # a las del sistema; la verificación de certificado y nombre nunca se desactiva.
+    ca_bundle: Path | None = None
     max_backoff_seconds: int = 300
     # Samples kept in memory while the API is unreachable, sent once it is back.
     buffer_size: int = 120
@@ -191,9 +248,9 @@ class AgentConfig:
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
 
     def validate(self) -> "AgentConfig":
-        parsed = urlparse(self.api_url)
-        if parsed.scheme not in ("http", "https") or not parsed.netloc:
-            raise ValueError(f"api_url must be an http(s) URL, got {self.api_url!r}")
+        reason = insecure_url_reason(self.api_url)
+        if reason is not None:
+            raise ValueError(reason)
         if not 5 <= self.interval_seconds <= 3600:
             raise ValueError("interval_seconds must be between 5 and 3600")
         if not 60 <= self.inventory_interval_seconds <= 86400:
@@ -204,6 +261,17 @@ class AgentConfig:
             raise ValueError("processes_interval_seconds must be between 15 and 3600")
         if self.request_timeout_seconds <= 0:
             raise ValueError("request_timeout_seconds must be positive")
+        if not self.request_timeout_seconds <= self.request_deadline_seconds <= 600:
+            raise ValueError(
+                "request_deadline_seconds must be between request_timeout_seconds and 600"
+            )
+        if not MIN_RESPONSE_BYTES <= self.max_response_bytes <= MAX_RESPONSE_BYTES_LIMIT:
+            raise ValueError(
+                f"max_response_bytes must be between {MIN_RESPONSE_BYTES} and"
+                f" {MAX_RESPONSE_BYTES_LIMIT}"
+            )
+        if self.ca_bundle is not None and not self.ca_bundle.is_file():
+            raise ValueError(f"ca_bundle not found: {self.ca_bundle}")
         if self.max_backoff_seconds < self.interval_seconds:
             raise ValueError("max_backoff_seconds must be >= interval_seconds")
         # At least one slot: the current sample always goes through the buffer.
@@ -248,7 +316,7 @@ def _coerce(name: str, value: Any) -> Any:
         return float(value)
     if name in ("enrollment_key", "enrollment_token", "installation_method"):
         return str(value).strip() or None
-    if name in ("enrollment_token_file", "log_dir"):
+    if name in ("enrollment_token_file", "log_dir", "ca_bundle"):
         return Path(value).expanduser() if str(value) else None
     if target in (Path, "Path"):
         return Path(value).expanduser()

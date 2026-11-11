@@ -31,15 +31,6 @@ type Step = "platform" | "configure" | "install";
 
 const PLATFORM_NAMES: Record<Platform, string> = { linux: "Linux", windows: "Windows", macos: "macOS" };
 
-export interface WizardPreset {
-  /** Expected hostname (re-enrollment of a known host). */
-  hostname?: string;
-  /** Plataforma del agente que se vuelve a registrar (el token queda limitado a ella). */
-  platform?: Platform;
-  /** Shown above the form, e.g. why a new token is needed. */
-  note?: string;
-}
-
 /**
  * Agentes → Añadir agente → Linux, Windows o macOS → Generar token → copiar instalación → registrado.
  *
@@ -49,20 +40,18 @@ export interface WizardPreset {
  */
 export function AddAgentWizard({
   info,
-  preset,
   onClose,
   onRegistered,
 }: {
   info: ConsoleInfo;
-  preset?: WizardPreset;
   onClose: () => void;
   /** Called once when the token is used by a host (the agent list can refresh). */
   onRegistered?: (assetId: string) => void;
 }) {
-  const [step, setStep] = useState<Step>(preset ? "configure" : "platform");
-  const [platform, setPlatform] = useState<Platform>(preset?.platform ?? "linux");
+  const [step, setStep] = useState<Step>("platform");
+  const [platform, setPlatform] = useState<Platform>("linux");
   const [serverUrl, setServerUrl] = useState(info.suggested_server_urls[0] ?? "");
-  const [hostname, setHostname] = useState(preset?.hostname ?? "");
+  const [hostname, setHostname] = useState("");
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string>();
   const [created, setCreated] = useState<EnrollmentTokenCreated>();
@@ -152,11 +141,6 @@ export function AddAgentWizard({
 
       {step === "configure" && (
         <div className="stack">
-          {preset?.note && (
-            <div className="banner" role="status">
-              {preset.note}
-            </div>
-          )}
           <label className="form-field">
             <span>URL del servidor Sentra (la que usará el equipo para conectarse)</span>
             <input
@@ -164,7 +148,7 @@ export function AddAgentWizard({
               list="sentra-server-urls"
               value={serverUrl}
               onChange={(event) => setServerUrl(event.target.value)}
-              placeholder="http://192.168.1.10:8000"
+              placeholder="https://sentra.example.local"
               spellCheck={false}
               autoComplete="off"
             />
@@ -179,9 +163,9 @@ export function AddAgentWizard({
                 : "Sugerida a partir de las direcciones de este servidor; edítala si hace falta. La API debe escuchar en la red (p. ej. start_backend.ps1 -BindHost 0.0.0.0) y el firewall permitir el puerto."}
             </span>
           </label>
-          {serverUrl.trim() && !server.valid && (
+          {serverUrl.trim() && !server.valid && !server.insecure && (
             <div className="banner banner--warn" role="alert">
-              URL no válida: usa http(s)://dirección[:puerto], por ejemplo http://192.168.1.10:8000.
+              URL no válida: usa https://dirección[:puerto], por ejemplo https://sentra.example.local.
             </div>
           )}
           {server.loopback && (
@@ -191,8 +175,9 @@ export function AddAgentWizard({
             </div>
           )}
           {server.insecure && (
-            <div className="banner banner--warn" role="note">
-              HTTP no cifra las credenciales durante el transporte. Use HTTPS en producción.
+            <div className="banner banner--warn" role="alert">
+              El agente exige HTTPS fuera del propio equipo: por HTTP su credencial viajaría sin cifrar.
+              Publica Sentra por HTTPS (docs/agent-https-migration.md) y usa esa URL.
             </div>
           )}
           <label className="form-field">
@@ -239,11 +224,9 @@ export function AddAgentWizard({
             </div>
           )}
           <div className="modal__actions">
-            {!preset && (
-              <button type="button" className="button" onClick={() => setStep("platform")} disabled={creating}>
-                Atrás
-              </button>
-            )}
+            <button type="button" className="button" onClick={() => setStep("platform")} disabled={creating}>
+              Atrás
+            </button>
             <button
               type="button"
               className="button button--primary"
@@ -261,7 +244,6 @@ export function AddAgentWizard({
           token={created}
           serverUrl={server.url}
           platform={platform}
-          reenroll={Boolean(preset)}
           onClose={onClose}
           onRegistered={onRegistered}
         />
@@ -274,15 +256,12 @@ function InstallInstructions({
   token,
   serverUrl,
   platform,
-  reenroll,
   onClose,
   onRegistered,
 }: {
   token: EnrollmentTokenCreated;
   serverUrl: string;
   platform: Platform;
-  /** Re-registro de un agente existente (Windows necesita -Reenroll). */
-  reenroll: boolean;
   onClose: () => void;
   onRegistered?: (assetId: string) => void;
 }) {
@@ -314,7 +293,7 @@ function InstallInstructions({
   const left = timeLeft(token.expires_at, now);
   const steps: InstallStep[] =
     platform === "windows"
-      ? windowsInstallSteps({ serverUrl, method: windowsMethod, reenroll })
+      ? windowsInstallSteps({ serverUrl, method: windowsMethod })
       : platform === "macos"
         ? macosInstallSteps({ serverUrl, pkg: macPkg, arch: macArch })
         : installSteps({ serverUrl, token: token.token, method, pkg });

@@ -46,9 +46,11 @@ from app.models.user import User
 from app.risk.config import RiskConfig
 from app.risk.engine import RiskEngine, RiskRun
 from app.risk.queue import request_recalculation
+from app.schemas.agent_management import AgentRecoveryCreate
 from app.schemas.auth import UserCreate
 from app.schemas.enrollment import EnrollmentTokenCreate
 from app.services import audit_7b, audit_service
+from app.services.agent_management_service import AgentManagementService
 from app.services.agent_service import reinstate_agent, revoke_agent
 from app.services.alert_service import AlertService, AlertThresholds
 from app.services.asset_service import open_ports_by_asset
@@ -61,11 +63,12 @@ from app.services.backup_service import (
     restore_backup,
     verify_backup,
 )
+from app.services.capacity_service import capacity_report
 from app.services.discovery_service import DiscoveryConfig, DiscoveryService
 from app.services.enrollment_token_service import EnrollmentTokenService
 from app.services.identification import oui_database, refresh_identity
 from app.services.preflight import migration_state, production_report
-from app.services.retention_service import RetentionPolicy, RetentionService
+from app.services.retention_service import RetentionPolicy, RetentionService, record_purge_audit
 from app.services.vulnerability_catalog_service import VulnerabilityCatalogService
 from app.threat_intel.config import ThreatIntelConfig
 from app.threat_intel.errors import IntelFormatError
@@ -102,12 +105,25 @@ def _purge_old_data(session: Session) -> int:
         )
         return 1
     result = RetentionService(session, policy).purge()
+    record_purge_audit(session, result.counts(), "cli")
     print(
         f"deleted {result.telemetry_samples} telemetry samples, {result.system_events} events,"
         f" {result.asset_changes} inventory changes, {result.alerts} resolved alerts and"
         f" {result.detections} resolved detections, {result.risk_snapshots} risk snapshots and"
         f" {result.discovery_observations} discovery observations"
     )
+    return 0
+
+
+def _capacity_report(session: Session, exact: bool, output: Path | None) -> int:
+    """Fase 7D.2: tamaño, filas y retención de cada histórico. Solo lectura, nunca borra."""
+    report = capacity_report(session, get_settings(), exact=exact)
+    data = json.dumps(report, indent=2, ensure_ascii=False)
+    if output is not None:
+        output.write_text(data + "\n", encoding="utf-8")
+        print(f"capacity report written to {output}")
+    else:
+        print(data)
     return 0
 
 
@@ -582,6 +598,48 @@ def _enrollment_tokens(session: Session, args: argparse.Namespace) -> int:
 # --- Usuarios del dashboard (Fase 4G) -----------------------------------------------------
 
 
+def _authorize_recovery(session: Session, args: argparse.Namespace) -> int:
+    """Fase 7D.1 (H01): igual que la consola; el token se imprime una sola vez."""
+    try:
+        payload = AgentRecoveryCreate(
+            reason=args.reason,
+            confirm=args.confirm,
+            ttl_minutes=args.ttl_minutes,
+            expected_hostname=args.hostname,
+        )
+    except ValidationError as exc:
+        print(f"invalid value: {exc.errors()[0]['msg']}", file=sys.stderr)
+        return 2
+    ttl = timedelta(minutes=get_settings().agent_recovery_token_ttl_minutes)
+    try:
+        created = AgentManagementService(
+            session, timedelta(seconds=get_settings().heartbeat_timeout_seconds)
+        ).create_recovery(args.asset_id, payload, audit_service.CLI.name, None, ttl)
+    except (NotFoundError, ConflictError) as exc:
+        session.rollback()
+        print(str(exc), file=sys.stderr)
+        return 1
+    audit_service.record(
+        session,
+        audit_service.CLI,
+        "agent_recovery_authorized",
+        target_type="asset",
+        target_id=args.asset_id,
+        details={
+            "recovery_id": str(created.recovery_id),
+            "agent_id": str(created.agent_id),
+            "expires_at": created.expires_at.isoformat(),
+            "reason": created.reason,
+            "expected_hostname": created.expected_hostname,
+        },
+    )
+    print(f"recovery authorization {created.recovery_id} for asset {args.asset_id}")
+    print(f"expires at {created.expires_at.isoformat()} (single use)")
+    print("Use it once as the enrollment token on that host (it is not shown again):")
+    print(created.token)
+    return 0
+
+
 def _ask_password(username: str, prompt: Callable[[str], str] = getpass.getpass) -> str | None:
     """Pide la contraseña dos veces sin mostrarla. None si no coinciden o no cumple la política.
 
@@ -948,10 +1006,23 @@ def main(argv: list[str] | None = None) -> int:
     )
     for name, text in (
         ("revoke-agent", "invalidate an agent's token and block its re-enrollment"),
-        ("reinstate-agent", "allow a revoked agent to enroll again"),
+        ("reinstate-agent", "lift a revocation (the host then needs a recovery authorization)"),
     ):
         command = commands.add_parser(name, help=text)
         command.add_argument("asset_id", type=UUID, help="public asset id (as shown in the UI)")
+    recovery = commands.add_parser(
+        "authorize-agent-recovery",
+        help="one-time, short-lived authorization to recover an existing agent identity",
+    )
+    recovery.add_argument("asset_id", type=UUID, help="public asset id (as shown in the UI)")
+    recovery.add_argument("--reason", required=True, help="why (10-500 characters, audited)")
+    recovery.add_argument(
+        "--confirm",
+        action="store_true",
+        help="required: the agent's current credential will be replaced when it is used",
+    )
+    recovery.add_argument("--ttl-minutes", type=int, default=None, help="1-60 (default setting)")
+    recovery.add_argument("--hostname", default=None, help="only valid for this hostname")
     for name, text in (
         ("ack-alert", "acknowledge an active alert (it stays active until resolved)"),
         ("resolve-alert", "resolve an alert by hand"),
@@ -1091,6 +1162,16 @@ def main(argv: list[str] | None = None) -> int:
     commands.add_parser(
         "snmp-rekey", help="re-encrypt every SNMP profile with the active key (Fase 6B)"
     )
+    capacity = commands.add_parser(
+        "capacity-report",
+        help="read-only size, rows and retention of every history table (Fase 7D.2)",
+    )
+    capacity.add_argument(
+        "--exact",
+        action="store_true",
+        help="also compute the oldest row and rows beyond retention (scans large tables)",
+    )
+    capacity.add_argument("--output", type=Path, help="write the JSON report here")
     audit = commands.add_parser(
         "audit-7b", help="read-only audit of risk, detections, events and identity (Fase 7B.0)"
     )
@@ -1162,6 +1243,8 @@ def main(argv: list[str] | None = None) -> int:
             return _threat_intel_status(session)
         if args.command == "snmp-rekey":
             return _snmp_rekey(session)
+        if args.command == "capacity-report":
+            return _capacity_report(session, args.exact, args.output)
         if args.command == "audit-7b":
             return _audit_7b(session, args.asset, args.ip, args.days, args.output)
         if args.command in (
@@ -1176,6 +1259,8 @@ def main(argv: list[str] | None = None) -> int:
                 return 2
         if args.command in ("ack-alert", "resolve-alert"):
             return _alert_action(session, args.command, args.alert_id)
+        if args.command == "authorize-agent-recovery":
+            return _authorize_recovery(session, args)
         action = revoke_agent if args.command == "revoke-agent" else reinstate_agent
         try:
             asset = action(session, args.asset_id)

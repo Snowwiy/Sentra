@@ -11,10 +11,11 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, Query
 
-from app.api.auth import READ, actor, require_permission
+from app.api.auth import actor, require_permission
 from app.api.deps import DbSession, get_detection_config
 from app.api.params import text_query
 from app.api.responses import error_responses
+from app.core.evidence_policy import EvidenceAccess
 from app.core.exceptions import SentraError
 from app.core.permissions import Permission
 from app.detection.config import DetectionConfig
@@ -32,6 +33,9 @@ from app.services.site_service import resolve_site
 
 router = APIRouter(tags=["detections"])
 Manager = Annotated[AuthContext, Depends(require_permission(Permission.DETECTIONS_MANAGE))]
+# Fase 7D.1 (H02): la lectura necesita los permisos del usuario, no solo comprobarlos, para
+# decidir qué parte de la evidencia de endpoint se entrega.
+Reader = Annotated[AuthContext, Depends(require_permission(Permission.MONITORING_READ))]
 
 
 def get_detection_service(
@@ -43,10 +47,9 @@ def get_detection_service(
 Service = Annotated[DetectionService, Depends(get_detection_service)]
 
 
-@router.get(
-    "/detections", response_model=DetectionList, responses=error_responses(404), dependencies=[READ]
-)
+@router.get("/detections", response_model=DetectionList, responses=error_responses(404))
 def list_detections(
+    ctx: Reader,
     service: Service,
     session: DbSession,
     status: DetectionStatus | None = None,
@@ -84,6 +87,7 @@ def list_detections(
         ),
         limit,
         offset,
+        EvidenceAccess.of(ctx.permissions),
     )
 
 
@@ -91,10 +95,9 @@ def list_detections(
     "/detections/{detection_id}",
     response_model=DetectionDetail,
     responses=error_responses(404),
-    dependencies=[READ],
 )
-def get_detection(detection_id: UUID, service: Service) -> DetectionDetail:
-    return service.get(detection_id)
+def get_detection(detection_id: UUID, ctx: Reader, service: Service) -> DetectionDetail:
+    return service.get(detection_id, EvidenceAccess.of(ctx.permissions))
 
 
 def _action(
@@ -131,7 +134,7 @@ def _action(
         target_id=detection_id,
         details={"note": note} if note else None,
     )
-    return service.get(detection_id)
+    return service.get(detection_id, EvidenceAccess.of(ctx.permissions))
 
 
 @router.post(

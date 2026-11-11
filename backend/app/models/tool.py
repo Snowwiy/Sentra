@@ -168,3 +168,11 @@ class ToolExecution(Base):
     duration_ms: Mapped[int | None] = mapped_column(Integer)
     # Concurrencia optimista de confirmar y cancelar.
     version: Mapped[int] = mapped_column(Integer, default=1)
+    # Fase 7D.1 (H03): permisos que exige LEER el contenido guardado (entrada, salida,
+    # resumen, evidencia y procedencia), copiados del catálogo al ejecutar y ampliados con
+    # los del contenido (telemetry:read si la salida lleva detalle de endpoint). Cada lectura
+    # los compara con los permisos ACTUALES del usuario: degradar un rol retira el acceso a
+    # resultados históricos aunque sean propios.
+    read_permissions: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
