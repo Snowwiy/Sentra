@@ -112,16 +112,47 @@ check_server() {
   [ -n "$SERVER" ] || return 0
   case "$SERVER" in
     http://*|https://*) ;;
-    *) die "--server must start with http:// or https:// (got: $SERVER)" ;;
+    *) die "--server must start with https:// (got: $SERVER)" ;;
   esac
   SERVER="${SERVER%/}"
   # No spaces, quotes or path tricks in what goes into the config file.
   printf '%s' "$SERVER" | grep -Eq '^https?://[][A-Za-z0-9.:_-]+(/[A-Za-z0-9._~/-]*)?$' \
     || die "--server is not a valid URL: $SERVER"
-  case "$SERVER" in
-    http://127.*|http://localhost*|http://\[::1\]*) ;;
-    http://*) warn "the server URL is not https: tokens travel unencrypted on the network (use https in production)" ;;
+  # Fase 7D.1 (H04): https:// obligatorio; http:// solo hacia loopback. Sin excepción
+  # configurable: el token del agente viaja en cada petición.
+  insecure_api_url "$SERVER" && die "$(https_required_message "--server $SERVER")"
+  return 0
+}
+
+# Verdadero si la URL es http:// hacia un host que no es loopback.
+insecure_api_url() {
+  case "$1" in
+    http://*) ;;
+    *) return 1 ;;
   esac
+  # Loopback de verdad: 127.x.y.z, localhost o [::1] (no "127.algo.example", que es DNS).
+  printf '%s' "$1" | grep -Eq '^http://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$' && return 1
+  return 0
+}
+
+https_required_message() {
+  printf '%s uses http:// outside loopback: the agent token would travel unencrypted.\n' "$1"
+  printf 'Since agent 0.7.0 only https:// is accepted (http:// only for 127.0.0.1, ::1, localhost).\n'
+  printf 'Publish the Sentra server over HTTPS, then run this installer with --server https://SERVER\n'
+  printf '(trust a private CA in the system store first). See docs/agent-https-migration.md.'
+}
+
+# Upgrade sin --server: si el agent.toml existente apunta a http:// fuera de loopback, el
+# agente 0.7.0 no arrancaría. Se detiene ANTES de parar el servicio: el anterior sigue
+# funcionando y el administrador recibe el camino de migración.
+check_existing_config() {
+  [ -z "$SERVER" ] || return 0
+  [ -f "$CONFIG_FILE" ] || return 0
+  existing="$(sed -n 's/^[[:space:]]*api_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG_FILE" | head -n 1)"
+  if [ -n "$existing" ] && insecure_api_url "$existing"; then
+    die "$(https_required_message "api_url in $CONFIG_FILE ($existing)")"
+  fi
+  return 0
 }
 
 read_token() {
@@ -331,6 +362,7 @@ main() {
     return 0
   fi
   check_server
+  check_existing_config
   read_token
   if [ "$UPGRADE" = "1" ] && [ ! -f "$CONFIG_FILE" ]; then
     die "--upgrade needs an existing installation (no $CONFIG_FILE)"

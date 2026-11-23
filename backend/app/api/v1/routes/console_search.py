@@ -9,6 +9,7 @@ from fastapi import APIRouter, Query
 from app.api.auth import READ, CurrentAuth
 from app.api.deps import AppSettings, DbSession
 from app.api.responses import error_responses
+from app.core.evidence_policy import EvidenceAccess
 from app.core.permissions import Permission
 from app.schemas.console_search import SearchResult
 from app.services.console_search import ConsoleSearch
@@ -35,4 +36,5 @@ def search(
         q,
         resolve_site(session, site_id),
         include_users=ctx.has(Permission.INCIDENTS_MANAGE),
+        access=EvidenceAccess.of(ctx.permissions),
     )

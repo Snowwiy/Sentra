@@ -1237,7 +1237,26 @@ export interface Agent {
   /** Fase 5F: site del activo del agente. */
   site_id: string;
   site_name: string;
+  /** Fase 7D.1 (H01): origen de la credencial vigente; null = anterior a 7D.1. */
+  credential_source: AgentCredentialSource | null;
+  /** Hay una credencial nueva emitida que el agente aún no ha usado. */
+  rotation_pending: boolean;
+  /** El servidor pidió rotar (admin o credencial expuesta por HTTP). */
+  rotation_requested_at: IsoDateTime | null;
+  rotation_reason: string | null;
+  /** Fase 7D.1 (H04): transporte del último heartbeat. */
+  transport: AgentTransport | null;
+  transport_at: IsoDateTime | null;
+  /** Última vez que la credencial viajó por HTTP fuera de loopback. */
+  insecure_transport_at: IsoDateTime | null;
+  /** Fase 7D.2 (H06): último 429 por cuota de ingesta (null = no limitado). */
+  ingest_throttled_at: IsoDateTime | null;
+  /** Rechazos por cuota acumulados (como mucho el último día). */
+  ingest_rejections: number;
 }
+
+export type AgentCredentialSource = "enrollment_token" | "legacy_key" | "recovery" | "rotation";
+export type AgentTransport = "https" | "http_loopback" | "http_remote";
 
 export interface AgentSummary {
   total: number;
@@ -1247,6 +1266,46 @@ export interface AgentSummary {
   revoked: number;
   /** Agentes cuyo activo está archivado (no cuentan en los demás totales). */
   archived: number;
+  /** Fase 7D.1: agentes vistos por HTTP fuera de loopback (a migrar a HTTPS). */
+  insecure_transport: number;
+  /** Fase 7D.1: agentes enrolados con la clave compartida legacy. */
+  legacy_key: number;
+  /** Fase 7D.2: agentes con un 429 de cuota de ingesta en los últimos 15 minutos. */
+  throttled: number;
+}
+
+/** Fase 7D.1 (H01): autorización de recuperación de una identidad existente. */
+export type AgentRecoveryState = "active" | "consumed" | "expired" | "revoked";
+
+export interface AgentRecovery {
+  recovery_id: string;
+  asset_id: string;
+  agent_id: string;
+  state: AgentRecoveryState;
+  reason: string;
+  created_by: string;
+  created_at: IsoDateTime;
+  expires_at: IsoDateTime;
+  used_at: IsoDateTime | null;
+  revoked_at: IsoDateTime | null;
+  expected_hostname: string | null;
+  site_name: string | null;
+}
+
+/** Solo la respuesta de creación lleva `token`, una vez. Se guarda solo en memoria. */
+export interface AgentRecoveryCreated extends AgentRecovery {
+  token: string;
+}
+
+export interface AgentRecoveryList {
+  items: AgentRecovery[];
+}
+
+export interface AgentRecoveryCreate {
+  reason: string;
+  confirm: true;
+  ttl_minutes?: number;
+  expected_hostname?: string;
 }
 
 export interface AgentList {
@@ -1457,6 +1516,8 @@ export interface Detection {
   alert_id: string | null;
   /** Fase 7B.1: veredicto de atribución vigente; null si la regla no lo evalúa. */
   attribution_verdict?: AttributionVerdict | null;
+  /** Fase 7D.1 (H02): detección de endpoint servida sin telemetry:read (resumen seguro). */
+  restricted: boolean;
 }
 
 export interface DetectionList {
@@ -1472,6 +1533,10 @@ export interface DetectionEvidence {
   occurred_at: IsoDateTime;
   summary: string;
   data: Record<string, unknown> | null;
+  /** Fase 7D.1 (H02): evidencia de endpoint filtrada por la allowlist. */
+  restricted: boolean;
+  /** Campos omitidos por falta de telemetry:read (solo nombres, nunca valores). */
+  withheld_fields: string[];
 }
 
 export interface DetectionDetail extends Detection {
@@ -1482,6 +1547,8 @@ export interface DetectionDetail extends Detection {
   required_data: string[];
   evidence: DetectionEvidence[];
   evidence_total: number;
+  /** Fase 7D.1 (H02): claves de `details` omitidas por falta de telemetry:read. */
+  withheld_details: string[];
   /** Fase 4L: impacto de negocio del activo, independiente de la severidad de la regla. */
   asset_context: AssetContextBrief | null;
 }
@@ -6490,6 +6557,9 @@ export interface ToolExecutionOut {
   duration_ms: number | null;
   version: number;
   deduplicated?: boolean;
+  /** Fase 7D.1 (H03): el lector ya no tiene los permisos que exige este resultado. */
+  content_withheld: boolean;
+  withheld_permissions: string[];
 }
 
 export interface ToolExecutionList {

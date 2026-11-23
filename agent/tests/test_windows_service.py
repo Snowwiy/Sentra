@@ -127,14 +127,14 @@ def test_layout_rejects_paths_that_could_break_quoting(folder: str) -> None:
 
 
 def test_rendered_config_is_valid_toml_for_the_agent_and_has_no_secrets(tmp_path: Path) -> None:
-    server = winsetup.normalize_server_url("http://192.168.50.201:8000/")
+    server = winsetup.normalize_server_url("https://192.168.50.201:8443/")
     text = winsetup.render_config(layout(), server)
     config_file = tmp_path / "agent.toml"
     config_file.write_text(text, encoding="utf-8")
 
     config = load_config(config_file)
 
-    assert config.api_url == "http://192.168.50.201:8000"
+    assert config.api_url == "https://192.168.50.201:8443"
     assert str(config.state_dir) == r"C:\ProgramData\Sentra\Agent\state"
     assert str(config.log_dir) == r"C:\ProgramData\Sentra\Agent\logs"
     assert (
@@ -163,12 +163,12 @@ def test_plan_first_install_needs_a_server_and_upgrade_does_not(tmp_path: Path) 
         winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, None)
     config_file = tmp_path / "agent.toml"
     config_file.write_text(
-        winsetup.render_config(layout(), winsetup.normalize_server_url("http://10.0.0.5:8000")),
+        winsetup.render_config(layout(), winsetup.normalize_server_url("https://10.0.0.5")),
         encoding="utf-8",
     )
     upgrade = winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, None, config_file)
     assert upgrade["config_text"] is None  # nada que reescribir
-    assert upgrade["api_url"] == "http://10.0.0.5:8000"
+    assert upgrade["api_url"] == "https://10.0.0.5"
     assert upgrade["virtual_account"] == "NT SERVICE\\SentraAgent"
     assert upgrade["failure_actions"].startswith("restart/")
 
@@ -255,7 +255,7 @@ def test_cli_plan_prints_json(tmp_path: Path) -> None:
             "--program-data",
             PROGRAM_DATA,
             "--server",
-            "http://192.168.1.10:8000",
+            "https://192.168.1.10",
             "--existing-config",
             str(tmp_path / "missing.toml"),
         ]
@@ -265,7 +265,42 @@ def test_cli_plan_prints_json(tmp_path: Path) -> None:
     assert plan["binary_path"] == winsetup.service_binary_path(layout())
     assert plan["service_sid"] == winsetup.service_sid("SentraAgent")
     assert plan["event_log_readers_sid"] == "S-1-5-32-573"
-    assert 'api_url = "http://192.168.1.10:8000"' in plan["config_text"]
+    assert 'api_url = "https://192.168.1.10"' in plan["config_text"]
+
+
+# --- Fase 7D.1 (H04): HTTPS obligatorio en el instalador -------------------------------------
+
+
+def test_plan_refuses_http_outside_loopback_for_new_installs() -> None:
+    with pytest.raises(winsetup.SetupError, match=r"agent-https-migration\.md"):
+        winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, "http://192.168.1.10:8000")
+    loopback = winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, "http://127.0.0.1:8000")
+    assert loopback["loopback"] is True
+
+
+def test_upgrade_with_an_http_config_stops_before_touching_the_service(tmp_path: Path) -> None:
+    # Configuración de un agente 0.6.x: el instalador se detiene en el plan (antes de parar o
+    # sustituir el servicio), así el agente anterior sigue informando.
+    config_file = tmp_path / "agent.toml"
+    config_file.write_text('api_url = "http://192.168.50.201:8000"\n', encoding="utf-8")
+    with pytest.raises(winsetup.SetupError, match="existing") as raised:
+        winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, None, config_file)
+    assert "https://" in str(raised.value)
+    # Con -Server https:// el mismo upgrade migra la configuración.
+    migrated = winsetup.plan(PROGRAM_FILES, PROGRAM_DATA, "https://sentra.lan", config_file)
+    assert 'api_url = "https://sentra.lan"' in migrated["config_text"]
+    code, _ = main_winsetup(
+        [
+            "plan",
+            "--program-files",
+            PROGRAM_FILES,
+            "--program-data",
+            PROGRAM_DATA,
+            "--existing-config",
+            str(config_file),
+        ]
+    )
+    assert code == 2
 
 
 # --- Importar la identidad de una ejecución manual ------------------------------------------
@@ -442,8 +477,9 @@ def test_revoked_then_reinstated_agent_reenrolls_as_the_same_asset(
     asset_id = state.agents[agent_id]
     # Revocado en el dashboard (su token deja de valer) y reactivado después.
     del state.tokens[agent_id]
-    new_token = "sentra_et_" + "R" * 43
-    state.enrollment_tokens.add(new_token)
+    # Fase 7D.1: -Reenroll de una identidad existente usa una autorización de recuperación.
+    new_token = "sentra_et_rec_" + "R" * 43
+    state.recovery_tokens.add(new_token)
     drop_token(config, new_token)  # instalador con -Reenroll
 
     outcome = bootstrap_service_enrollment(build_agent(config), threading.Event())

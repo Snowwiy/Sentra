@@ -25,6 +25,14 @@ from uuid import UUID
 from sqlalchemy import ColumnElement, String, and_, case, cast, false, func, literal, or_, select
 from sqlalchemy.orm import Session
 
+from app.core.evidence_policy import (
+    EvidenceAccess,
+    endpoint_detection_clause,
+    evidence_summary,
+    filter_evidence_data,
+    required_permissions,
+    safe_detection_summary,
+)
 from app.models.alert import Alert
 from app.models.asset import Asset, MonitoringMethod
 from app.models.asset_lineage import AssetAgentLineage
@@ -111,6 +119,14 @@ class BuildContext:
     stale_inventory_hours: int
     # Cancelación/plazo: el worker la comprueba entre secciones (lanza si toca parar).
     checkpoint: Callable[[], None] = field(default=lambda: None)
+    # Fase 7D.1 (H02): permisos que exige LEER el informe por su contenido (p. ej.
+    # telemetry:read si se copió evidencia de endpoint completa). Los builders lo amplían y
+    # el worker lo guarda en reports.content_permissions.
+    content_permissions: set[str] = field(default_factory=set)
+
+    @property
+    def access(self) -> EvidenceAccess:
+        return EvidenceAccess.of(self.scope.permissions)
 
     @property
     def start(self) -> datetime | None:
@@ -434,6 +450,24 @@ def detection_rows(ctx: BuildContext, with_evidence: bool = False) -> dict[str, 
     )
     names = _names(session, (d.asset_id for d in detections))
     ids = [d.id for d in detections]
+    access = ctx.access
+    # Fase 7D.1 (H02): un informe se descarga y se reenvía. Las detecciones de endpoint solo
+    # llevan su detalle si quien lo genera tiene telemetry:read, y entonces el informe queda
+    # marcado para exigir ese permiso a quien lo vea o descargue después.
+    endpoint_ids: set[int] = (
+        set(
+            session.scalars(
+                select(Detection.id).where(
+                    Detection.id.in_(ids),
+                    endpoint_detection_clause(Detection, DetectionEvidence),
+                )
+            )
+        )
+        if ids
+        else set()
+    )
+    if endpoint_ids and access.endpoint:
+        ctx.content_permissions.update(required_permissions(True))
     incidents: dict[int, list[str]] = {}
     contributions: dict[int, float] = {}
     if ids:
@@ -480,6 +514,7 @@ def detection_rows(ctx: BuildContext, with_evidence: bool = False) -> dict[str, 
             .where(ranked.c.position <= MAX_EVIDENCE_PER_DETECTION)
             .order_by(ranked.c.detection_id, ranked.c.occurred_at, ranked.c.id)
         ).all():
+            data, _ = filter_evidence_data(row.data, row.source_type, access)
             evidence.setdefault(row.detection_id, []).append(
                 {
                     "occurred_at": iso(row.occurred_at),
@@ -487,8 +522,11 @@ def detection_rows(ctx: BuildContext, with_evidence: bool = False) -> dict[str, 
                     "role": row.role,
                     "source_type": row.source_type,
                     "source_id": row.source_id,
-                    "summary": _text(row.summary, 500),
-                    "data": redact(row.data) if row.data else None,
+                    "summary": _text(
+                        evidence_summary(row.summary, row.signal_kind, row.source_type, access),
+                        500,
+                    ),
+                    "data": redact(data) if data else None,
                 }
             )
     rows = []
@@ -509,7 +547,12 @@ def detection_rows(ctx: BuildContext, with_evidence: bool = False) -> dict[str, 
                 "last_seen_at": iso(d.last_seen_at),
                 "occurrences": d.occurrence_count,
                 "mitre": d.mitre_technique,
-                "summary": _text(d.summary, 1000),
+                "summary": _text(
+                    safe_detection_summary(d.title)
+                    if d.id in endpoint_ids and not access.endpoint
+                    else d.summary,
+                    1000,
+                ),
                 "incidents": incidents.get(d.id, []),
                 "risk_points": contributions.get(d.id),
                 "evidence": evidence.get(d.id, []) if with_evidence else None,

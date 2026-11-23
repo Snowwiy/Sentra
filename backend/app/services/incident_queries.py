@@ -28,8 +28,15 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import Session
 
+from app.core.evidence_policy import (
+    ENDPOINT_SOURCE_TYPES,
+    RESTRICTED,
+    WITHHELD_NOTE,
+    EvidenceAccess,
+    evidence_summary,
+)
 from app.core.exceptions import IncidentRelationError, NotFoundError
-from app.core.permissions import Role
+from app.core.permissions import Role, permissions_for
 from app.incidents import workflow
 from app.incidents.workflow import incident_key
 from app.models.ai import AIInsight
@@ -134,9 +141,17 @@ class IncidentFilter:
 
 
 class IncidentQueries:
-    def __init__(self, session: Session, me: User | None = None) -> None:
+    def __init__(
+        self, session: Session, me: User | None = None, access: EvidenceAccess | None = None
+    ) -> None:
         self._session = session
         self._me = me
+        # Fase 7D.1 (H02): incidents:read no incluye telemetry:read. La evidencia de endpoint
+        # de las detecciones del caso se sirve según los permisos de quien lee; sin usuario
+        # ni acceso explícito, la vista restringida (falla cerrado).
+        if access is None:
+            access = EvidenceAccess.of(permissions_for(me.role)) if me is not None else RESTRICTED
+        self._access = access
 
     def _incident(self, public_id: UUID) -> Incident:
         incident = self._session.scalar(select(Incident).where(Incident.public_id == public_id))
@@ -431,6 +446,18 @@ class IncidentQueries:
             func.concat(Detection.rule_id, ": ", Detection.title),
             current,
         ).where(Detection.id.in_(detection_ids))
+        event_summary: Any = DetectionEvidence.summary
+        if not self._access.endpoint:
+            # El resumen de una evidencia de endpoint interpola ejecutable, usuario o destino:
+            # se sustituye en SQL para no traerlo siquiera a memoria.
+            event_summary = case(
+                (
+                    DetectionEvidence.source_type.in_(sorted(ENDPOINT_SOURCE_TYPES)),
+                    func.concat("Actividad del endpoint (", DetectionEvidence.signal_kind, "). ")
+                    + literal(WITHHELD_NOTE),
+                ),
+                else_=DetectionEvidence.summary,
+            )
         events = (
             select(
                 DetectionEvidence.occurred_at,
@@ -440,7 +467,7 @@ class IncidentQueries:
                 DetectionEvidence.source_type,
                 func.coalesce(DetectionEvidence.source_id, cast(Detection.public_id, String)),
                 none,
-                DetectionEvidence.summary,
+                event_summary,
                 current,
             )
             .join(Detection, Detection.id == DetectionEvidence.detection_id)
@@ -594,7 +621,9 @@ class IncidentQueries:
                     source_type=ev.source_type,
                     source_id=ev.source_id,
                     occurred_at=ev.occurred_at,
-                    summary=ev.summary,
+                    summary=evidence_summary(
+                        ev.summary, ev.signal_kind, ev.source_type, self._access
+                    ),
                 )
                 for ev, detection_public in events
             ],

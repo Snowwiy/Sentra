@@ -6,7 +6,7 @@
 .DESCRIPTION
     Ejecutar en PowerShell como administrador, desde la carpeta del paquete descomprimido:
 
-        powershell -NoProfile -ExecutionPolicy Bypass -File .\install-sentra-agent.ps1 -Server http://SERVIDOR:8000
+        powershell -NoProfile -ExecutionPolicy Bypass -File .\install-sentra-agent.ps1 -Server https://SERVIDOR
 
     Pide el token de instalación de un solo uso (creado en Sentra Web -> Agentes -> Añadir
     agente -> Windows) en un aviso que no lo muestra, de modo que no queda en el historial de
@@ -32,8 +32,11 @@
     del equipo.
 
 .PARAMETER Server
-    URL del servidor Sentra, p. ej. http://192.168.1.10:8000 (https en producción).
-    Obligatoria en la primera instalación; en un upgrade, cambia api_url si se indica.
+    URL del servidor Sentra, p. ej. https://sentra.empresa.lan (Fase 7D.1: https://
+    obligatorio; http:// solo hacia 127.0.0.1, ::1 o localhost). Obligatoria en la primera
+    instalación; en un upgrade, cambia api_url si se indica. Un upgrade sobre un agent.toml
+    con http:// hacia otro equipo se detiene ANTES de tocar el servicio (el agente anterior
+    sigue funcionando) y explica la migración: docs/agent-https-migration.md.
 
 .PARAMETER TokenFile
     Archivo con el token de instalación (alternativa al aviso). Se borra tras enrolar.
@@ -45,7 +48,9 @@
 
 .PARAMETER Reenroll
     Pide un token nuevo aunque ya exista identidad (agente revocado y readmitido, o servidor
-    reinstalado). Conserva el agent_id: el equipo sigue siendo el mismo activo.
+    reinstalado). Conserva el agent_id: el equipo sigue siendo el mismo activo. Fase 7D.1:
+    para una identidad ya registrada el token debe ser una autorización de recuperación
+    (sentra_et_rec_..., Agentes -> Recuperar identidad); un token ordinario se rechaza.
 
 .PARAMETER ServiceAccount
     Virtual (por defecto, mínimo privilegio) o LocalSystem (alternativa documentada si la
@@ -500,9 +505,6 @@ function Invoke-Install {
     }
     if ($plan.loopback) {
         Write-Warn "$($plan.api_url) apunta a este mismo equipo; los agentes de otros equipos no llegarán ahí"
-    }
-    if ($plan.insecure -and -not $plan.loopback) {
-        Write-Warn 'la URL no es https: el token viaja sin cifrar por la red (usa https en producción)'
     }
 
     $existing = Get-ServiceInfo $plan.service_name

@@ -56,6 +56,10 @@ HTTP_UNPROCESSABLE = 422
 # forever (422 invalid content, 413 body over the server's size limit).
 PERMANENT_REJECTIONS = {HTTP_PAYLOAD_TOO_LARGE, HTTP_UNPROCESSABLE}
 AGENT_REVOKED_CODE = "agent_revoked"
+# Fase 7D.1 (H01): el agent_id ya existe en el servidor y ni un token ordinario ni la clave
+# compartida pueden sustituir su credencial; hace falta una autorización de recuperación.
+AGENT_RECOVERY_REQUIRED_CODE = "agent_recovery_required"
+HTTPS_REQUIRED_CODE = "https_required"
 
 
 # Máximo de eventos por petición que acepta el servidor (EventBatch).
@@ -125,6 +129,21 @@ class CredentialsRejectedError(Exception):
         super().__init__(reason)
         self.reason = reason
         self.status = status
+
+
+def retry_delay(failures: int, interval: float, maximum: float, retry_after: float | None) -> float:
+    """Espera antes del siguiente ciclo tras un fallo transitorio (red, 5xx o 429).
+
+    Fase 7D.2 (H06): con Retry-After (cuota del servidor) se espera al menos lo pedido más un
+    jitter del 0-25 %. Sin él, una flota limitada a la vez por la cuota global volvería en el
+    mismo segundo y la saturaría de nuevo. Nunca por encima del tope del agente.
+    """
+    delay = backoff_delay(failures, interval, maximum)
+    if retry_after is None:
+        # Sin indicación del servidor: el backoff de siempre (con su propio jitter).
+        return delay
+    hinted = retry_after * random.uniform(1.0, 1.25)  # noqa: S311  (jitter)
+    return min(max(delay, hinted), maximum)
 
 
 def backoff_delay(failures: int, interval: float, maximum: float) -> float:
@@ -238,15 +257,19 @@ class Agent:
                 failures = 0
             except TransportError as exc:
                 failures += 1
-                delay = backoff_delay(
-                    failures, self.config.interval_seconds, self.config.max_backoff_seconds
+                # Honor the server's own hint (Retry-After) when it asks for more patience than
+                # our backoff, but never exceed our cap. The buffer, the event cursor and the
+                # activity queue keep everything that was not confirmed.
+                delay = retry_delay(
+                    failures,
+                    self.config.interval_seconds,
+                    self.config.max_backoff_seconds,
+                    exc.retry_after,
                 )
-                if exc.retry_after is not None:
-                    # Honor the server's own hint when it asks for more patience than our
-                    # backoff, but never exceed our cap.
-                    delay = min(max(delay, exc.retry_after), self.config.max_backoff_seconds)
                 logger.warning(
-                    "API unreachable",
+                    # Fase 7D.2: un 429 es la cuota del servidor, no una caída; la credencial
+                    # sigue siendo válida y no se vuelve a enrolar.
+                    "API throttled the agent" if exc.status == 429 else "API unreachable",
                     extra={
                         "error": str(exc),
                         "retry_in_s": round(delay, 1),
@@ -515,6 +538,14 @@ class Agent:
                 # Either this agent was revoked by an operator or enrollment is disabled.
                 if exc.code == AGENT_REVOKED_CODE:
                     reason = "agent revoked by an operator"
+                elif exc.code == AGENT_RECOVERY_REQUIRED_CODE:
+                    reason = (
+                        "this agent identity is already enrolled on the server; an"
+                        " administrator must authorize its recovery (Agents > Recover"
+                        " identity) and pass that one-time recovery token to the agent"
+                    )
+                elif exc.code == HTTPS_REQUIRED_CODE:
+                    reason = "the server requires HTTPS for this operation; use an https:// api_url"
                 elif exc.code == ASSET_ARCHIVED_CODE:
                     # Fase 5C.1: el activo de este agente está archivado; un administrador
                     # debe restaurarlo (o reconciliarlo) antes de que vuelva a informar.
@@ -573,6 +604,49 @@ class Agent:
         # Fase 5D: un servidor anterior no lo envía (0). Solo se acepta un entero.
         pending = response.get("pending_commands")
         self._pending_commands = pending if isinstance(pending, int) and pending > 0 else 0
+        # Fase 7D.1: el servidor pide rotar la credencial (petición de un admin o credencial
+        # expuesta por HTTP). Solo llega por un transporte seguro; un servidor anterior no
+        # envía el campo.
+        if response.get("rotate_credential") is True:
+            self.rotate_credential(token)
+
+    def rotate_credential(self, token: str | None = None) -> bool:
+        """Cambia la credencial propia por una nueva. Devuelve True si se rotó.
+
+        Nunca deja al agente fuera: el servidor mantiene válida la credencial anterior hasta
+        el primer uso de la nueva, y la nueva se guarda en el almacén ANTES de usarla. Si la
+        respuesta se pierde o el guardado falla, se sigue con la anterior y se reintenta en
+        un heartbeat posterior.
+        """
+        current = token or self._ensure_enrolled()
+        try:
+            response = self.client.rotate_credential(self.identity.agent_id, current)
+        except TransportError as exc:
+            logger.warning("credential rotation postponed", extra={"error": str(exc)})
+            return False
+        except ApiError as exc:
+            logger.warning(
+                "credential rotation refused",
+                extra={"status": exc.status, "code": exc.code},
+            )
+            return False
+        new = response.get("agent_token")
+        if not isinstance(new, str) or not new:
+            logger.warning("credential rotation returned no credential")
+            return False
+        register_secret(new)
+        previous = (self.identity.token, self.identity.token_issued_at)
+        self.identity.token = new
+        self.identity.token_issued_at = datetime.now(UTC)
+        try:
+            self.store.save(self.identity)
+        except Exception:
+            # Sin guardar no se usa: la anterior sigue valiendo en el servidor.
+            self.identity.token, self.identity.token_issued_at = previous
+            logger.exception("could not store the rotated credential; keeping the current one")
+            return False
+        logger.info("agent credential rotated")
+        return True
 
     def _host_payload(self) -> dict[str, Any]:
         payload = self.host_info().as_payload()

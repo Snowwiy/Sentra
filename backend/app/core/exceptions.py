@@ -50,6 +50,20 @@ class AgentRevokedError(ForbiddenError):
     code = "agent_revoked"
 
 
+class AgentRecoveryRequiredError(ForbiddenError):
+    # Fase 7D.1 (H01): el agent_id ya existe y la credencial presentada es de ALTA (token de
+    # enrolamiento ordinario o clave legacy). Una identidad existente solo cambia de
+    # credencial con la vigente (rotación) o con una autorización de recuperación emitida
+    # por un admin para ese activo. 403 y no 409: no se arregla reintentando.
+    code = "agent_recovery_required"
+
+
+class SecureTransportRequiredError(ForbiddenError):
+    # Fase 7D.1 (H04): operación de credenciales pedida por HTTP fuera de loopback. La
+    # credencial nueva viajaría en claro: no se emite.
+    code = "https_required"
+
+
 class NotAuthenticatedError(SentraError):
     # Sin sesión de dashboard válida (no hay cookie, caducó, fue revocada o el usuario está
     # desactivado). El frontend la trata igual en todos los casos: limpiar estado e ir a
@@ -80,8 +94,15 @@ class RateLimitedError(SentraError):
     status_code = status.HTTP_429_TOO_MANY_REQUESTS
     code = "rate_limited"
 
-    def __init__(self, message: str, retry_after: float, scope: str = "other") -> None:
-        super().__init__(message)
+    def __init__(
+        self,
+        message: str,
+        retry_after: float,
+        scope: str = "other",
+        details: list[dict[str, Any]] | None = None,
+    ) -> None:
+        # Fase 7D.2: `details` opcional (p. ej. qué cuota de ingesta se agotó), sin secretos.
+        super().__init__(message, details)
         self.retry_after = max(int(retry_after) + 1, 1)
         # Ámbito del límite (login, agent_register, ai...) solo para la métrica de 429.
         self.scope = scope

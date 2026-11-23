@@ -45,6 +45,9 @@ class FakeApiState:
     processes_endpoint: bool = True
     # When set, every request is throttled with 429 and this Retry-After value.
     throttle_retry_after: str | None = None
+    # Fase 7D.2: solo estas rutas (sin /api/v1) responden 429 con ese Retry-After, como una
+    # cuota de ingesta del servidor que agota un tipo de dato y deja pasar el resto.
+    throttle_paths: dict[str, str] = field(default_factory=dict)
     headers: list[dict[str, str]] = field(default_factory=list)
     # Bodies larger than this get 413, like the real API's 4 MiB limit.
     max_body: int = 4 * 1024 * 1024
@@ -74,6 +77,15 @@ class FakeApiState:
     activity_uids: set[str] = field(default_factory=set)
     unknown_heartbeat_fields: set[str] = field(default_factory=set)
     max_activity_body: int | None = None
+    # Fase 7D.1 (H01): como el servidor 0.7.0, un agent_id existente no se vuelve a registrar
+    # con la clave o un token ordinario (403 agent_recovery_required); las autorizaciones de
+    # recuperación (sentra_et_rec_...) sí lo recuperan. False simula un servidor anterior.
+    recovery_required: bool = True
+    recovery_tokens: set[str] = field(default_factory=set)
+    # Rotación: agentes a los que el heartbeat pide rotar y credenciales pendientes (la
+    # anterior sigue valiendo hasta el primer uso de la nueva).
+    rotate_requested: set[str] = field(default_factory=set)
+    pending_tokens: dict[str, str] = field(default_factory=dict)
 
     def paths(self) -> list[str]:
         return [path for path, _ in self.requests]
@@ -96,6 +108,15 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
             self.end_headers()
             self.wfile.write(data)
 
+        def _promote_pending(self, agent_id: str) -> bool:
+            # Primer uso de la credencial pendiente: pasa a ser la única válida. Siempre
+            # devuelve True (se usa dentro de la condición de autenticación).
+            pending = state.pending_tokens.get(agent_id)
+            if pending is not None and self.headers.get("Authorization") == f"Bearer {pending}":
+                state.tokens[agent_id] = state.pending_tokens.pop(agent_id)
+                state.rotate_requested.discard(agent_id)
+            return True
+
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", 0))
             raw = self.rfile.read(length)
@@ -114,11 +135,18 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
             path = self.path.removeprefix("/api/v1")
             state.requests.append((path, body))
             state.headers.append(dict(self.headers.items()))
-            if state.throttle_retry_after is not None:
+            throttled = state.throttle_paths.get(path, state.throttle_retry_after)
+            if throttled is not None:
                 self._send(
                     429,
-                    {"error": {"code": "rate_limited", "message": "slow down"}},
-                    {"Retry-After": state.throttle_retry_after},
+                    {
+                        "error": {
+                            "code": "rate_limited",
+                            "message": "slow down",
+                            "details": [{"reason": "agent_requests"}],
+                        }
+                    },
+                    {"Retry-After": throttled},
                 )
                 return
             if state.unavailable:
@@ -130,6 +158,21 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 return
             if path == "/agents/register":
                 one_time = self.headers.get("X-Enrollment-Token")
+                if one_time is not None and one_time in state.recovery_tokens:
+                    state.recovery_tokens.discard(one_time)
+                    if agent_id not in state.agents:
+                        self._send(401, {"error": {"code": "unauthorized", "message": "bad"}})
+                        return
+                    state.tokens[agent_id] = uuid.uuid4().hex
+                    self._send(
+                        200,
+                        {
+                            "asset_id": state.agents[agent_id],
+                            "agent_id": agent_id,
+                            "agent_token": state.tokens[agent_id],
+                        },
+                    )
+                    return
                 if one_time is not None:
                     if one_time not in state.enrollment_tokens:
                         self._send(401, {"error": {"code": "unauthorized", "message": "bad"}})
@@ -145,6 +188,17 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                     self._send(403, {"error": {"code": "asset_archived", "message": "archived"}})
                     return
                 created = agent_id not in state.agents
+                if not created and state.recovery_required:
+                    self._send(
+                        403,
+                        {
+                            "error": {
+                                "code": "agent_recovery_required",
+                                "message": "recovery required",
+                            }
+                        },
+                    )
+                    return
                 state.agents.setdefault(agent_id, str(uuid.uuid4()))
                 state.tokens[agent_id] = uuid.uuid4().hex  # rotate on every enrollment
                 self._send(
@@ -155,7 +209,7 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                         "agent_token": state.tokens[agent_id],
                     },
                 )
-            elif (
+            elif self._promote_pending(agent_id) and (
                 agent_id not in state.tokens
                 or self.headers.get("Authorization") != f"Bearer {state.tokens[agent_id]}"
             ):
@@ -164,8 +218,20 @@ def _make_handler(state: FakeApiState) -> type[BaseHTTPRequestHandler]:
                 return
             elif path == "/agents/activity":
                 self._activity(body, len(raw))
+            elif path == "/agents/credentials/rotate":
+                state.pending_tokens[agent_id] = uuid.uuid4().hex
+                self._send(
+                    200,
+                    {
+                        "asset_id": state.agents[agent_id],
+                        "agent_token": state.pending_tokens[agent_id],
+                        "issued_at": "2026-11-07T00:00:00Z",
+                    },
+                )
             elif path == "/agents/heartbeat":
                 response: dict[str, Any] = {"asset_id": state.agents[agent_id], "status": "online"}
+                if agent_id in state.rotate_requested:
+                    response["rotate_credential"] = True
                 if state.commands.get(agent_id):
                     response["pending_commands"] = len(state.commands.get(agent_id, []))
                 self._send(200, response)

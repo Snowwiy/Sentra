@@ -110,6 +110,10 @@ class ToolExecutionOut(ResponseModel):
     version: int
     # True si la petición coincidió con una ejecución existente (idempotencia o duplicado).
     deduplicated: bool = False
+    # Fase 7D.1 (H03): el contenido (entrada, salida, resumen, evidencia, procedencia y
+    # mensaje de error) se retuvo porque el lector ya no tiene alguno de estos permisos.
+    content_withheld: bool = False
+    withheld_permissions: list[str] = Field(default_factory=list)
 
 
 class ToolExecutionList(ResponseModel):

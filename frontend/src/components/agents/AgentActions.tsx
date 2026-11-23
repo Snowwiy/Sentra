@@ -3,9 +3,12 @@ import { consoleApi } from "../../api/sentra";
 import type { Agent } from "../../api/types";
 import type { ConsoleState } from "../../lib/useConsole";
 import { ConfirmDialog } from "../Modal";
-import { AddAgentWizard, type WizardPreset } from "./AddAgentWizard";
+import { RecoveryDialog, RotationDialog } from "./AgentIdentityDialogs";
 
-type Dialog = "revoke" | "reinstate" | "wizard" | null;
+// Fase 7D.1 (H01): volver a registrar un agente existente ya no usa un token de instalación
+// ordinario (el servidor lo rechaza con agent_recovery_required) sino una autorización de
+// recuperación de un solo uso ligada a este agente.
+type Dialog = "revoke" | "reinstate" | "recovery" | "rotate" | null;
 
 /** Revoke / reinstate / new token for one agent, each behind a confirmation. */
 export function AgentActions({
@@ -21,16 +24,8 @@ export function AgentActions({
 }) {
   const [dialog, setDialog] = useState<Dialog>(null);
   const name = agent.hostname ?? agent.display_name;
-  // Plataformas con instalador desde el dashboard (Linux desde la Fase 4B, Windows desde la 4F,
-  // macOS desde la 6C.5).
-  const platform =
-    agent.platform === "linux" || agent.platform === "windows" || agent.platform === "macos" ? agent.platform : null;
   const disabledReason = consoleState.available ? undefined : consoleState.reason;
-  const preset: WizardPreset = {
-    hostname: agent.hostname ?? undefined,
-    platform: platform ?? undefined,
-    note: `Nuevo token para que ${name} vuelva a registrarse. Ejecuta de nuevo el instalador en ese equipo: conservará su identidad (mismo activo e histórico).`,
-  };
+  const archived = agent.asset_state === "archived";
   const size = compact ? " button--small" : "";
   // Sin permiso (viewer, analyst) no se muestra ninguna acción; el backend respondería 403.
   if (!consoleState.allowed) return null;
@@ -59,17 +54,30 @@ export function AgentActions({
           Reactivar…
         </button>
       )}
-      {agent.credential_status === "re_enrollment_required" && (
+      {agent.credential_status === "active" && !archived && !compact && (
         <button
           type="button"
           className={`button${size}`}
-          disabled={!consoleState.available || !platform}
-          title={disabledReason ?? (platform ? undefined : "No hay instalador para esta plataforma")}
-          onClick={() => setDialog("wizard")}
+          disabled={!consoleState.available}
+          title={disabledReason}
+          onClick={() => setDialog("rotate")}
         >
-          Nuevo token…
+          Rotar credencial…
         </button>
       )}
+      {(agent.credential_status === "re_enrollment_required" ||
+        (agent.credential_status === "active" && !compact)) &&
+        !archived && (
+          <button
+            type="button"
+            className={`button${size}`}
+            disabled={!consoleState.available}
+            title={disabledReason ?? "Reinstalación o credencial perdida: autoriza que este equipo recupere su identidad"}
+            onClick={() => setDialog("recovery")}
+          >
+            {compact ? "Recuperar…" : "Recuperar identidad…"}
+          </button>
+        )}
 
       {dialog === "revoke" && (
         <ConfirmDialog
@@ -89,7 +97,7 @@ export function AgentActions({
           <p className="muted small">
             Su credencial se invalida al instante. El activo y todo su histórico (telemetría, eventos,
             alertas, descubrimiento y exposición) se conservan para auditoría. Para volver a usarlo habrá
-            que reactivarlo e instalar con un token nuevo.
+            que reactivarlo y autorizar la recuperación de su identidad.
           </p>
         </ConfirmDialog>
       )}
@@ -97,13 +105,13 @@ export function AgentActions({
         <ConfirmDialog
           title="Reactivar agente"
           confirmLabel="Reactivar"
-          // Runs after a successful confirm too: keep the wizard opened by onConfirm.
+          // También se ejecuta tras confirmar: no cerrar el diálogo de recuperación que abre onConfirm.
           onClose={() => setDialog((open) => (open === "reinstate" ? null : open))}
           onConfirm={async () => {
             await consoleApi.reinstateAgent(agent.asset_id);
             onChanged();
-            // The old credential never comes back: go straight to a new one-time token.
-            if (platform && consoleState.info) setDialog("wizard");
+            // La credencial anterior no vuelve: se pasa directamente a la autorización.
+            setDialog("recovery");
           }}
         >
           <p>
@@ -111,19 +119,16 @@ export function AgentActions({
             recupera su credencial anterior.
           </p>
           <p className="muted small">
-            Necesitará un token de instalación nuevo y volver a ejecutar el instalador en el equipo;
-            seguirá siendo el mismo activo, con su histórico.
-            {!platform && " No hay instalador para esta plataforma desde el dashboard."}
+            A continuación podrás autorizar la recuperación de su identidad (un solo uso, con motivo) y
+            ejecutar de nuevo el instalador en el equipo; seguirá siendo el mismo activo, con su histórico.
           </p>
         </ConfirmDialog>
       )}
-      {dialog === "wizard" && consoleState.info && (
-        <AddAgentWizard
-          info={consoleState.info}
-          preset={preset}
-          onClose={() => setDialog(null)}
-          onRegistered={onChanged}
-        />
+      {dialog === "recovery" && (
+        <RecoveryDialog agent={agent} onClose={() => setDialog(null)} onChanged={onChanged} />
+      )}
+      {dialog === "rotate" && (
+        <RotationDialog agent={agent} onClose={() => setDialog(null)} onChanged={onChanged} />
       )}
     </span>
   );

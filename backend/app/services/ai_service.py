@@ -18,13 +18,14 @@ import json
 import logging
 import threading
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import Engine, Select, func, or_, select
+from sqlalchemy import ColumnElement, Engine, Select, cast, func, or_, select
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.ai.config import AIConfig
@@ -53,7 +54,18 @@ from app.ai.provider import (
 )
 from app.ai.redaction import Redactor
 from app.core.config import Settings
-from app.core.exceptions import NotFoundError, RateLimitedError, SentraError
+from app.core.evidence_policy import (
+    EvidenceAccess,
+    missing_permissions,
+    required_permissions,
+)
+from app.core.exceptions import (
+    NotFoundError,
+    PermissionDeniedError,
+    RateLimitedError,
+    SentraError,
+)
+from app.core.permissions import Permission
 from app.core.rate_limit import Limiter, RateLimiter, make_limiter
 from app.models.ai import AIInsight
 from app.models.asset import Asset
@@ -232,6 +244,10 @@ class AIRuntime:
 class Requester:
     actor: Actor
     user_id: int
+    # Fase 7D.1 (H02/H03): permisos ACTUALES de quien pide. Deciden qué evidencia entra en el
+    # contexto del modelo y qué insights guardados (caché compartida) puede leer. Vacío por
+    # defecto: un llamador que no los pase obtiene la vista más restringida.
+    permissions: frozenset[Permission] = frozenset()
 
 
 def _provider_state(
@@ -558,6 +574,7 @@ class AIInsightService:
             extra_version=hashes,
             verify=verify,
             provider_config=self._config.console_provider_config(),
+            content_permissions={p for r in rows for p in (r.read_permissions or [])},
         )
 
     def _console_executions(self, ids: list[UUID], read_all: bool) -> list[ToolExecution]:
@@ -576,6 +593,14 @@ class AIInsightService:
             # que existe.
             if row is None or (not read_all and row.actor_user_id != self._requester.user_id):
                 raise NotFoundError("Tool execution not found")
+            # Fase 7D.1 (H03): los permisos de lectura guardados con la ejecución se revalidan
+            # con los ACTUALES; un usuario degradado no puede enviar al modelo (ni ver en la
+            # revisión previa) un resultado que ya no puede leer.
+            missing = missing_permissions(row.read_permissions, self._requester.permissions)
+            if missing:
+                raise PermissionDeniedError(
+                    "Your current role cannot read this tool result (" + ", ".join(missing) + ")"
+                )
             if row.status != "succeeded" or row.output is None:
                 raise ConsoleExecutionNotUsableError(
                     "Solo se pueden analizar ejecuciones terminadas con salida."
@@ -653,6 +678,9 @@ class AIInsightService:
             question.lower() if question else None,
             # Las preguntas (y la consola, Fase 7C) son privadas: su caché no se comparte.
             self._requester.user_id if kind in PRIVATE_KINDS else None,
+            # Fase 7D.1: el contexto cambia con el acceso a evidencia de endpoint; un viewer y
+            # un analista nunca comparten la misma entrada de caché.
+            "endpoint" if self._access().endpoint else "restricted",
         ]
         return hashlib.sha256(json.dumps(parts).encode()).hexdigest()
 
@@ -668,11 +696,17 @@ class AIInsightService:
         extra_version: str | None = None,
         verify: Callable[[AIContext], dict[str, Any]] | None = None,
         provider_config: AIConfig | None = None,
+        content_permissions: Iterable[str] = (),
     ) -> InsightRead:
         self._require_available()
         config = self._config
         now = datetime.now(UTC)
-        ctx = build(self._builder(now))  # 404 si la entidad no existe (antes de auditar nada).
+        builder = self._builder(now)
+        ctx = build(builder)  # 404 si la entidad no existe (antes de auditar nada).
+        # Fase 7D.1: permisos que exigirá leer este insight (y su caché) en el futuro.
+        content = sorted(
+            set(content_permissions) | set(required_permissions(builder.endpoint_content))
+        )
         # 7C-Security-Fix1: la consola comprueba que lo construido es lo que se revisó.
         reviewed = verify(ctx) if verify is not None else {}
         version = data_version(
@@ -699,7 +733,11 @@ class AIInsightService:
         if not refresh:
             cached = self._session.scalar(
                 select(AIInsight)
-                .where(AIInsight.cache_key == cache_key, AIInsight.expires_at > now)
+                .where(
+                    AIInsight.cache_key == cache_key,
+                    AIInsight.expires_at > now,
+                    self._readable(),
+                )
                 .order_by(AIInsight.generated_at.desc())
                 .limit(1)
             )
@@ -777,6 +815,7 @@ class AIInsightService:
             requested_by_user_id=self._requester.user_id,
             generated_at=now,
             expires_at=now + timedelta(minutes=config.insight_ttl_minutes),
+            content_permissions=content,
         )
         self._session.add(insight)
         self._session.flush()
@@ -812,6 +851,9 @@ class AIInsightService:
         )
         return self._read(insight, cached=False)
 
+    def _access(self) -> EvidenceAccess:
+        return EvidenceAccess.of(self._requester.permissions)
+
     def _builder(self, now: datetime) -> ContextBuilder:
         return ContextBuilder(
             self._session,
@@ -820,7 +862,21 @@ class AIInsightService:
             self._config.max_context_items,
             Redactor(self._config.effective_redact),
             now,
+            access=self._access(),
         )
+
+    def _readable(self) -> ColumnElement[bool]:
+        """Insights cuyo contenido el solicitante puede leer con sus permisos ACTUALES.
+
+        Un insight generado con evidencia de endpoint (o con salidas de herramientas que
+        exigen permisos de dominio) guarda esos permisos; quien no los tenga hoy no lo ve,
+        ni en el listado ni como resultado de caché.
+        """
+        granted = sorted(p.value for p in self._requester.permissions)
+        clause: ColumnElement[bool] = AIInsight.content_permissions.contained_by(
+            cast(granted, JSONB)
+        )
+        return clause
 
     def _check_rate_limit(self) -> None:
         user_key = f"user:{self._requester.user_id}"
@@ -932,7 +988,8 @@ class AIInsightService:
             or_(
                 AIInsight.kind.notin_([k.value for k in PRIVATE_KINDS]),
                 AIInsight.requested_by_user_id == self._requester.user_id,
-            )
+            ),
+            self._readable(),
         )
 
     def list(

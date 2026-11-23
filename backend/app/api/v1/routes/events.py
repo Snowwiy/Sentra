@@ -5,6 +5,7 @@ from fastapi import APIRouter, Depends, Query, status
 
 from app.api.auth import READ
 from app.api.deps import AgentToken, get_event_service
+from app.api.ingest import Guard
 from app.api.params import text_query
 from app.api.responses import error_responses
 from app.models.event import EventLevel
@@ -19,10 +20,16 @@ Service = Annotated[EventService, Depends(get_event_service)]
     "",
     response_model=EventBatchAccepted,
     status_code=status.HTTP_201_CREATED,
-    responses=error_responses(401, 413),
+    responses=error_responses(401, 413, 429),
 )
-def ingest_events(payload: EventBatch, service: Service, token: AgentToken) -> EventBatchAccepted:
-    return service.ingest(payload, token)
+def ingest_events(
+    payload: EventBatch, service: Service, token: AgentToken, guard: Guard
+) -> EventBatchAccepted:
+    # Fase 7D.2 (H06): cada evento gasta del cubo de eventos del agente y del global. Un
+    # reenvío de eventos ya guardados también gasta (la deduplicación ocurre al escribir),
+    # por eso la ráfaga cubre de sobra el atraso de un ciclo del agente.
+    with guard.admit("events", payload.agent_id, token, events=len(payload.events)):
+        return service.ingest(payload, token)
 
 
 @router.get("", response_model=EventList, responses=error_responses(404), dependencies=[READ])

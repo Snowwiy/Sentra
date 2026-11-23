@@ -1,0 +1,27 @@
+#!/bin/sh
+# Fase 7D.1 (H04): el agente 0.7.0 solo habla HTTPS fuera de loopback. Si el agente instalado
+# apunta a http:// hacia otro equipo, la actualización se cancela AQUÍ (dpkg deja la versión
+# anterior instalada y funcionando) con el camino de migración, en lugar de instalar un
+# agente que no arrancaría. Ver docs/agent-https-migration.md.
+set -e
+# La variable solo existe para los tests; dpkg no la define.
+CONFIG="${SENTRA_AGENT_PREINST_CONFIG:-/etc/sentra-agent/agent.toml}"
+LOOPBACK='^http://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$'
+if [ "$1" = "upgrade" ] || [ "$1" = "install" ]; then
+  if [ -f "$CONFIG" ]; then
+    url="$(sed -n 's/^[[:space:]]*api_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG" | head -n 1)"
+    case "$url" in
+      http://*)
+        if ! printf '%s' "$url" | grep -Eq "$LOOPBACK"; then
+          echo "sentra-agent: ERROR: $CONFIG has api_url = $url (http:// outside loopback)." >&2
+          echo "sentra-agent: agent 0.7.0 requires https://; the installed agent keeps running." >&2
+          echo "sentra-agent: publish the server over HTTPS, set api_url = \"https://SERVER\" in" >&2
+          echo "sentra-agent: $CONFIG, restart the agent, then upgrade again." >&2
+          echo "sentra-agent: see docs/agent-https-migration.md" >&2
+          exit 1
+        fi
+        ;;
+    esac
+  fi
+fi
+exit 0

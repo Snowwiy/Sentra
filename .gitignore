@@ -34,3 +34,6 @@ Thumbs.db
 REVIEW_BEFORE_PUSH.md
 
 agent/agent.toml
+
+# Fase 7D: resultados locales de los scripts de QA de Windows (sin secretos, no se versionan).
+qa/windows-7d/out/

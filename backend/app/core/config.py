@@ -1,6 +1,7 @@
 import ipaddress
 import os
 import re
+from datetime import datetime
 from functools import lru_cache
 from typing import Literal
 
@@ -178,9 +179,19 @@ class Settings(BaseSettings):
     # (fail closed): an open registration endpoint would let anyone inject fake assets.
     agent_enrollment_key: SecretStr | None = Field(default=None, min_length=24)
 
+    # Fase 7D.1 (H01): retirada progresiva de la clave compartida legacy. Desde 7D.1 ya no
+    # puede sustituir la credencial de ningún agente existente (solo da de alta identidades
+    # nuevas). Con una fecha (ISO 8601 con zona), a partir de ella deja de aceptarse también
+    # para altas nuevas, sin tener que borrarla del .env el mismo día. Vacío: sin fecha.
+    agent_enrollment_key_expires_at: datetime | None = None
+
     # One-time enrollment tokens (recommended over the shared key): lifetime when created
     # without an explicit one. See services/enrollment_token_service.py.
     enrollment_token_ttl_minutes: int = Field(default=15, ge=1, le=1440)
+    # Fase 7D.1 (H01): vigencia por defecto de una autorización de recuperación de agente
+    # (un solo uso, ligada a un activo). Corta a propósito: se emite cuando el operador ya
+    # está delante del equipo que hay que recuperar.
+    agent_recovery_token_ttl_minutes: int = Field(default=15, ge=1, le=60)
 
     # Key for the administration API (X-Admin-Key): creating, listing and revoking
     # enrollment tokens. Unset (the default) disables those endpoints; the CLI keeps working.
@@ -208,6 +219,37 @@ class Settings(BaseSettings):
     login_max_failures_per_user: int = Field(default=50, ge=1, le=100_000)
     # POST /agents/register por dirección y minuto. No afecta a heartbeat/telemetría.
     agent_register_max_per_minute: int = Field(default=30, ge=1, le=10_000)
+
+    # --- Fase 7D.2 (H06): cuotas de ingesta por identidad de agente autenticada ---------
+    # Ver core/ingest_quota.py y docs/fase-7d2.md. Cubos de tokens (tasa + ráfaga) por agent_id
+    # ya autenticado (nunca por IP ni por lo que diga el cuerpo sin credencial) y un límite
+    # global que protege al backend. 429 con Retry-After antes de cualquier escritura.
+    # Con RATE_LIMIT_BACKEND=database los cubos viven en PostgreSQL (compartidos entre
+    # workers); con memory, en el proceso (desarrollo, un único worker).
+    # Los valores por defecto son holgados: un agente sano (heartbeat y telemetría cada 30 s,
+    # eventos cada 60 s, inventario cada 15 min) usa menos del 5 % de cada cupo.
+    agent_quota_enabled: bool = True
+    # Peticiones por agente y minuto, por CLASE de ruta (control, telemetry, events,
+    # inventory, processes, activity): un vaciado del buffer de telemetría no deja sin cupo a
+    # los eventos ni al heartbeat. 0 = sin límite de peticiones.
+    agent_quota_requests_per_minute: int = Field(default=120, ge=0, le=100_000)
+    # Eventos por agente y minuto (/events y /agents/activity juntos). 0 = sin límite.
+    agent_quota_events_per_minute: int = Field(default=6_000, ge=0, le=10_000_000)
+    # Bytes de cuerpo por agente y minuto (sin contar heartbeat ni comandos). 0 = sin límite.
+    agent_quota_bytes_per_minute: int = Field(default=16 * 1024 * 1024, ge=0, le=2**40)
+    # Ráfaga: minutos de cupo acumulables. Absorbe el reenvío del buffer tras una caída.
+    agent_quota_burst_minutes: float = Field(default=3.0, ge=1.0, le=60.0)
+    # Peticiones simultáneas de un mismo agente POR WORKER (en memoria del proceso).
+    agent_quota_max_concurrent: int = Field(default=4, ge=1, le=1_000)
+    # Límite global de ingesta de todos los agentes juntos (compartido entre workers con
+    # RATE_LIMIT_BACKEND=database). Heartbeat y comandos no cuentan: limitarlos marcaría
+    # equipos sanos como offline. 0 = sin límite en esa dimensión.
+    ingest_global_requests_per_minute: int = Field(default=6_000, ge=0, le=10_000_000)
+    ingest_global_events_per_minute: int = Field(default=200_000, ge=0, le=100_000_000)
+    ingest_global_bytes_per_minute: int = Field(default=512 * 1024 * 1024, ge=0, le=2**44)
+    ingest_global_burst_minutes: float = Field(default=1.0, ge=1.0, le=60.0)
+    # Peticiones de ingesta simultáneas POR WORKER (protege hilos y pool de conexiones).
+    ingest_max_concurrent: int = Field(default=32, ge=1, le=10_000)
     # Nombres de host aceptados en la cabecera Host (TrustedHostMiddleware), separados por
     # coma, p. ej. "sentra.lan,192.168.50.201,localhost". Vacío: sin comprobación (LAN de
     # desarrollo). Recomendado en producción contra DNS rebinding y cabeceras Host falsas.
@@ -859,6 +901,21 @@ class Settings(BaseSettings):
             return value.strip() or None
         return value
 
+    @field_validator("agent_enrollment_key_expires_at", mode="before")
+    @classmethod
+    def _blank_key_expiry(cls, value: object) -> object:
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("agent_enrollment_key_expires_at")
+    @classmethod
+    def _aware_key_expiry(cls, value: datetime | None) -> datetime | None:
+        # Una fecha sin zona sería ambigua (¿hora local del servidor o UTC?): se exige zona.
+        if value is not None and value.tzinfo is None:
+            raise ValueError("AGENT_ENROLLMENT_KEY_EXPIRES_AT must include a time zone")
+        return value
+
     @field_validator(
         "report_retention_days",
         "discovery_observation_retention_days",
@@ -1065,6 +1122,26 @@ class Settings(BaseSettings):
             raise ValueError(
                 "DISCOVERED_PURGE_AFTER_DAYS must not be shorter than DISCOVERED_STALE_AFTER_HOURS"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _check_ingest_quota(self) -> "Settings":
+        # Fase 7D.2: la ráfaga de eventos debe cubrir el mayor reenvío normal de un ciclo del
+        # agente (8 canales x 200 eventos en Windows, varios lotes de 500 en Linux). Si no, un
+        # agente con atrasos reenviaría siempre desde el principio (los duplicados también
+        # gastan cupo) y no avanzaría nunca.
+        events = self.agent_quota_events_per_minute
+        if events and events * self.agent_quota_burst_minutes < 2_500:
+            raise ValueError(
+                "AGENT_QUOTA_EVENTS_PER_MINUTE x AGENT_QUOTA_BURST_MINUTES must allow at least"
+                " 2500 events (one agent backlog cycle)"
+            )
+        # Un cubo de bytes menor que el cuerpo máximo rechazaría para siempre una petición
+        # legítima de tamaño máximo.
+        for name in ("agent_quota_bytes_per_minute", "ingest_global_bytes_per_minute"):
+            value = getattr(self, name)
+            if value and value < self.max_request_bytes:
+                raise ValueError(f"{name.upper()} must be 0 or >= MAX_REQUEST_BYTES")
         return self
 
     @model_validator(mode="after")

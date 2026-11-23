@@ -2,6 +2,25 @@
 # preinstall del .pkg de Sentra Agent: detiene el LaunchDaemon si ya estaba cargado
 # (actualización) para que el runtime no se sustituya mientras se ejecuta.
 set -u
+# Fase 7D.1 (H04): el agente 0.7.0 solo habla HTTPS fuera de loopback. Con un agent.toml que
+# apunta a http:// hacia otro equipo, la instalación se cancela ANTES de detener el
+# LaunchDaemon: el agente anterior sigue funcionando. Ver docs/agent-https-migration.md.
+# La variable solo existe para los tests; el instalador de macOS no la define.
+CONFIG="${SENTRA_AGENT_PREINST_CONFIG:-/Library/Sentra/Agent/agent.toml}"
+LOOPBACK='^http://(127\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}|localhost|\[::1\])(:[0-9]{1,5})?(/.*)?$'
+if [ -f "$CONFIG" ]; then
+  url="$(sed -n 's/^[[:space:]]*api_url[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' "$CONFIG" | head -n 1)"
+  case "$url" in
+    http://*)
+      if ! printf '%s' "$url" | grep -Eq "$LOOPBACK"; then
+        echo "sentra-agent: $CONFIG has api_url = $url (http:// outside loopback)." >&2
+        echo "sentra-agent: agent 0.7.0 requires https://; the installed agent keeps running." >&2
+        echo "sentra-agent: set api_url = \"https://SERVER\", restart the agent, install again." >&2
+        exit 1
+      fi
+      ;;
+  esac
+fi
 if /bin/launchctl print system/com.sentra.agent >/dev/null 2>&1; then
   /bin/launchctl bootout system/com.sentra.agent 2>/dev/null || true
 fi

@@ -95,6 +95,7 @@ async def ingest_activity(
     """Lote de actividad del agente 0.5.0 (máx. 1000 eventos). Un evento inválido se rechaza
     solo (`rejected`); un reenvío del mismo evento cuenta como `duplicates`."""
     raw = await request.body()
+    wire_bytes = len(raw)
     if request.headers.get("content-encoding", "").lower() == "gzip":
         raw = _decompress(raw, settings.max_request_bytes)
     try:
@@ -102,18 +103,27 @@ async def ingest_activity(
     except ValidationError as exc:
         raise RequestValidationError(exc.errors(include_url=False)) from exc
     limiter = request.app.state.activity_limiter
+    quota = request.app.state.ingest_quota
 
     def run() -> ActivityAccepted:
         # Fuera del bucle de eventos: la sesión y el limitador (base de datos en producción)
         # son síncronos y bloquearían al resto de peticiones.
         # Autenticar antes de consumir cupo: si no, cualquiera que conozca un agent_id podría
         # agotar el cupo de ese agente real sin tener su token.
-        ingest = ActivityIngest(session, settings)
-        asset = ingest.authenticate(batch, token)
-        wait = limiter.acquire(str(asset.agent_id))
-        if wait > 0:
-            raise RateLimitedError("Too many activity batches, retry later", wait, "agent_activity")
-        return ingest.ingest(batch, asset)
+        # Fase 7D.2 (H06): además del límite de lotes de 6E, la cuota común de eventos y
+        # bytes del agente (bytes tal como llegaron, comprimidos o no) y la global.
+        with quota.slot():
+            ingest = ActivityIngest(session, settings)
+            asset = ingest.authenticate(batch, token)
+            wait = limiter.acquire(str(asset.agent_id))
+            if wait > 0:
+                raise RateLimitedError(
+                    "Too many activity batches, retry later", wait, "agent_activity"
+                )
+            with quota.admit(
+                asset.agent_id, "activity", events=len(batch.events), body_bytes=wire_bytes
+            ):
+                return ingest.ingest(batch, asset)
 
     return await run_in_threadpool(run)
 

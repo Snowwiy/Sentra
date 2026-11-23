@@ -3,6 +3,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, status
 
 from app.api.deps import AgentToken, get_telemetry_service
+from app.api.ingest import Guard
 from app.api.responses import error_responses
 from app.schemas.telemetry import TelemetryAccepted, TelemetryCreate
 from app.services.telemetry_service import TelemetryService
@@ -14,11 +15,14 @@ router = APIRouter(prefix="/telemetry", tags=["telemetry"])
     "",
     response_model=TelemetryAccepted,
     status_code=status.HTTP_201_CREATED,
-    responses=error_responses(401, 413),
+    responses=error_responses(401, 413, 429),
 )
 def ingest_telemetry(
     payload: TelemetryCreate,
     service: Annotated[TelemetryService, Depends(get_telemetry_service)],
     token: AgentToken,
+    guard: Guard,
 ) -> TelemetryAccepted:
-    return service.ingest(payload, token)
+    # Fase 7D.2 (H06): cuota por agente antes de escribir (429 con Retry-After).
+    with guard.admit("telemetry", payload.agent_id, token):
+        return service.ingest(payload, token)

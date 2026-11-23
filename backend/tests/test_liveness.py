@@ -20,7 +20,7 @@ from app.models.alert import Alert, AlertRule, AlertSeverity, AlertStatus
 from app.models.asset import Asset
 from app.services.agent_service import record_contact
 from app.services.alert_service import AlertService, AlertThresholds
-from tests.conftest import AgentClient
+from tests.conftest import AgentClient, recover_agent
 
 TIMEOUT = timedelta(seconds=get_settings().heartbeat_timeout_seconds)
 
@@ -249,8 +249,13 @@ def test_agent_restart_keeps_its_asset_and_status(
 
     assert response.json()["asset_id"] == registered_agent["response"]["asset_id"]
     assert client.get("/api/v1/assets").json()["total"] == 1
-    # And one that lost its token re-enrolls into the same asset (token rotated).
-    again = client.post("/api/v1/agents/register", json=registered_agent["payload"])
+    # And one that lost its token recovers the same asset with an admin recovery
+    # authorization (Fase 7D.1: the shared key alone no longer re-enrolls an existing agent).
+    refused = client.post("/api/v1/agents/register", json=registered_agent["payload"])
+    assert refused.status_code == 403
+    again = recover_agent(
+        client, registered_agent["response"]["asset_id"], registered_agent["payload"]
+    )
     assert again.status_code == 200
     assert again.json()["asset_id"] == registered_agent["response"]["asset_id"]
     assert _heartbeat(client, registered_agent).status_code == 200

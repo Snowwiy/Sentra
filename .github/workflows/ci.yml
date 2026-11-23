@@ -1,16 +1,33 @@
 name: CI
 
+# Fase 7D.2 (H08): los nombres de los jobs son los nombres de los checks que exige el Ruleset de
+# main (docs/github-rulesets.md). Cambiar un nombre aquí obliga a cambiarlo también allí, o la
+# rama protegida esperará para siempre un check que ya no existe.
 on:
   push:
-    branches: [main]
+    branches: [main, Dev]
   pull_request:
+  workflow_dispatch:
 
+# Mínimo privilegio: el GITHUB_TOKEN solo lee el código. Ningún job escribe en el repositorio,
+# comenta en PRs ni publica paquetes.
 permissions:
   contents: read
+
+# Un push nuevo a la misma rama o PR cancela la ejecución anterior (ahorra minutos y deja como
+# resultado el del último commit).
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Acciones externas fijadas por SHA completo del commit (la etiqueta va en el comentario). Una
+# etiqueta se puede mover a otro commit; un SHA no. Proceso de actualización en
+# docs/github-rulesets.md ("Actualizar las acciones fijadas").
 
 jobs:
   backend:
     runs-on: ubuntu-latest
+    timeout-minutes: 60
     defaults:
       run:
         working-directory: backend
@@ -18,7 +35,9 @@ jobs:
       DATABASE_URL: postgresql+psycopg://sentra:ci-only-password@localhost:5432/sentra
       TEST_DATABASE_URL: postgresql+psycopg://sentra:ci-only-password@localhost:5432/sentra_test
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
 
       - name: Start native PostgreSQL
         run: |
@@ -27,7 +46,7 @@ jobs:
           sudo -u postgres createdb -O sentra sentra
           sudo -u postgres createdb -O sentra sentra_test
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
           cache: pip
@@ -36,23 +55,37 @@ jobs:
       - run: pip install -r requirements-dev.txt
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy app tests
+      - run: mypy --no-incremental app tests
+      # Windows es la plataforma de desarrollo y despliegue: los tipos se comprueban también
+      # como si fuera win32 (ramas con sys.platform == "win32").
+      - run: mypy --no-incremental --platform win32 app tests
+      # Migraciones sobre la base vacía de CI (solo existe en este runner): la cadena aplica de
+      # principio a fin y los modelos coinciden con el esquema (equivale a `alembic check`).
+      # La suite vuelve a bajar y subir todas las migraciones sobre sentra_test.
+      - name: Migrations apply and match the models
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
       - run: pytest
 
   agent:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy sentra_agent tests
+      - run: mypy --no-incremental sentra_agent tests
+      - run: mypy --no-incremental --platform win32 sentra_agent tests
       - run: pytest
 
   # Fase 6C.5: agente nativo de macOS en Apple Silicon y en Intel. Las etiquetas de runner
@@ -68,12 +101,15 @@ jobs:
           - runner: macos-15-intel
             arch: x86_64
     runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: agent
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - name: Check the runner architecture
@@ -117,33 +153,109 @@ jobs:
   # El sensor no tenía job propio: se ejecuta con el extra snmp para cubrir también SNMPv3.
   sensor:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: sensor
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
         with:
           python-version: "3.13"
       - run: pip install -e ".[dev,snmp]"
       - run: ruff check .
       - run: ruff format --check .
-      - run: mypy .
+      - run: mypy --no-incremental .
+      - run: mypy --no-incremental --platform win32 .
       - run: pytest
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     defaults:
       run:
         working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: frontend/package-lock.json
-      - run: npm ci
+      # --ignore-scripts: ningún paquete ejecuta scripts de instalación en el runner (ninguna
+      # dependencia actual los necesita para lint, tests o build).
+      - run: npm ci --ignore-scripts
       - run: npm run lint
+      - run: npm run typecheck
       - run: npm test
+      # Node 24 es el de desarrollo en Windows; jsdom se comporta distinto con él (Blob).
+      - name: Tests under Node 24
+        run: npx --yes node@24 node_modules/vitest/vitest.mjs run
       - run: npm run build
+
+  # Fase 7D.2 (H07/H08): auditoría de dependencias y SBOM. Bloquea con vulnerabilidades
+  # conocidas (pip-audit: base de datos de PyPI/OSV; npm audit: GitHub Advisory Database). Solo
+  # examina dependencias publicadas en esos registros, no el código propio.
+  supply-chain:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      # Versión fija de la herramienta: un pip-audit nuevo no cambia el resultado sin un commit.
+      - run: pip install pip-audit==2.10.1
+      - name: Python dependencies (backend, agent, sensor)
+        run: |
+          mkdir -p "$RUNNER_TEMP/sbom"
+          python scripts/ci/pyproject_requirements.py agent/pyproject.toml > "$RUNNER_TEMP/agent-requirements.txt"
+          python scripts/ci/pyproject_requirements.py sensor/pyproject.toml > "$RUNNER_TEMP/sensor-requirements.txt"
+          status=0
+          pip-audit --progress-spinner off -r backend/requirements-dev.txt \
+            -f cyclonedx-json -o "$RUNNER_TEMP/sbom/backend.cdx.json" || status=1
+          pip-audit --progress-spinner off -r "$RUNNER_TEMP/agent-requirements.txt" \
+            -f cyclonedx-json -o "$RUNNER_TEMP/sbom/agent.cdx.json" || status=1
+          pip-audit --progress-spinner off -r "$RUNNER_TEMP/sensor-requirements.txt" \
+            -f cyclonedx-json -o "$RUNNER_TEMP/sbom/sensor.cdx.json" || status=1
+          exit $status
+      - name: npm audit (all dependencies, then production only)
+        working-directory: frontend
+        run: |
+          npm ci --ignore-scripts
+          npm audit --audit-level=moderate
+          npm audit --omit=dev --audit-level=low
+      - name: Frontend SBOM
+        working-directory: frontend
+        run: npm sbom --sbom-format cyclonedx > "$RUNNER_TEMP/sbom/frontend.cdx.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: always()
+        with:
+          name: sbom
+          path: ${{ runner.temp }}/sbom/
+          retention-days: 30
+          if-no-files-found: warn
+
+  # Fase 7D.2 (H08): ficheros sensibles y secretos con formato reconocible en lo versionado.
+  # Complementa (no sustituye) el secret scanning con push protection de GitHub.
+  repo-hygiene:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5.6.0
+        with:
+          python-version: "3.13"
+      - run: python scripts/ci/check_repo_hygiene.py --self-test
+      - run: python scripts/ci/check_repo_hygiene.py

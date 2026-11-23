@@ -63,6 +63,13 @@ def metrics(request: Request, settings: AppSettings, session: DbSession) -> Plai
         if status is not None
         else [],
     )
+    # Fase 7D.2 (H06): peticiones de ingesta en curso en ESTE worker (la concurrencia se
+    # limita por proceso; los cubos de cuota, compartidos, no tienen gauge por agente).
+    lines += gauge(
+        "sentra_ingest_in_flight",
+        "Peticiones de ingesta de agentes en curso en este proceso.",
+        [({}, float(request.app.state.ingest_quota.gate.in_flight))],
+    )
     # Valores globales de la base (iguales en todos los workers), agregados en SQL.
     summary = DashboardService(
         session, timedelta(seconds=settings.heartbeat_timeout_seconds)

@@ -28,11 +28,13 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import ColumnElement, Engine, func, or_, select, text, update
+from sqlalchemy import ColumnElement, Engine, cast, func, or_, select, text, update
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
+from app.core.evidence_policy import missing_permissions
 from app.core.exceptions import (
     ConflictError,
     NotFoundError,
@@ -183,9 +185,21 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-def can_view(permissions: frozenset[Permission], definition: ReportDefinition) -> bool:
-    """Ver o descargar un informe exige reports:read y los permisos de dominio de su tipo."""
-    return Permission.REPORTS_READ in permissions and definition.domain_permissions <= permissions
+def can_view(
+    permissions: frozenset[Permission],
+    definition: ReportDefinition,
+    report: Report | None = None,
+) -> bool:
+    """Ver o descargar un informe exige reports:read y los permisos de dominio de su tipo.
+
+    Fase 7D.1 (H02): con `report`, también los permisos de su CONTENIDO guardados al generarlo
+    (telemetry:read si copió evidencia de endpoint). Se comparan con los permisos actuales.
+    """
+    if not (
+        Permission.REPORTS_READ in permissions and definition.domain_permissions <= permissions
+    ):
+        return False
+    return report is None or not missing_permissions(report.content_permissions, permissions)
 
 
 def visible_types(permissions: frozenset[Permission]) -> list[str]:
@@ -695,7 +709,11 @@ class ReportService:
         report = self._session.scalar(query)
         definition = get_definition(report.report_type) if report else None
         # Un informe que el rol no puede ver responde igual que uno inexistente (sin IDOR).
-        if report is None or definition is None or not can_view(req.permissions, definition):
+        if (
+            report is None
+            or definition is None
+            or not can_view(req.permissions, definition, report)
+        ):
             raise NotFoundError("Report not found")
         return report
 
@@ -714,8 +732,12 @@ class ReportService:
         limit: int = 25,
         offset: int = 0,
     ) -> ReportList:
+        granted = sorted(p.value for p in req.permissions)
         conditions: list[ColumnElement[bool]] = [
-            Report.report_type.in_(visible_types(req.permissions))
+            Report.report_type.in_(visible_types(req.permissions)),
+            # Fase 7D.1: informes cuyo contenido exige permisos que el lector ya no tiene no
+            # aparecen (mismo 404 que uno inexistente en el detalle).
+            Report.content_permissions.contained_by(cast(granted, JSONB)),
         ]
         if report_type:
             conditions.append(Report.report_type == report_type)
@@ -1085,7 +1107,9 @@ class ReportWorker:
 
             key: str | None = None
             try:
-                snapshot, summary, cutoff = self._build(report, requester_permissions, checkpoint)
+                snapshot, summary, cutoff, content = self._build(
+                    report, requester_permissions, checkpoint
+                )
                 checkpoint()
                 data, digest_snapshot, snapshot_bytes = self._render(report, snapshot)
                 limit = self._settings.report_max_artifact_mb * 1024 * 1024
@@ -1101,7 +1125,7 @@ class ReportWorker:
                 self._storage.write_atomic(key, data)
                 self._finalize(
                     session, report_id, artifact_id, key, data, snapshot, summary, cutoff,
-                    digest_snapshot, snapshot_bytes,
+                    digest_snapshot, snapshot_bytes, content,
                 )  # fmt: skip
             except _StopError as stop:
                 self._discard(key)
@@ -1138,7 +1162,7 @@ class ReportWorker:
 
     def _build(
         self, report: Report, permissions: frozenset[Permission], checkpoint: Callable[[], None]
-    ) -> tuple[dict[str, Any], list[str], datetime]:
+    ) -> tuple[dict[str, Any], list[str], datetime, list[str]]:
         definition = get_definition(report.report_type)
         if definition is None:
             raise BuildError("report_type_unknown", "Unknown report type")
@@ -1202,7 +1226,7 @@ class ReportWorker:
         }
         if extended is not None:
             snapshot["extended"] = extended
-        return snapshot, list(result["summary"]), cutoff
+        return snapshot, list(result["summary"]), cutoff, sorted(ctx.content_permissions)
 
     def _render(self, report: Report, snapshot: dict[str, Any]) -> tuple[bytes, str, int]:
         encoded = canonical_json(snapshot)
@@ -1247,6 +1271,7 @@ class ReportWorker:
         cutoff: datetime,
         snapshot_digest: str,
         snapshot_bytes: int,
+        content_permissions: list[str] | None = None,
     ) -> None:
         now = _now()
         try:
@@ -1288,6 +1313,9 @@ class ReportWorker:
             report.snapshot_sha256 = snapshot_digest
             report.snapshot_bytes = snapshot_bytes
             report.summary = summary
+            # Fase 7D.1 (H02): permisos que exigirá ver o descargar este informe por lo que
+            # contiene (además de los de dominio de su tipo).
+            report.content_permissions = list(content_permissions or [])
             report.error_code = None
             report.error_message = None
             report.version += 1

@@ -1,11 +1,13 @@
+from dataclasses import replace
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from sentra_agent.client import TransportError
 from sentra_agent.collectors import HostInfo
-from sentra_agent.runner import Agent, backoff_delay
+from sentra_agent.runner import Agent, CredentialsRejectedError, backoff_delay
 from tests.conftest import FakeApiState, make_client, make_store
 
 HOST = HostInfo("PC-TEST", "Windows", "11", "AMD64", "192.168.1.20", "0.1.0")
@@ -143,12 +145,81 @@ def test_agent_enrolls_again_when_server_forgets_it(
     agent = build_agent(make_config(url))
     agent.cycle()
     agent_id = str(agent.identity.agent_id)
-    state.tokens.pop(agent_id)  # e.g. database reset: our token is no longer valid
+    # Base de datos reiniciada: el servidor ya no conoce ni el token ni el agente.
+    state.tokens.pop(agent_id)
+    state.agents.pop(agent_id)
 
     agent.cycle()
 
     assert state.paths().count("/agents/register") == 2
     assert agent.identity.token == state.tokens[agent_id]
+    assert len(state.telemetry) == 2
+
+
+def test_known_agent_with_a_dead_token_needs_a_recovery_authorization(
+    fake_api: tuple[str, FakeApiState], make_config: Any, tmp_path: Path
+) -> None:
+    """Fase 7D.1 (H01): el servidor conoce el agent_id pero no acepta su token. La clave
+    compartida ya no lo vuelve a registrar (403 agent_recovery_required): el agente lo dice
+    claramente y espera; con la autorización de recuperación vuelve como el mismo activo."""
+    url, state = fake_api
+    config = make_config(url)
+    agent = build_agent(config)
+    agent.cycle()
+    agent_id = str(agent.identity.agent_id)
+    asset_id = agent.identity.asset_id
+    state.tokens.pop(agent_id)
+
+    with pytest.raises(CredentialsRejectedError, match="authorize its recovery"):
+        agent.cycle()
+
+    recovery = "sentra_et_rec_" + "Z" * 43
+    state.recovery_tokens.add(recovery)
+    token_file = tmp_path / "recovery.token"
+    token_file.write_text(recovery)
+    recovered = build_agent(replace(config, enrollment_token_file=token_file))
+    recovered.cycle()
+    assert recovered.identity.asset_id == asset_id
+    assert recovered.identity.token == state.tokens[agent_id]
+    assert not token_file.exists()  # un solo uso: se borra al usarlo
+
+
+def test_rotation_requested_by_the_server_keeps_the_agent_reporting(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, state = fake_api
+    agent = build_agent(make_config(url))
+    agent.cycle()
+    agent_id = str(agent.identity.agent_id)
+    old = agent.identity.token
+    state.rotate_requested.add(agent_id)
+
+    agent.cycle()  # el heartbeat pide rotar: nueva credencial guardada antes de usarla
+
+    assert agent.identity.token != old
+    # Pendiente en el servidor, o ya promovida si otra llamada del ciclo la usó.
+    assert agent.identity.token in (state.pending_tokens.get(agent_id), state.tokens[agent_id])
+    reloaded = make_store(agent.config).load_or_create()
+    assert reloaded.token == agent.identity.token
+    agent.cycle()  # primer uso de la nueva: pasa a ser la única válida
+    assert state.tokens[agent_id] == agent.identity.token
+    assert agent_id not in state.rotate_requested
+    assert state.paths().count("/agents/register") == 1  # nunca vuelve a enrolar
+    assert len(state.telemetry) == 3
+
+
+def test_failed_rotation_keeps_the_current_credential(
+    fake_api: tuple[str, FakeApiState], make_config: Any
+) -> None:
+    url, state = fake_api
+    agent = build_agent(make_config(url))
+    agent.cycle()
+    old = agent.identity.token
+    state.unavailable = True
+    assert agent.rotate_credential() is False
+    state.unavailable = False
+    assert agent.identity.token == old
+    agent.cycle()
     assert len(state.telemetry) == 2
 
 

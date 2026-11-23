@@ -5,7 +5,7 @@ from uuid import UUID, uuid4
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.conftest import agent_payload
+from tests.conftest import agent_payload, recover_agent
 
 
 def test_register_creates_asset_with_unknown_status(client: TestClient) -> None:
@@ -26,13 +26,25 @@ def test_register_creates_asset_with_unknown_status(client: TestClient) -> None:
     assert asset["last_seen_at"] is None
 
 
-def test_reenrolling_existing_agent_rotates_token_without_duplicating_asset(
+def test_reenrolling_existing_agent_requires_recovery_and_keeps_the_asset(
     client: TestClient,
 ) -> None:
+    """Fase 7D.1 (H01): la clave de instalación ya no sustituye la credencial de un agente."""
     payload = agent_payload()
     first = client.post("/api/v1/agents/register", json=payload).json()
 
-    response = client.post("/api/v1/agents/register", json={**payload, "hostname": "RENAMED"})
+    refused = client.post("/api/v1/agents/register", json={**payload, "hostname": "RENAMED"})
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "agent_recovery_required"
+    # El agente legítimo sigue funcionando con su credencial.
+    still = client.post(
+        "/api/v1/agents/heartbeat",
+        json={"agent_id": payload["agent_id"]},
+        headers={"Authorization": f"Bearer {first['agent_token']}"},
+    )
+    assert still.status_code == 200
+
+    response = recover_agent(client, first["asset_id"], {**payload, "hostname": "RENAMED"})
 
     assert response.status_code == 200
     second = response.json()
@@ -41,7 +53,7 @@ def test_reenrolling_existing_agent_rotates_token_without_duplicating_asset(
     assets = client.get("/api/v1/assets").json()
     assert assets["total"] == 1
     assert assets["items"][0]["hostname"] == "RENAMED"
-    # The old token is revoked by the rotation.
+    # La recuperación sustituye la credencial anterior.
     old = client.post(
         "/api/v1/agents/heartbeat",
         json={"agent_id": payload["agent_id"]},

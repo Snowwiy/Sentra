@@ -73,6 +73,27 @@ class RetentionPolicy:
         )
 
 
+def record_purge_audit(session: Session, counts: dict[str, int], trigger: str) -> None:
+    """Fase 7D.2: deja constancia en la auditoría de cada purga que borró algo.
+
+    Solo recuentos por tabla y qué la lanzó (job periódico o CLI), nunca contenido. Sin nada
+    borrado no se escribe nada: una purga diaria vacía no llena la auditoría.
+    """
+    deleted = {table: count for table, count in counts.items() if count}
+    if not deleted:
+        return
+    # Import local: audit_service importa modelos y este módulo se carga desde la CLI ligera.
+    from app.services import audit_service
+
+    audit_service.record(
+        session,
+        audit_service.Actor("system"),
+        "retention_purge",
+        target_type="retention",
+        details={"trigger": trigger, "deleted": deleted, "total": sum(deleted.values())},
+    )
+
+
 @dataclass(frozen=True)
 class PurgeResult:
     telemetry_samples: int = 0
@@ -82,6 +103,17 @@ class PurgeResult:
     detections: int = 0
     risk_snapshots: int = 0
     discovery_observations: int = 0
+
+    def counts(self) -> dict[str, int]:
+        return {
+            "telemetry_samples": self.telemetry_samples,
+            "system_events": self.system_events,
+            "asset_changes": self.asset_changes,
+            "alerts": self.alerts,
+            "detections": self.detections,
+            "risk_snapshots": self.risk_snapshots,
+            "discovery_observations": self.discovery_observations,
+        }
 
     @property
     def total(self) -> int:

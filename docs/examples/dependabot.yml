@@ -1,0 +1,20 @@
+# Ejemplo (Fase 7D.2): NO está activo. Para activarlo, copiar a .github/dependabot.yml.
+# Dependabot abrirá PRs semanales con actualizaciones de las acciones fijadas por SHA y de las
+# dependencias; cada PR pasa por el CI completo antes de poder fusionarse.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: npm
+    directory: /frontend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3
+  - package-ecosystem: pip
+    directory: /backend
+    schedule:
+      interval: weekly
+    open-pull-requests-limit: 3

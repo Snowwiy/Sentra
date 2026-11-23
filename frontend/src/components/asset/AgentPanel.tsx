@@ -6,7 +6,16 @@ import { useConsole } from "../../lib/useConsole";
 import { usePolling } from "../../lib/usePolling";
 import { AgentActions } from "../agents/AgentActions";
 import { AgentStateBadge, CredentialBadge, PLATFORM_LABELS } from "../agents/AgentBadges";
+import { TransportBadge } from "../agents/AgentIdentityDialogs";
 import { ErrorState, LoadingState } from "../StateViews";
+
+// Fase 7D.1: de dónde salió la credencial vigente (auditoría de identidad).
+const CREDENTIAL_SOURCE_LABELS: Record<string, string> = {
+  enrollment_token: "Token de instalación",
+  legacy_key: "Clave de registro heredada",
+  recovery: "Recuperación autorizada",
+  rotation: "Rotación",
+};
 
 // Valores conocidos de installation_method; uno desconocido (agente más nuevo) se muestra tal cual.
 const INSTALLATION_METHOD_LABELS: Record<string, string> = {
@@ -94,6 +103,40 @@ export function AgentPanel({ assetId }: { assetId: string }) {
               </dd>
             </div>
             <div className="field">
+              <dt>Origen de la credencial</dt>
+              <dd>
+                {agent.credential_source
+                  ? (CREDENTIAL_SOURCE_LABELS[agent.credential_source] ?? agent.credential_source)
+                  : "—"}
+                {(agent.rotation_pending || agent.rotation_requested_at) && (
+                  <span className="muted small" title={formatDateTime(agent.rotation_requested_at)}>
+                    {" "}
+                    {agent.rotation_pending ? "(rotación en curso)" : "(rotación pedida)"}
+                  </span>
+                )}
+              </dd>
+            </div>
+            <div className="field">
+              <dt>Transporte</dt>
+              <dd>
+                <TransportBadge agent={agent} />
+              </dd>
+            </div>
+            <div className="field">
+              <dt>Cuota de ingesta</dt>
+              {agent.ingest_throttled_at ? (
+                <dd title={formatDateTime(agent.ingest_throttled_at)}>
+                  Limitado {formatRelative(agent.ingest_throttled_at)}
+                  <span className="muted small">
+                    {" "}
+                    ({agent.ingest_rejections === 1 ? "1 rechazo" : `${agent.ingest_rejections} rechazos`})
+                  </span>
+                </dd>
+              ) : (
+                <dd className="muted">Sin limitar</dd>
+              )}
+            </div>
+            <div className="field">
               <dt>Último heartbeat</dt>
               <dd title={formatDateTime(agent.last_seen_at)}>{formatRelative(agent.last_seen_at)}</dd>
             </div>
@@ -108,10 +151,18 @@ export function AgentPanel({ assetId }: { assetId: string }) {
               )}
             </div>
           </dl>
+          {agent.transport === "http_remote" && (
+            <div className="banner banner--warn" role="alert">
+              Este agente habla con Sentra por HTTP en claro: su credencial viaja sin cifrar. Sigue
+              monitorizado, pero hay que migrarlo a HTTPS y rotar su credencial
+              (docs/agent-https-migration.md).
+            </div>
+          )}
           {agent.credential_status === "re_enrollment_required" && (
             <p className="muted small">
-              Requiere volver a registrarse: genera un token nuevo y ejecuta otra vez el instalador en el
-              equipo; seguirá siendo este mismo activo.
+              Requiere volver a registrarse: autoriza la recuperación de su identidad (Recuperar
+              identidad…) y ejecuta otra vez el instalador en el equipo con esa autorización; seguirá
+              siendo este mismo activo.
             </p>
           )}
           {!consoleState.available && consoleState.reason && !consoleState.loading && (

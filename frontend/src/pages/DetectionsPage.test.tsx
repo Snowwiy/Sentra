@@ -43,6 +43,7 @@ function detection(overrides: Partial<Detection> = {}): Detection {
     resolved_by: null,
     resolution_note: null,
     alert_id: null,
+    restricted: false,
     ...overrides,
   };
 }
@@ -64,6 +65,8 @@ function detail(overrides: Partial<DetectionDetail> = {}): DetectionDetail {
         occurred_at: iso(-3_600_000),
         summary: "Fallo de inicio de sesión de ana",
         data: { source_ip: "10.0.0.9", account: "<img src=x onerror=alert(1)>" },
+        restricted: false,
+        withheld_fields: [],
       },
       {
         signal_kind: "auth_success",
@@ -73,10 +76,13 @@ function detail(overrides: Partial<DetectionDetail> = {}): DetectionDetail {
         occurred_at: iso(-3_000_000),
         summary: "Inicio de sesión correcto de ana",
         data: null,
+        restricted: false,
+        withheld_fields: [],
       },
     ],
     asset_context: null,
     evidence_total: 2,
+    withheld_details: [],
     ...overrides,
   };
 }
@@ -269,6 +275,42 @@ describe("DetectionDetailPage", () => {
     await screen.findByRole("heading", { name: "Qué pasó" });
     expect(screen.queryByRole("button", { name: "Reconocer" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Resolver" })).not.toBeInTheDocument();
+  });
+
+  it("una detección de endpoint restringida avisa y nombra lo omitido, sin valores (7D.1 H02)", async () => {
+    routes[`GET /detections/${ID}`] = () => ({
+      body: detail({
+        restricted: true,
+        details: { rule: "CORR-001" },
+        withheld_details: ["command_line"],
+        evidence: [
+          {
+            signal_kind: "process",
+            role: null,
+            source_type: "event",
+            source_id: null,
+            occurred_at: iso(-3_600_000),
+            summary: "Evidencia de endpoint protegida",
+            data: { process_name: "powershell.exe" },
+            restricted: true,
+            withheld_fields: ["command_line", "user"],
+          },
+        ],
+        evidence_total: 1,
+      }),
+    });
+    renderDetail("viewer");
+    const notice = await screen.findByTestId("detection-restricted");
+    expect(notice).toHaveTextContent("telemetry:read");
+    expect(notice).toHaveTextContent("Detalles omitidos: command_line.");
+    expect(screen.getByText(/Campos protegidos \(requieren telemetry:read\): command_line, user\./)).toBeInTheDocument();
+  });
+
+  it("una detección completa no muestra el aviso de contenido protegido", async () => {
+    renderDetail("analyst");
+    await screen.findByRole("heading", { name: "Qué pasó" });
+    expect(screen.queryByTestId("detection-restricted")).toBeNull();
+    expect(screen.queryByText(/Campos protegidos/)).toBeNull();
   });
 
   it("muestra el error del backend si la acción falla", async () => {

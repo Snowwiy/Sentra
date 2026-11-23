@@ -22,10 +22,12 @@ def write(tmp_path: Path, text: str) -> Path:
 
 
 def test_version_is_current() -> None:
-    # Fase 7B-Fix1: 0.6.2 (identidad de servicios). La configuración de 0.5.0 sigue siendo válida.
-    assert __version__ == "0.6.2"
+    # Fase 7D.1: 0.7.0 (HTTPS obligatorio fuera de loopback, sin redirecciones, rotación de
+    # credencial). La configuración de 0.5.0 sigue siendo válida si su api_url es https://.
+    # Fase 7D.2: 0.7.1 (espera con jitter sobre Retry-After ante las cuotas del servidor).
+    assert __version__ == "0.7.1"
     project = tomllib.loads((AGENT / "pyproject.toml").read_text())
-    assert project["project"]["version"] == "0.6.2"
+    assert project["project"]["version"] == "0.7.1"
 
 
 def test_new_sections_have_safe_defaults(tmp_path: Path) -> None:

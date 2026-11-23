@@ -90,6 +90,8 @@ class ToolOutput:
     response_execution_id: int | None = None
     # Incidente creado o enlazado (herramientas de casos).
     incident_id: int | None = None
+    # Fase 7D.1 (H03): permisos de contenido que el handler declaró (ToolContext).
+    content_permissions: set[Permission] = field(default_factory=set)
 
 
 @dataclass
@@ -120,6 +122,10 @@ class ToolContext:
     discovery_runner: Callable[[], Any] | None = None
     # Clave de idempotencia de la ejecución, reutilizada al delegar en Response.
     idempotency_key: str | None = None
+    # Fase 7D.1 (H03): permisos que exige LEER el contenido que el handler ha producido,
+    # además de los de dominio de la herramienta (p. ej. telemetry:read si la salida incluye
+    # evidencia de endpoint completa). Se guardan con la ejecución.
+    content_permissions: set[Permission] = field(default_factory=set)
 
     def has(self, permission: Permission) -> bool:
         return permission in self.permissions
@@ -158,6 +164,15 @@ class ToolDefinition:
     @property
     def required_permissions(self) -> frozenset[Permission]:
         return frozenset({Permission.TOOLS_EXECUTE, *self.permissions})
+
+    @property
+    def read_permissions(self) -> frozenset[Permission]:
+        """Permisos de dominio que exige leer una ejecución guardada (Fase 7D.1, H03).
+
+        Sin tools:execute: leer el historial es tools:read (ruta) más estos permisos, que se
+        copian a la fila al ejecutar para no depender de cómo cambie el catálogo después.
+        """
+        return frozenset(self.permissions)
 
     @property
     def required_role(self) -> str:

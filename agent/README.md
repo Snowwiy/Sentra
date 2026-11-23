@@ -55,7 +55,7 @@ State (identity, encrypted token, telemetry buffer, event cursor and logs) lives
 ## Install on Linux (no repository, no venv, no pip)
 
 ```bash
-sudo ./install-sentra-agent.sh --server http://SERVER:8000 --token-file ./enrollment.token
+sudo ./install-sentra-agent.sh --server https://SERVER --token-file ./enrollment.token
 ```
 
 From the tarball or `.deb` built by `packaging/linux/build.sh`: installs only the agent as the
@@ -67,11 +67,18 @@ upgrade and uninstall/purge: [docs/agent-linux-installation.md](../docs/agent-li
 ```powershell
 .\scripts\start_agent.ps1                       # foreground, Ctrl+C to stop
 .\scripts\start_agent.ps1 -Once                 # single cycle
-.\scripts\start_agent.ps1 -ApiUrl http://server:8000 -Interval 15
+.\scripts\start_agent.ps1 -ApiUrl https://server -Interval 15
 ```
 
 Configuration (`agent.example.toml`): defaults < TOML file < `SENTRA_AGENT_*` environment
 variables < CLI flags.
+
+Fase 7D.1 (0.7.0): `api_url` must be `https://` (plain `http://` only towards loopback), TLS
+is always verified (system store, plus `ca_bundle` for a private CA), redirects are never
+followed, responses are read in bounded chunks (`max_response_bytes`) within a total
+deadline (`request_deadline_seconds`). `--rotate-credential` replaces the agent's own
+credential; the server also asks for it in the heartbeat. Migration from `http://`:
+[docs/agent-https-migration.md](../docs/agent-https-migration.md).
 
 ## Development
 
@@ -87,7 +94,7 @@ cd agent
 ```powershell
 python agent\packaging\windows\build.py     # en el PC de desarrollo: dist\sentra-agent-*-windows-x86_64.zip
 # en el equipo, PowerShell como administrador, en la carpeta del zip descomprimido:
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install-sentra-agent.ps1 -Server http://SERVER:8000
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install-sentra-agent.ps1 -Server https://SERVER
 ```
 
 Instala el servicio estándar "Sentra Agent" (`SentraAgent`) con la cuenta virtual

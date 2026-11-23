@@ -1,7 +1,7 @@
 {
   "name": "sentra-frontend",
   "private": true,
-  "version": "0.6.2",
+  "version": "0.7.1",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -36,5 +36,8 @@
   },
   "engines": {
     "node": ">=20.19"
+  },
+  "overrides": {
+    "minimatch": "11.0.5"
   }
 }

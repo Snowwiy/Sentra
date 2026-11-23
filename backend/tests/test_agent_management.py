@@ -15,7 +15,14 @@ from app.models.asset import Asset, MonitoringMethod
 from app.models.audit import AuditEvent
 from app.services import agent_management_service
 from app.services.agent_management_service import suggested_server_urls
-from tests.conftest import TEST_ADMIN_KEY, agent_payload, authenticate
+from tests.conftest import (
+    HTTPS_API,
+    TEST_ADMIN_KEY,
+    agent_payload,
+    authenticate,
+    authorize_recovery,
+    recover_agent,
+)
 from tests.test_alert_rules import _event
 from tests.test_inventory import inventory_payload
 from tests.test_telemetry import telemetry_payload
@@ -55,6 +62,12 @@ def _enroll(client: TestClient, token: str, **host: Any) -> tuple[Any, dict[str,
     payload = agent_payload(**host)
     response = client.post(REGISTER, json=payload, headers={"X-Enrollment-Token": token})
     return response, payload
+
+
+def _token_state(console: TestClient, token_id: str) -> str:
+    items = console.get(f"{CONSOLE}/enrollment-tokens").json()["items"]
+    state: str = next(t["state"] for t in items if t["token_id"] == token_id)
+    return state
 
 
 def _agent(client: TestClient, asset_id: str) -> dict[str, Any]:
@@ -133,11 +146,13 @@ def test_console_suggests_the_configured_server_url(client: TestClient) -> None:
 def test_suggested_urls_use_lan_addresses_never_localhost(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    assert suggested_server_urls(None, 8000, lambda: ["192.168.50.201", "10.0.0.5"]) == [
-        "http://192.168.50.201:8000",
-        "http://10.0.0.5:8000",
+    # Fase 7D.1: siempre https:// (puerto del proxy HTTPS, nunca el interno de uvicorn).
+    assert suggested_server_urls(None, 8443, lambda: ["192.168.50.201", "10.0.0.5"]) == [
+        "https://192.168.50.201:8443",
+        "https://10.0.0.5:8443",
     ]
-    assert suggested_server_urls(None, 80, lambda: ["192.168.1.2"]) == ["http://192.168.1.2"]
+    assert suggested_server_urls(None, None, lambda: ["192.168.1.2"]) == ["https://192.168.1.2"]
+    assert suggested_server_urls(None, 443, lambda: ["192.168.1.2"]) == ["https://192.168.1.2"]
     for address in agent_management_service.local_ipv4_addresses():
         assert not address.startswith("127.") and address != "0.0.0.0"  # noqa: S104
 
@@ -240,8 +255,12 @@ def test_agents_listing_states_and_no_secrets(
 
     assert response.status_code == 200
     body = response.json()
+    # Fase 7D.1: insecure_transport cuenta los agentes vistos por HTTP fuera de loopback (el
+    # TestClient habla por http://testserver) y legacy_key los dados de alta con la clave.
+    # Fase 7D.2: throttled cuenta los agentes con un 429 de cuota reciente (ninguno aquí).
     assert body["summary"] == {
-        "total": 3, "online": 1, "offline": 0, "pending": 1, "revoked": 1, "archived": 0
+        "total": 3, "online": 1, "offline": 0, "pending": 1, "revoked": 1, "archived": 0,
+        "insecure_transport": 3, "legacy_key": 0, "throttled": 0,
     }  # fmt: skip
     by_name = {a["hostname"]: a for a in body["items"]}
     assert by_name["online-pc"]["status"] == "online"
@@ -349,10 +368,14 @@ def test_reinstated_agent_needs_a_new_token_and_keeps_its_asset(
         "/api/v1/agents/heartbeat", json={"agent_id": payload["agent_id"]}, headers=old
     )
     assert beat.status_code == 401  # the old token never comes back
-    new = client.post(
-        REGISTER, json=payload, headers={"X-Enrollment-Token": _create_token(console)["token"]}
-    )
-    assert new.status_code == 200  # re-enrolled, not a new asset
+    # Fase 7D.1 (H01): un token ordinario no recupera una identidad existente y no se consume.
+    ordinary = _create_token(console)
+    refused = client.post(REGISTER, json=payload, headers={"X-Enrollment-Token": ordinary["token"]})
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "agent_recovery_required"
+    assert _token_state(console, ordinary["token_id"]) == "active"
+    new = recover_agent(console, asset_id, payload)
+    assert new.status_code == 200  # recovered, not a new asset
     assert new.json()["asset_id"] == asset_id
     assert _agent(client, asset_id)["credential_status"] == "active"
 
@@ -440,8 +463,12 @@ def test_revoked_windows_service_reenrolls_as_the_same_asset_keeping_history(
     console.post(f"{CONSOLE}/agents/{asset_id}/revoke", headers=LOCAL)
     console.post(f"{CONSOLE}/agents/{asset_id}/reinstate", headers=LOCAL)
 
-    token = _create_token(console, expected_platform="windows", expected_hostname="PC-ADMIN-01")
-    again = client.post(REGISTER, json=payload, headers={"X-Enrollment-Token": token["token"]})
+    # Fase 7D.1: el -Reenroll usa la autorización de recuperación (mismo parámetro del
+    # instalador) en lugar de un token ordinario.
+    token = authorize_recovery(console, asset_id, expected_hostname="PC-ADMIN-01")
+    again = client.post(
+        HTTPS_API + "/agents/register", json=payload, headers={"X-Enrollment-Token": token["token"]}
+    )
 
     assert again.status_code == 200
     assert again.json()["asset_id"] == asset_id

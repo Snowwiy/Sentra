@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app import cli
 from app.core.config import get_settings
 from app.services.agent_service import reinstate_agent, revoke_agent
-from tests.conftest import agent_payload
+from tests.conftest import HTTPS_API, agent_payload, recover_agent
 
 AGENT_ENDPOINTS = ["/api/v1/agents/heartbeat", "/api/v1/telemetry", "/api/v1/inventory"]
 
@@ -193,7 +193,13 @@ def test_reinstated_agent_enrolls_again_and_keeps_its_asset(
     with Session(engine) as session:
         reinstate_agent(session, UUID(asset_id))
 
-    response = client.post("/api/v1/agents/register", json=registered_agent["payload"])
+    # Fase 7D.1 (H01): rehabilitar no basta; la clave o un token ordinario no recuperan la
+    # identidad, hace falta la autorización de recuperación del admin.
+    refused = client.post("/api/v1/agents/register", json=registered_agent["payload"])
+    assert refused.status_code == 403
+    assert refused.json()["error"]["code"] == "agent_recovery_required"
+
+    response = recover_agent(client, asset_id, registered_agent["payload"])
 
     assert response.status_code == 200
     assert response.json()["asset_id"] == asset_id
@@ -219,5 +225,19 @@ def test_cli_revokes_and_reinstates_by_public_id(
     assert cli.main(["list-agents"]) == 0
     assert asset_id in capsys.readouterr().out
     assert cli.main(["reinstate-agent", asset_id]) == 0
-    assert client.post("/api/v1/agents/register", json=payload).status_code == 200
+    assert client.post("/api/v1/agents/register", json=payload).status_code == 403
+    capsys.readouterr()
+    assert cli.main(["authorize-agent-recovery", asset_id, "--reason", "Disco sustituido"]) == 2
+    assert (
+        cli.main(
+            ["authorize-agent-recovery", asset_id, "--reason", "Disco sustituido", "--confirm"]
+        )
+        == 0
+    )
+    token = capsys.readouterr().out.strip().splitlines()[-1]
+    assert token.startswith("sentra_et_rec_")
+    recovered = client.post(
+        f"{HTTPS_API}/agents/register", json=payload, headers={"X-Enrollment-Token": token}
+    )
+    assert recovered.status_code == 200
     assert cli.main(["revoke-agent", str(uuid4())]) == 1

@@ -15,20 +15,28 @@ import {
 const TOKEN = "sentra_et_TEST-not-a-real-token_0123456789abcdef";
 
 describe("checkServerUrl", () => {
-  it("accepts LAN URLs and flags plain HTTP", () => {
+  it("accepts HTTPS LAN URLs and rejects plain HTTP to another machine (7D.1 H04)", () => {
     expect(checkServerUrl(" http://192.168.50.201:8000/ ")).toEqual({
       url: "http://192.168.50.201:8000",
-      valid: true,
+      valid: false,
       insecure: true,
       loopback: false,
     });
-    expect(checkServerUrl("https://sentra.lan").insecure).toBe(false);
-    expect(checkServerUrl("http://[fd00::5]:8000").valid).toBe(true);
+    expect(checkServerUrl("https://sentra.lan")).toEqual({
+      url: "https://sentra.lan",
+      valid: true,
+      insecure: false,
+      loopback: false,
+    });
+    expect(checkServerUrl("https://[fd00::5]:8443").valid).toBe(true);
+    expect(checkServerUrl("http://[fd00::5]:8000").valid).toBe(false);
+    // Un nombre que solo empieza por 127. no es loopback.
+    expect(checkServerUrl("http://127.evil.example").valid).toBe(false);
   });
 
   it("flags loopback addresses, which another machine cannot reach", () => {
     for (const url of ["http://localhost:8000", "http://127.0.0.1:8000", "http://[::1]:8000"]) {
-      expect(checkServerUrl(url).loopback).toBe(true);
+      expect(checkServerUrl(url)).toMatchObject({ loopback: true, valid: true, insecure: false });
     }
   });
 
@@ -40,7 +48,7 @@ describe("checkServerUrl", () => {
 });
 
 describe("installSteps", () => {
-  const base = { serverUrl: "http://192.168.50.201:8000", token: TOKEN };
+  const base = { serverUrl: "https://192.168.50.201:8443", token: TOKEN };
 
   it("recommended method never puts the token in a command", () => {
     const steps = installSteps({ ...base, method: "file", pkg: "tarball" });
@@ -49,7 +57,7 @@ describe("installSteps", () => {
     expect(text).toContain("read -rsp");
     expect(text).toContain("umask 077");
     expect(text).toContain(
-      "sudo ./install-sentra-agent.sh --server 'http://192.168.50.201:8000' --token-file ./enrollment.token",
+      "sudo ./install-sentra-agent.sh --server 'https://192.168.50.201:8443' --token-file ./enrollment.token",
     );
     expect(steps.some((s) => s.secret)).toBe(false);
     expect(steps.at(-1)?.command).toBe("systemctl status sentra-agent");
@@ -59,7 +67,7 @@ describe("installSteps", () => {
     const steps = installSteps({ ...base, method: "inline", pkg: "tarball" });
     const install = steps.find((s) => s.secret);
     expect(install?.command).toBe(
-      `sudo ./install-sentra-agent.sh --server 'http://192.168.50.201:8000' --token '${TOKEN}'`,
+      `sudo ./install-sentra-agent.sh --server 'https://192.168.50.201:8443' --token '${TOKEN}'`,
     );
   });
 
@@ -78,13 +86,13 @@ describe("installSteps", () => {
 });
 
 describe("windowsInstallSteps", () => {
-  const serverUrl = "http://192.168.50.201:8000";
+  const serverUrl = "https://192.168.50.201:8443";
 
   it("prompt method: one PowerShell command, never the token", () => {
     const steps = windowsInstallSteps({ serverUrl, method: "prompt" });
     expect(steps.map((s) => s.command)).toEqual([
       "Expand-Archive -Path .\\sentra-agent-*-windows-x86_64.zip -DestinationPath . -Force; Set-Location .\\sentra-agent-*-windows-x86_64",
-      "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1 -Server 'http://192.168.50.201:8000'",
+      "powershell -NoProfile -ExecutionPolicy Bypass -File .\\install-sentra-agent.ps1 -Server 'https://192.168.50.201:8443'",
       "Get-Service SentraAgent",
     ]);
     expect(steps.some((s) => s.secret)).toBe(false);
@@ -99,7 +107,7 @@ describe("windowsInstallSteps", () => {
 
   it("adds -Reenroll for a known agent and rejects unsafe URLs", () => {
     const text = windowsInstallSteps({ serverUrl, method: "prompt", reenroll: true }).map((s) => s.command).join("\n");
-    expect(text).toContain("-Server 'http://192.168.50.201:8000' -Reenroll");
+    expect(text).toContain("-Server 'https://192.168.50.201:8443' -Reenroll");
     expect(() => windowsInstallSteps({ serverUrl: "http://x'; Remove-Item C:\\ #", method: "prompt" })).toThrow();
     expect(psQuote("a'b")).toBe("'a''b'");
   });

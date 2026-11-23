@@ -105,6 +105,12 @@ class Report(Base):
     scope: Mapped[dict[str, Any]] = mapped_column(JSONB)
     # Frases deterministas del resumen (app/reports/summary.py).
     summary: Mapped[list[str] | None] = mapped_column(JSONB)
+    # Fase 7D.1 (H02): permisos que exige ver o descargar este informe por su contenido
+    # (p. ej. telemetry:read si copió evidencia de endpoint completa). Lista vacía = solo los
+    # de dominio de su tipo. Se comparan con los permisos ACTUALES del lector.
+    content_permissions: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default=text("'[]'::jsonb")
+    )
     # Snapshot estructurado del que salen todos los formatos. Acotado (REPORT_MAX_ROWS por
     # tabla y tope total en el servicio); se vacía al expirar el informe.
     snapshot: Mapped[dict[str, Any] | None] = mapped_column(JSONB)

@@ -11,14 +11,15 @@ de producción) y los documentos de cada módulo en `docs/`. Endpoints añadidos
 | GET | `/api/v1/health/ready` | Readiness: base, migraciones y apagado; 503 si no está lista. Sin versiones ni hosts |
 | GET | `/api/v1/dashboard/summary` | Agregados del dashboard en SQL (activos por estado/método/tipo, riesgo, incidentes, detecciones, alertas) |
 | GET | `/api/v1/metrics` | Prometheus; 404 salvo `METRICS_ENABLED` y red autorizada, token opcional ([docs/observability.md](observability.md)) |
-| POST | `/api/v1/agents/register` | Enroll an agent (`X-Enrollment-Token` one-time token, or legacy `X-Enrollment-Key`); returns its token once |
+| POST | `/api/v1/agents/register` | Enroll a NEW agent (`X-Enrollment-Token` one-time token, or legacy `X-Enrollment-Key`); returns its token once. An existing `agent_id` needs a recovery authorization (`sentra_et_rec_…`) or answers 403 `agent_recovery_required` (Fase 7D.1) |
+| POST | `/api/v1/agents/credentials/rotate` | Fase 7D.1: rotate the agent credential with the current one (Bearer); HTTPS or loopback only |
 | POST | `/api/v1/agent-enrollment-tokens` | **Admin** (`X-Admin-Key`): create a one-time enrollment token (shown once) |
 | GET | `/api/v1/agent-enrollment-tokens` | **Admin**: list tokens and their state (never the token) |
 | POST | `/api/v1/agent-enrollment-tokens/{id}/revoke` | **Admin**: revoke an unused token |
 | POST | `/api/v1/agents/heartbeat` | Mark an agent alive (Bearer token) |
 | GET | `/api/v1/agents` | Enrolled agents with state, credential status and summary (no secrets) |
 | GET | `/api/v1/assets/{asset_id}/agent` | The asset's agent and credential status |
-| GET/POST | `/api/v1/console/...` | **Dashboard console** (sesión, solo rol admin): enrollment tokens, revoke/reinstate agents ([docs/agent-management.md](agent-management.md)) |
+| GET/POST | `/api/v1/console/...` | **Dashboard console** (sesión, solo rol admin): enrollment tokens, revoke/reinstate agents, recovery authorizations and rotation requests ([docs/agent-management.md](agent-management.md)) |
 | GET | `/api/v1/assets` | List assets with status and latest telemetry; paginado en el servidor (Fase 4M: `limit` 100 por defecto, máx. 500; `offset`; `sort`, `order`; `status_counts`) |
 | GET | `/api/v1/assets/{asset_id}` | Asset detail |
 | GET | `/api/v1/assets/{asset_id}/telemetry?limit=120` | Telemetry history, oldest first |
@@ -78,6 +79,23 @@ administrativa: [docs/discovery.md](discovery.md).
 
 Payloads and error format: [docs/agent-protocol.md](agent-protocol.md). Interactive docs at
 `/docs` in development.
+
+## Fase 7D.2 (server 0.7.1)
+
+Sin endpoints nuevos. Cambios aditivos en las rutas de ingesta de agentes:
+
+- `POST /agents/heartbeat`, `/agents/credentials/rotate`, `/agents/commands/poll`,
+  `/agents/commands/{id}/result`, `/telemetry`, `/events`, `/inventory`, `/processes` y
+  `/agents/activity` pueden responder **429** con cabecera `Retry-After` (segundos) y
+  `details[0].reason` (`agent_requests`, `agent_events`, `agent_bytes`, `agent_concurrency`,
+  `global_requests`, `global_events`, `global_bytes`, `global_concurrency`). El código de
+  error es `ingest_<reason>`. Un 429 nunca revoca ni invalida
+  la credencial: el agente conserva sus datos y reintenta.
+- Un 401 (token inválido) no gasta cuota de ningún agente.
+- `GET /agents` y `GET /agents/{id}`: campos nuevos `ingest_throttled_at` e
+  `ingest_rejections`; `summary.throttled` cuenta los agentes limitados en los últimos 15 min.
+- Métricas Prometheus nuevas: `sentra_ingest_quota_rejections_total{route,reason}` y
+  `sentra_ingest_in_flight`.
 
 ## Fase 7C (server 0.6.0)
 

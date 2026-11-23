@@ -95,6 +95,10 @@ import type {
   RecommendationProfile,
   AIWindow,
   Agent,
+  AgentRecovery,
+  AgentRecoveryCreate,
+  AgentRecoveryCreated,
+  AgentRecoveryList,
   AgentList,
   Alert,
   AlertList,
@@ -525,6 +529,23 @@ export const consoleApi = {
     apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/revoke`),
   reinstateAgent: (assetId: string) =>
     apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/reinstate`),
+  // Fase 7D.1 (H01): recuperar una identidad existente exige esta autorización (un token
+  // ordinario ya no sustituye la credencial de un agent_id registrado).
+  createAgentRecovery: (assetId: string, request: AgentRecoveryCreate) =>
+    apiPost<AgentRecoveryCreated>(
+      `/console/agents/${encodeURIComponent(assetId)}/recovery-tokens`,
+      request,
+    ),
+  listAgentRecoveries: (assetId: string, signal?: AbortSignal) =>
+    apiGet<AgentRecoveryList>(`/console/agents/${encodeURIComponent(assetId)}/recovery-tokens`, {
+      signal,
+    }),
+  revokeAgentRecovery: (recoveryId: string) =>
+    apiPost<AgentRecovery>(`/console/agents/recovery-tokens/${encodeURIComponent(recoveryId)}/revoke`),
+  requestAgentRotation: (assetId: string, reason?: string) =>
+    apiPost<Agent>(`/console/agents/${encodeURIComponent(assetId)}/rotate-credential`, {
+      reason: reason ?? null,
+    }),
   // Descubrimiento de red: el backend vuelve a validar el target contra
   // DISCOVERY_ALLOWED_NETWORKS; la lista del frontend es solo una comodidad.
   // Fase 5F: site y destino de ejecución (local solo en el site por defecto; sensor del mismo

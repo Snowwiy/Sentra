@@ -118,6 +118,24 @@ class Asset(Base):
     # Set by an operator to cut this agent off (stolen laptop, decommissioned host). While set,
     # the agent has no valid token and re-enrollment is refused, even with the enrollment key.
     agent_token_revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Fase 7D.1 (H01): rotación con la credencial vigente. La credencial nueva queda
+    # "pendiente" y la anterior sigue valiendo hasta el primer uso de la nueva (mismo patrón
+    # que los sensores): si la respuesta de la rotación se pierde, el agente no se queda sin
+    # identidad ni necesita una recuperación.
+    agent_token_pending_hash: Mapped[str | None] = mapped_column(String(64))
+    agent_token_pending_issued_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Cómo se emitió la credencial vigente: enrollment_token, legacy_key, recovery o rotation.
+    # Inventario para retirar la clave compartida legacy (null = anterior a 7D.1).
+    agent_credential_source: Mapped[str | None] = mapped_column(String(16))
+    # Rotación pedida por el servidor (transporte inseguro detectado) o por un admin. El
+    # heartbeat se lo indica al agente (rotate_credential) hasta que use la credencial nueva.
+    agent_rotation_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    agent_rotation_reason: Mapped[str | None] = mapped_column(String(32))
+    # Fase 7D.1 (H04): transporte del último heartbeat (https, http_loopback, http_remote) y
+    # última vez que la credencial viajó sin cifrar por la red (inventario de migración).
+    agent_transport: Mapped[str | None] = mapped_column(String(16))
+    agent_transport_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    agent_insecure_transport_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
     # Reported by the agent; null (unknown) for assets only seen on the network.
     hostname: Mapped[str | None] = mapped_column(String(255))

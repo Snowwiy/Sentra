@@ -11,4 +11,4 @@ Description: Sentra endpoint monitoring agent
  Reports heartbeat, telemetry, inventory and events of this host to a Sentra server.
  Runs as the unprivileged system user sentra-agent under the systemd service
  sentra-agent. After installing, enroll it with a one-time token:
-   sudo sentra-agent-setup --server http://SERVER:8000 --token-file ./enrollment.token
+   sudo sentra-agent-setup --server https://SERVER --token-file ./enrollment.token

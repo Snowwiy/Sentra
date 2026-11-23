@@ -156,6 +156,12 @@ export function ToolOutput({ execution }: { execution: ToolExecutionOut }) {
   const output = execution.output;
   return (
     <div className="stack tool-output">
+      {execution.content_withheld && (
+        <div className="banner" role="status" data-testid="tool-content-withheld">
+          Resultado protegido: requiere {execution.withheld_permissions.join(", ") || "permisos que ya no tienes"}.
+          Se muestran solo los metadatos de la ejecución.
+        </div>
+      )}
       {execution.summary && <p>{execution.summary}</p>}
       {execution.error_code && (
         <div className="banner banner--warn" role="alert">

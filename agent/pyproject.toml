@@ -1,12 +1,21 @@
 [project]
 name = "sentra-agent"
-version = "0.6.2"
+version = "0.7.1"
 description = "Sentra endpoint agent: reports host inventory, heartbeat and telemetry"
 requires-python = ">=3.12"
 dependencies = ["psutil>=7,<8"]
 
 [project.optional-dependencies]
-dev = ["pytest>=9.1,<10", "ruff>=0.16,<1", "mypy>=2.4,<3", "types-psutil"]
+dev = [
+    "pytest>=9.1,<10",
+    "ruff>=0.16,<1",
+    "mypy>=2.4,<3",
+    "types-psutil",
+    # 7D.2-CI-Fix1: genera la CA y los certificados de los tests TLS (H04/H05) igual en
+    # Linux, macOS y Windows, sin depender del binario openssl del sistema. Solo desarrollo:
+    # el agente instalado no la usa. Misma serie que backend y el extra snmp del sensor.
+    "cryptography>=50,<51",
+]
 
 [project.scripts]
 sentra-agent = "sentra_agent.__main__:main"

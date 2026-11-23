@@ -1,16 +1,14 @@
 """Command line entry point: `python -m sentra_agent`."""
 
 import argparse
-import ipaddress
 import logging
 import signal
 import sys
 import threading
 from pathlib import Path
-from urllib.parse import urlparse
 
 from sentra_agent import __version__
-from sentra_agent.client import SentraClient
+from sentra_agent.client import client_for
 from sentra_agent.config import AgentConfig, load_config
 from sentra_agent.credentials import CredentialStoreUnavailableError, check_store
 from sentra_agent.enrollment import (
@@ -38,25 +36,6 @@ __all__ = [
 ]
 
 
-def _warn_if_cleartext(api_url: str) -> None:
-    # Without TLS the bearer token travels in clear text and anyone on the path can replay
-    # it. Loopback is fine (development, agent next to the API); anything else should be
-    # https until mTLS or a TLS-terminating proxy is in place.
-    parsed = urlparse(api_url)
-    if parsed.scheme == "https":
-        return
-    host = parsed.hostname or ""
-    try:
-        loopback = host == "localhost" or ipaddress.ip_address(host).is_loopback
-    except ValueError:
-        loopback = False
-    if not loopback:
-        logging.getLogger("sentra_agent").warning(
-            "api_url is not https: the agent token is sent unencrypted over the network",
-            extra={"api_url": api_url},
-        )
-
-
 def _enroll(agent: Agent) -> int:
     # One result line on stdout (read by installers); details are in the log.
     outcome = enroll_once(agent)
@@ -73,7 +52,7 @@ def _run_service(config: AgentConfig) -> int:
         # su recuperación, en lugar de terminar el proceso antes de conectar con el SCM.
         agent = Agent(
             config,
-            SentraClient(config.api_url, config.request_timeout_seconds),
+            client_for(config),
             IdentityStore(config.state_dir, config.credential_store),
             stop_event=stop,
         )
@@ -112,6 +91,11 @@ def main(argv: list[str] | None = None) -> int:
         help="file holding a one-time enrollment token; deleted once the agent is enrolled",
     )
     parser.add_argument("--once", action="store_true", help="run a single cycle and exit")
+    parser.add_argument(
+        "--rotate-credential",
+        action="store_true",
+        help="replace this agent's own credential with a new one (needs https), then exit",
+    )
     parser.add_argument(
         "--service",
         action="store_true",
@@ -154,7 +138,6 @@ def main(argv: list[str] | None = None) -> int:
         console=not (args.service or args.no_console_log),
     )
     logging.getLogger("sentra_agent").info("logging to file", extra={"path": str(log_file)})
-    _warn_if_cleartext(config.api_url)
     if args.service:
         return _run_service(config)
 
@@ -172,7 +155,7 @@ def main(argv: list[str] | None = None) -> int:
         check_store(config.credential_store, config.state_dir)
         agent = Agent(
             config,
-            SentraClient(config.api_url, config.request_timeout_seconds),
+            client_for(config),
             IdentityStore(config.state_dir, config.credential_store),
             stop_event=stop,
         )
@@ -185,6 +168,16 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_CREDENTIAL_STORE
     if args.enroll:
         return _enroll(agent)
+    if args.rotate_credential:
+        # Fase 7D.1: rotación manual (p. ej. tras migrar a HTTPS una credencial que viajó en
+        # claro). Requiere estar enrolado y un api_url https:// (o loopback).
+        try:
+            rotated = agent.rotate_credential()
+        except Exception as exc:  # se informa y se sale con código de error
+            print(f"credential rotation failed: {exc}", file=sys.stderr)
+            return 1
+        print("credential rotated" if rotated else "credential rotation failed; see the log")
+        return 0 if rotated else 1
     try:
         agent.run(once=args.once)
     except KeyboardInterrupt:

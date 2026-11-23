@@ -25,14 +25,27 @@ All timestamps are ISO 8601 **with timezone offset**; the server stores them in 
 - Enrollment returns an `agent_token` **once**. The server stores only its SHA-256 hash.
 - Every other agent call sends `Authorization: Bearer <agent_token>` and its `agent_id`.
   Unknown agent, missing token and wrong token all answer 401 (no hint about which).
-- Enrolling an existing `agent_id` again (valid key required) rotates its token (200) and keeps
-  the asset and its history. This is how an agent recovers after losing its token.
+- **Fase 7D.1 (H01)**: registrar un `agent_id` que ya existe con un token ordinario o con la
+  clave legacy devuelve **403 `agent_recovery_required`** (el token no se consume). Una
+  identidad existente solo cambia de credencial de dos formas:
+  - **Recuperación**: el agente presenta en `X-Enrollment-Token` una autorización
+    `sentra_et_rec_…` emitida por un admin para ese activo (un solo uso, 15 min, ligada a
+    agente, activo, site y opcionalmente hostname). Devuelve 200 con un `agent_token` nuevo y
+    conserva el activo y su histórico. Solo por HTTPS o loopback (si no, 403
+    `https_required`). Ver docs/fase-7d1-recovery.md.
+  - **Rotación**: `POST /agents/credentials/rotate` (abajo), con la credencial vigente.
+- La clave legacy se puede retirar con `AGENT_ENROLLMENT_KEY_EXPIRES_AT`.
 - **Revocation** is per agent and done by an operator on the server
   (`python -m app.cli revoke-agent <asset_id>`, `reinstate-agent`, `list-agents`). It deletes
   the token hash: the agent gets 401, tries to enroll and receives **403 `agent_revoked`**
   until reinstated. Other agents and the enrollment key are unaffected. The revocation state
   is only revealed to callers holding a valid enrollment key.
-- The server records `agent_token_issued_at` for a future rotation policy (not enforced yet).
+- The server records `agent_token_issued_at` and, since 7D.1, `credential_source`
+  (`enrollment_token`, `legacy_key`, `recovery`, `rotation`) and the transport of the last
+  heartbeat (`https`, `http_loopback`, `http_remote`).
+- Fase 7D.1 (H04, H05): el agente 0.7.0 solo usa `https://` (http solo a loopback), con
+  validación TLS normal, no sigue redirecciones y acota tamaño y plazo de las respuestas
+  (docs/fase-7d1.md, docs/agent-https-migration.md).
 - The agent keeps the token encrypted with DPAPI (Windows) and never logs it.
 - Agent side: the one-time token comes from `SENTRA_AGENT_ENROLLMENT_TOKEN` or, preferably,
   a file (`enrollment_token_file` / `--enrollment-token-file`; not a command-line value,
@@ -53,6 +66,19 @@ any 401 ─► enroll again with the same agent_id, retry once
 403 / enrollment 401 ─► stop, log reason, retry at max backoff (300 s)
 5xx, 408, 409, 429, network ─► exponential backoff + jitter, buffer samples (Retry-After honored)
 ```
+
+### 429 y cuotas de ingesta (Fase 7D.2, agente 0.7.1)
+
+El servidor limita cada identidad de agente (peticiones, eventos, bytes y concurrencia) y la
+ingesta global. Al agotarse responde 429 con `Retry-After`. El agente 0.7.1:
+
+- conserva el buffer persistente y el cursor de eventos (nada se descarta);
+- espera `Retry-After` × [1.0, 1.25] (jitter), sin superar el backoff máximo;
+- nunca trata un 429 como revocación ni vuelve a registrarse;
+- el heartbeat solo gasta la cuota de peticiones, así que un agente que envía demasiados
+  eventos sigue apareciendo `online`.
+
+Los agentes 0.6.x/0.7.0 ya respetaban `Retry-After` sin jitter: son compatibles.
 
 The server reports an asset `offline` after `HEARTBEAT_TIMEOUT_SECONDS` (default 90) without
 contact. Every authenticated agent call counts as contact (heartbeat, telemetry, events,
@@ -94,10 +120,18 @@ de serie).
 | Status | Meaning |
 |--------|---------|
 | 201 | New agent. Body: `asset_id`, `agent_id`, `status` (`unknown`), `first_seen_at`, `agent_token` |
-| 200 | Existing agent re-enrolled; same body with a new `agent_token` (old one revoked) |
-| 401 | Missing or wrong enrollment key |
-| 403 | Enrollment disabled on the server (`forbidden`) or agent revoked (`agent_revoked`) |
+| 200 | Existing agent recovered with a recovery authorization; same body with a new `agent_token` (old one revoked) |
+| 401 | Missing or wrong enrollment key, token or recovery authorization |
+| 403 | Enrollment disabled on the server (`forbidden`), agent revoked (`agent_revoked`), existing `agent_id` with an ordinary token or the legacy key (`agent_recovery_required`), or recovery over cleartext HTTP (`https_required`) |
 | 422 | Invalid payload (unknown fields are rejected) |
+
+## POST /agents/credentials/rotate (Fase 7D.1)
+
+`Authorization: Bearer <agent_token vigente>` y `{"agent_id": "..."}` → 200 con un
+`agent_token` nuevo. La credencial nueva queda pendiente: la anterior sigue valiendo hasta el
+primer uso de la nueva, que la promueve. Solo por HTTPS o loopback (403 `https_required`).
+El heartbeat devuelve `rotate_credential: true` cuando un operador o el servidor (motivo
+`insecure_transport`) piden la rotación, y solo si ese heartbeat llegó por HTTPS o loopback.
 
 ## POST /agents/heartbeat
 

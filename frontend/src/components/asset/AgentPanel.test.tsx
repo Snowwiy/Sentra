@@ -31,6 +31,15 @@ const AGENT: Agent = {
   lifecycle_version: 0,
   site_id: "00000000-0000-0000-0000-00000000d5f1",
   site_name: "Principal",
+  credential_source: "enrollment_token",
+  rotation_pending: false,
+  rotation_requested_at: null,
+  rotation_reason: null,
+  transport: "https",
+  transport_at: null,
+  insecure_transport_at: null,
+  ingest_throttled_at: null,
+  ingest_rejections: 0,
 };
 
 let agent: Agent;
@@ -46,6 +55,10 @@ beforeEach(() => {
       const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
       if (init.method === "POST") {
         posts.push(path);
+        if (path.endsWith("/rotate-credential")) {
+          agent = { ...agent, rotation_requested_at: new Date().toISOString(), rotation_reason: "operator_request" };
+          return ok(agent);
+        }
         agent = { ...agent, credential_status: "revoked", revoked_at: new Date().toISOString() };
         return ok(agent);
       }
@@ -79,6 +92,32 @@ describe("AgentPanel (asset detail)", () => {
     expect(panel).toHaveTextContent("Activa");
     expect(panel).toHaveTextContent("No reportado");
     expect(within(panel).getByRole("button", { name: "Reiniciar agente" })).toBeDisabled();
+  });
+
+  it("shows the ingest quota state of the agent (7D.2 H06)", async () => {
+    agent = { ...AGENT, ingest_throttled_at: new Date().toISOString(), ingest_rejections: 2 };
+    render(
+      <MemoryRouter>
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("region", { name: "Agent" });
+    await within(panel).findByText(/Limitado/);
+    expect(panel).toHaveTextContent("(2 rechazos)");
+  });
+
+  it("shows an agent that was never throttled as not limited", async () => {
+    render(
+      <MemoryRouter>
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("region", { name: "Agent" });
+    await within(panel).findByText("Sin limitar");
   });
 
   it("shows the installation method reported by the agent", async () => {
@@ -118,5 +157,40 @@ describe("AgentPanel (asset detail)", () => {
     await waitFor(() => expect(posts).toEqual([`/console/agents/${AGENT.asset_id}/revoke`]));
     expect(await within(panel).findByRole("button", { name: "Reactivar…" })).toBeInTheDocument();
     expect(within(panel).getAllByText("Revocado").length).toBeGreaterThan(0);
+  });
+
+  it("requests a credential rotation and shows it as requested (7D.1 H01)", async () => {
+    render(
+      <MemoryRouter>
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("region", { name: "Agent" });
+    expect(await within(panel).findByText("Token de instalación")).toBeInTheDocument();
+    expect(within(panel).getByText("HTTPS")).toHaveClass("badge--ok");
+    const rotate = within(panel).getByRole("button", { name: "Rotar credencial…" });
+    await waitFor(() => expect(rotate).toBeEnabled());
+    fireEvent.click(rotate);
+    const dialog = screen.getByRole("dialog", { name: "Rotar credencial" });
+    expect(dialog).toHaveTextContent("no hay corte de monitorización");
+    fireEvent.click(within(dialog).getByRole("button", { name: "Pedir rotación" }));
+    await waitFor(() => expect(posts).toEqual([`/console/agents/${AGENT.asset_id}/rotate-credential`]));
+    expect(await within(panel).findByText("(rotación pedida)")).toBeInTheDocument();
+  });
+
+  it("warns about cleartext HTTP without cutting the agent off (7D.1 H04)", async () => {
+    agent = { ...AGENT, transport: "http_remote" };
+    render(
+      <MemoryRouter>
+        <WithRole role="admin">
+          <AgentPanel assetId={AGENT.asset_id} />
+        </WithRole>
+      </MemoryRouter>,
+    );
+    const panel = await screen.findByRole("region", { name: "Agent" });
+    expect(await within(panel).findByText("HTTP en claro")).toHaveClass("badge--warn");
+    expect(within(panel).getByRole("alert")).toHaveTextContent("Sigue monitorizado");
   });
 });

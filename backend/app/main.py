@@ -14,6 +14,7 @@ from app.api.v1.router import api_router
 from app.core.body_limit import BodySizeLimitMiddleware
 from app.core.config import Settings, get_settings
 from app.core.exceptions import register_exception_handlers
+from app.core.ingest_quota import IngestQuota
 from app.core.logging import configure_logging
 from app.core.middleware import request_logging_middleware
 from app.core.production import enforce_production
@@ -273,6 +274,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.activity_limiter = make_limiter(
         backend, "agent_activity", settings.telemetry_activity_max_per_minute, 60, get_engine
     )
+    # Fase 7D.2 (H06): cuotas de ingesta por agente autenticado y globales.
+    app.state.ingest_quota = IngestQuota.from_settings(settings, backend, get_engine)
     app.state.api_limits = ApiLimits(
         mutations=make_limiter(
             backend, "api_mutations", settings.api_mutations_per_user_per_minute, 60, get_engine
