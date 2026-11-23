@@ -1247,7 +1247,10 @@ describe("Red › Identidad y evidencias (Fase 7A.5)", () => {
     };
     renderHub("/network/identity");
     const changes = await screen.findByRole("region", { name: "Cambios de identidad" });
-    await within(changes).findByText("Cambio de IP");
+    // "Cambio de IP" aparece también como opción del selector "Tipo de cambio" (siempre
+    // presente). Se espera a la celda de la tabla: así la prueba no encuentra dos elementos y,
+    // además, no sigue adelante antes de que lleguen las filas (origen del fallo intermitente).
+    await within(changes).findByRole("cell", { name: "Cambio de IP" });
     expect(asked.sort()).toEqual(["classification_changed", "ip_changed", "mac_changed", "name_changed", "vendor_changed"]);
     const rows = within(changes).getAllByRole("row").slice(1);
     expect(rows[0]).toHaveTextContent("Cambio de nombre");

@@ -5,14 +5,15 @@ petición (con la cabecera Authorization o la credencial de enrolamiento) a la U
 el servidor, incluso a otro host o a http:// en claro. Ahora la redirección es un error
 controlado, el segundo servidor no recibe nada y el agente reintenta con backoff.
 
-Todo con datos sintéticos y servidores en 127.0.0.1; el certificado TLS se genera para el
-test con openssl (se omite el bloque TLS si no está disponible).
+Todo con datos sintéticos y servidores en 127.0.0.1. La CA y los certificados TLS se generan
+en el propio test con la biblioteca cryptography (dependencia de desarrollo), no con el binario
+openssl: ver tls_material() para el porqué (7D.2-CI-Fix1).
 """
 
+import datetime as dt
+import ipaddress
 import json
-import shutil
 import ssl
-import subprocess
 import threading
 import time
 from collections.abc import Callable, Iterator
@@ -22,6 +23,10 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from cryptography import x509
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.x509.oid import ExtendedKeyUsageOID, NameOID
 
 from sentra_agent.client import (
     ApiError,
@@ -266,42 +271,160 @@ def test_h04_legacy_http_config_gets_a_migration_diagnostic(tmp_path: Path) -> N
     assert "agent-https-migration.md" in message
 
 
+# --- Material TLS de pruebas -------------------------------------------------------------------
+#
+# 7D.2-CI-Fix1: antes se generaba con el binario `openssl` del PATH. En los runners de macOS ese
+# binario es LibreSSL (/usr/bin/openssl), que lee la configuración del sistema
+# (/etc/ssl/openssl.cnf, sección v3_ca con basicConstraints) y además AÑADE las extensiones de
+# -addext en lugar de sustituirlas, como hace OpenSSL 3. La CA salía con dos extensiones
+# basicConstraints; el OpenSSL 3 que usa Python la marca como inválida (RFC 5280 prohíbe
+# extensiones repetidas), no la acepta como emisora y la verificación falla con "unable to get
+# local issuer certificate". Además LibreSSL no añade Authority/Subject Key Identifier en
+# `x509 -req`, y Python 3.13 activa VERIFY_X509_STRICT, que los exige.
+#
+# Con cryptography cada extensión se declara una vez y de forma explícita, sin depender del
+# binario ni de la configuración del sistema, y el bloque TLS ya no se omite en Windows por falta
+# de openssl. La verificación del cliente no cambia: el certificado sigue validándose entero.
+
+_VALIDITY = dt.timedelta(days=2)
+
+
+def _name(common_name: str) -> x509.Name:
+    return x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, common_name)])
+
+
+def _write_key(path: Path, key: ec.EllipticCurvePrivateKey) -> None:
+    path.write_bytes(
+        key.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+    )
+
+
+def _issue_material(base: Path) -> None:
+    """Escribe ca.pem y, por cada servidor, <nombre>.pem/<nombre>.key en `base`."""
+    # Margen hacia atrás: tolera pequeñas diferencias de reloj entre el proceso y OpenSSL.
+    now = dt.datetime.now(dt.UTC) - dt.timedelta(minutes=5)
+    ca_key = ec.generate_private_key(ec.SECP256R1())
+    ca_ski = x509.SubjectKeyIdentifier.from_public_key(ca_key.public_key())
+    ca_cert = (
+        x509.CertificateBuilder()
+        .subject_name(_name("Sentra Test CA"))
+        .issuer_name(_name("Sentra Test CA"))
+        .public_key(ca_key.public_key())
+        .serial_number(x509.random_serial_number())
+        .not_valid_before(now)
+        .not_valid_after(now + _VALIDITY)
+        # path_length=0: esta CA solo firma certificados finales, nunca otras CA.
+        .add_extension(x509.BasicConstraints(ca=True, path_length=0), critical=True)
+        .add_extension(
+            x509.KeyUsage(
+                digital_signature=False,
+                content_commitment=False,
+                key_encipherment=False,
+                data_encipherment=False,
+                key_agreement=False,
+                key_cert_sign=True,
+                crl_sign=True,
+                encipher_only=False,
+                decipher_only=False,
+            ),
+            critical=True,
+        )
+        .add_extension(ca_ski, critical=False)
+        .sign(ca_key, hashes.SHA256())
+    )
+    (base / "ca.pem").write_bytes(ca_cert.public_bytes(serialization.Encoding.PEM))
+
+    servers: tuple[tuple[str, x509.GeneralName], ...] = (
+        ("good", x509.IPAddress(ipaddress.ip_address("127.0.0.1"))),
+        ("wrong", x509.DNSName("other.example")),
+    )
+    for name, san in servers:
+        key = ec.generate_private_key(ec.SECP256R1())
+        cert = (
+            x509.CertificateBuilder()
+            .subject_name(_name(name))
+            .issuer_name(ca_cert.subject)
+            .public_key(key.public_key())
+            .serial_number(x509.random_serial_number())
+            .not_valid_before(now)
+            .not_valid_after(now + _VALIDITY)
+            .add_extension(x509.BasicConstraints(ca=False, path_length=None), critical=True)
+            .add_extension(
+                x509.KeyUsage(
+                    digital_signature=True,
+                    content_commitment=False,
+                    key_encipherment=False,
+                    data_encipherment=False,
+                    key_agreement=False,
+                    key_cert_sign=False,
+                    crl_sign=False,
+                    encipher_only=False,
+                    decipher_only=False,
+                ),
+                critical=True,
+            )
+            .add_extension(x509.ExtendedKeyUsage([ExtendedKeyUsageOID.SERVER_AUTH]), critical=False)
+            .add_extension(x509.SubjectAlternativeName([san]), critical=False)
+            .add_extension(
+                x509.SubjectKeyIdentifier.from_public_key(key.public_key()), critical=False
+            )
+            # El AKID enlaza con el SKI de la CA: VERIFY_X509_STRICT (Python >= 3.13) lo exige.
+            .add_extension(
+                x509.AuthorityKeyIdentifier.from_issuer_subject_key_identifier(ca_ski),
+                critical=False,
+            )
+            .sign(ca_key, hashes.SHA256())
+        )
+        (base / f"{name}.pem").write_bytes(cert.public_bytes(serialization.Encoding.PEM))
+        _write_key(base / f"{name}.key", key)
+
+
 @pytest.fixture(scope="module")
 def tls_material(tmp_path_factory: pytest.TempPathFactory) -> dict[str, Any]:
     """CA de pruebas y certificado de servidor para 127.0.0.1 (y otro para un nombre ajeno)."""
-    openssl = shutil.which("openssl")
-    if openssl is None:
-        pytest.skip("openssl not available")
     base = tmp_path_factory.mktemp("tls")
-
-    def run(*args: str) -> None:
-        subprocess.run([openssl, *args], check=True, capture_output=True)  # noqa: S603
-
-    run(
-        "req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "2",
-        "-subj", "/CN=Sentra Test CA",
-        "-keyout", str(base / "ca.key"), "-out", str(base / "ca.pem"),
-        "-addext", "basicConstraints=critical,CA:TRUE", "-addext", "keyUsage=critical,keyCertSign",
-    )  # fmt: skip
-    for name, san in (("good", "IP:127.0.0.1"), ("wrong", "DNS:other.example")):
-        run(
-            "req", "-newkey", "rsa:2048", "-nodes", "-subj", f"/CN={name}",
-            "-keyout", str(base / f"{name}.key"), "-out", str(base / f"{name}.csr"),
-        )  # fmt: skip
-        ext = base / f"{name}.ext"
-        ext.write_text(f"subjectAltName={san}\nextendedKeyUsage=serverAuth\n")
-        run(
-            "x509", "-req", "-in", str(base / f"{name}.csr"), "-CA", str(base / "ca.pem"),
-            "-CAkey", str(base / "ca.key"), "-CAcreateserial", "-days", "2",
-            "-out", str(base / f"{name}.pem"), "-extfile", str(ext),
-        )  # fmt: skip
+    _issue_material(base)
 
     def context(name: str) -> ssl.SSLContext:
         ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
         ctx.load_cert_chain(str(base / f"{name}.pem"), str(base / f"{name}.key"))
         return ctx
 
-    return {"ca": base / "ca.pem", "server": context("good"), "wrong": context("wrong")}
+    return {
+        "ca": base / "ca.pem",
+        "base": base,
+        "server": context("good"),
+        "wrong": context("wrong"),
+    }
+
+
+def test_tls_material_has_unique_extensions_and_a_linked_chain(
+    tls_material: dict[str, Any],
+) -> None:
+    """Regresión 7D.2-CI-Fix1: sin extensiones repetidas y con la cadena enlazada por SKI/AKID.
+
+    Una extensión repetida (como la basicConstraints doble que generaba LibreSSL) invalida la
+    CA en OpenSSL 3 y la verificación falla en un sistema y no en otro.
+    """
+    base: Path = tls_material["base"]
+    ca = x509.load_pem_x509_certificate((base / "ca.pem").read_bytes())
+    ca_ski = ca.extensions.get_extension_for_class(x509.SubjectKeyIdentifier).value
+    for name in ("ca", "good", "wrong"):
+        cert = x509.load_pem_x509_certificate((base / f"{name}.pem").read_bytes())
+        oids = [extension.oid for extension in cert.extensions]
+        assert len(oids) == len(set(oids)), name
+        assert cert.issuer == ca.subject, name
+    for name in ("good", "wrong"):
+        cert = x509.load_pem_x509_certificate((base / f"{name}.pem").read_bytes())
+        akid = cert.extensions.get_extension_for_class(x509.AuthorityKeyIdentifier).value
+        assert akid.key_identifier == ca_ski.digest
+        assert not cert.extensions.get_extension_for_class(x509.BasicConstraints).value.ca
+        # La firma del certificado final la hizo la CA de pruebas (no está autofirmado).
+        cert.verify_directly_issued_by(ca)
 
 
 def test_h04_https_with_a_trusted_private_ca_works(
