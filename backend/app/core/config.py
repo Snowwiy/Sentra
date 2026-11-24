@@ -856,6 +856,30 @@ class Settings(BaseSettings):
     # Días de historial de ejecuciones. Null = se conserva todo (evidencia SOC).
     analyst_tools_retention_days: int | None = Field(default=None, ge=7, le=3650)
 
+    # --- Fase 7E: Network Detection & Response (docs/fase-7e.md) ---------------------------
+    # Nada captura hasta que un admin aprueba una configuración por sensor (ndr:manage); estos
+    # ajustes acotan lo que el servidor acepta y cuánto conserva. Ingesta: lotes por sensor y
+    # minuto (429 con Retry-After; el sensor reintenta desde su spool).
+    ndr_ingest_max_per_minute: int = Field(default=120, ge=1, le=6000)
+    # Registros por lote que el servidor ordena al sensor y acepta (flujos + metadatos). El
+    # sensor parte además por bytes para no superar SENSOR_MAX_REQUEST_KB.
+    ndr_max_records_per_batch: int = Field(default=1000, ge=50, le=10_000)
+    # Retención (días). Los flujos son lo voluminoso; los metadatos agregados crecen con la
+    # diversidad de la red. Null = sin purga (no recomendado para flujos).
+    ndr_flow_retention_days: int | None = Field(default=7, ge=1, le=3650)
+    ndr_observation_retention_days: int | None = Field(default=30, ge=1, le=3650)
+    ndr_batch_retention_days: int | None = Field(default=7, ge=1, le=3650)
+    # Fase 7E.2: anomalías CERRADAS (resueltas o falso positivo) y asociaciones IP-MAC sin
+    # actividad. Las activas nunca se purgan.
+    ndr_anomaly_retention_days: int | None = Field(default=180, ge=7, le=3650)
+    ndr_binding_retention_days: int | None = Field(default=30, ge=1, le=3650)
+    # Fase 7E.3: job ndr-engine (líneas base horarias y beaconing sobre flujos guardados).
+    # 0 = desactivado. Las horas ya agregadas no se repiten (cursor en ndr_engine_cursors).
+    ndr_engine_interval_seconds: int = Field(default=300, ge=0, le=3600)
+    # Horas aprendidas antes de que la línea base pueda alertar: con menos, la media y la
+    # desviación no son representativas y cualquier pico sería un falso positivo.
+    ndr_baseline_min_samples: int = Field(default=24, ge=3, le=24 * 60)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en

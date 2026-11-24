@@ -84,6 +84,14 @@ _PROCESS_FIELDS = {
     "processid": "process.pid",
     "parentprocessid": "process.ppid",
 }
+# Fase 7E.5: campos de la categoría Sigma `dns` (Zeek, firewalls, Suricata) que el sensor NDR
+# aporta. `answer` no: el sensor solo guarda unas pocas IP de respuesta y no los nombres.
+_DNS_FIELDS = {
+    "query": "dns.query",
+    "record_type": "dns.query_type",
+    "src_ip": "dns.client_ip",
+    "dst_ip": "dns.resolver_ip",
+}
 _SUPPORTED_MODIFIERS = frozenset(
     {"contains", "startswith", "endswith", "all", "cased", "re", "i", "exists"}
     | {"gt", "gte", "lt", "lte"}
@@ -265,6 +273,12 @@ def _map_logsource(logsource: dict[str, str]) -> tuple[str, str] | None:
         if service in mapping:
             return mapping[service], ""
         return None
+    if category == "dns" and not service:
+        return (
+            "ndr_dns",
+            "Sentra evalúa consultas DNS en claro observadas por sus sensores NDR, agregadas por"
+            " ventana y solo desde equipos inventariados; sin DoH/DoT ni el campo answer.",
+        )
     if category == "process_creation" and product in ("windows", "linux") and not service:
         return (
             "process",
@@ -287,6 +301,8 @@ def _field_map(sentra_logsource: str) -> dict[str, str]:
         return mapping
     if sentra_logsource == "process":
         return dict(_PROCESS_FIELDS)
+    if sentra_logsource == "ndr_dns":
+        return dict(_DNS_FIELDS)
     return {}
 
 

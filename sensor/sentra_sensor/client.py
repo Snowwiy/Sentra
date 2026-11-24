@@ -214,3 +214,7 @@ class SensorClient:
 
     def rotate_credential(self) -> dict[str, Any]:
         return self._post("/sensor/credential/rotate", {})
+
+    def ndr_batch(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Fase 7E.1: lote de flujos y metadatos de una interfaz aprobada."""
+        return self._post("/sensor/ndr/batches", body)

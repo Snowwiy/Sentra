@@ -1,4 +1,4 @@
-"""CLI `sentra-sensor`: enroll, run, status, diagnostics. Sin GUI."""
+"""CLI `sentra-sensor`: enroll, run, status, diagnostics, ndr-check, ndr-replay. Sin GUI."""
 
 import argparse
 import json
@@ -19,6 +19,8 @@ from sentra_sensor.enrollment import EnrollmentError, enroll
 from sentra_sensor.fingerprint import SystemFingerprintProber
 from sentra_sensor.logs import configure_logging, register_secret
 from sentra_sensor.names import SystemIdentityProber
+from sentra_sensor.ndr.capture import CaptureError
+from sentra_sensor.ndr.tools import ndr_check, replay_pcap
 from sentra_sensor.runner import ProberSet, SensorRunner
 from sentra_sensor.scanner import AsyncioTcpProber, default_probers
 
@@ -65,6 +67,17 @@ def build_parser() -> argparse.ArgumentParser:
     status_p.add_argument("--json", action="store_true")
     diag_p = sub.add_parser("diagnostics", help="check server, TLS, credential and spool")
     diag_p.add_argument("--json", action="store_true")
+    ndr_check_p = sub.add_parser(
+        "ndr-check", help="check NDR capture backend and declared interfaces (no network)"
+    )
+    ndr_check_p.add_argument("--json", action="store_true")
+    replay_p = sub.add_parser(
+        "ndr-replay", help="run the NDR pipeline over a classic .pcap file (nothing is sent)"
+    )
+    replay_p.add_argument("pcap", type=Path, help="classic pcap file (pcapng is not supported)")
+    replay_p.add_argument(
+        "--batches", action="store_true", help="print the batches that would be sent"
+    )
     return parser
 
 
@@ -227,6 +240,16 @@ def cmd_status(args: argparse.Namespace, config: LocalConfig, out: TextIO) -> in
         f" {spool['dropped_total']} dropped ({spool['path']})",
         file=out,
     )
+    ndr = status["ndr"]
+    if ndr["enabled"]:
+        approved = (ndr["server_config"] or {}).get("interfaces") or []
+        print(
+            f"NDR:            local {', '.join(ndr['interfaces'])};"
+            f" approved {', '.join(approved) or '-'}; spool {ndr['spool']['items']} items",
+            file=out,
+        )
+    else:
+        print("NDR:            disabled", file=out)
     return 0
 
 
@@ -240,6 +263,38 @@ def cmd_diagnostics(
         for check in checks:
             print(f"[{'OK' if check.ok else 'FAIL'}] {check.name}: {check.detail}", file=out)
     return 0 if all(c.ok for c in checks) else 1
+
+
+def cmd_ndr_check(args: argparse.Namespace, config: LocalConfig, out: TextIO) -> int:
+    report = ndr_check(config.ndr)
+    if args.json:
+        print(json.dumps(report, indent=2), file=out)
+        return 0 if report["ok"] else 1
+    backend = report["backend"]
+    print(f"NDR enabled:    {'yes' if report['enabled'] else 'no'}", file=out)
+    state = "OK" if backend["ok"] else f"FAIL ({backend['code']}: {backend['detail']})"
+    print(f"Backend:        {backend['backend']} {state}", file=out)
+    for item in report["interfaces"]:
+        presence = "present" if item["present"] else "NOT FOUND"
+        link = {True: "up", False: "down", None: "?"}[item["up"]]
+        print(f"Interface:      {item['name']} -> {item['device']} [{presence}, {link}]", file=out)
+    if not report["interfaces"]:
+        print("Interface:      - (declare them under [ndr] in sensor.toml)", file=out)
+    return 0 if report["ok"] else 1
+
+
+def cmd_ndr_replay(args: argparse.Namespace, out: TextIO) -> int:
+    try:
+        result = replay_pcap(args.pcap)
+    except CaptureError as exc:
+        print(f"error: {exc.code}: {exc.detail}", file=sys.stderr)
+        return 2
+    except OSError as exc:
+        print(f"error: cannot read {args.pcap}: {exc.strerror}", file=sys.stderr)
+        return 2
+    payload = result if args.batches else result["summary"]
+    print(json.dumps(payload, indent=2), file=out)
+    return 0
 
 
 def main(
@@ -268,4 +323,8 @@ def main(
         return cmd_run(args, config, factory)
     if args.command == "status":
         return cmd_status(args, config, out)
+    if args.command == "ndr-check":
+        return cmd_ndr_check(args, config, out)
+    if args.command == "ndr-replay":
+        return cmd_ndr_replay(args, out)
     return cmd_diagnostics(args, config, factory, out)

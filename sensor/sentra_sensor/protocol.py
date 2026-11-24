@@ -9,6 +9,8 @@ import ipaddress
 from dataclasses import dataclass
 from typing import Any
 
+from sentra_sensor.ndr.config import NdrServerConfig
+
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
 
@@ -54,6 +56,9 @@ class ServerConfig:
     max_dns_queries: int = 0
     advanced_max_ports: int = 0
     max_deadline_seconds: int = 0
+    # Fase 7E.1: captura NDR aprobada para este sensor. None = el servidor no conoce NDR
+    # (anterior a 7E): el sensor no envía entonces nada de NDR, ni siquiera su estado.
+    ndr: NdrServerConfig | None = None
 
     @classmethod
     def parse(cls, data: object) -> "ServerConfig":
@@ -97,6 +102,7 @@ class ServerConfig:
             max_dns_queries=_opt_int(data, "max_dns_queries", 0, 100_000, 0),
             advanced_max_ports=_opt_int(data, "advanced_max_ports", 1, 1024, 0),
             max_deadline_seconds=_opt_int(data, "max_deadline_seconds", 60, 86_400, 0),
+            ndr=NdrServerConfig.parse(data.get("ndr")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -120,4 +126,11 @@ class ServerConfig:
             "max_dns_queries": self.max_dns_queries,
             "advanced_max_ports": self.advanced_max_ports,
             "max_deadline_seconds": self.max_deadline_seconds,
+            **({"ndr": _ndr_json(self.ndr)} if self.ndr is not None else {}),
         }
+
+
+def _ndr_json(config: NdrServerConfig) -> dict[str, Any]:
+    data = dict(config.__dict__)
+    data["interfaces"] = list(config.interfaces)
+    return data

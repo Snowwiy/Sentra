@@ -45,6 +45,8 @@ JOB_LOCK_KEYS: dict[str, int] = {
     "vulnerability-sources": _BASE + 16,
     # Fase 6D: reconstrucción periódica de la topología de los sites.
     "topology-builder": _BASE + 17,
+    # Fase 7E.3: líneas base horarias y beaconing NDR (_BASE + 18 es el lock de herramientas).
+    "ndr-engine": _BASE + 19,
 }
 # Prueba histórica de reglas (Fase 5A): lock de transacción, no de job. Limita a una sola
 # prueba histórica concurrente en todo el despliegue para no saturar la base de datos.

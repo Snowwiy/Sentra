@@ -350,7 +350,7 @@ export function onUnauthorized(handler: (() => void) | undefined): void {
   unauthorizedHandler = handler;
 }
 
-type Method = "GET" | "POST" | "PATCH" | "DELETE";
+type Method = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
 interface RequestOptions {
   signal?: AbortSignal;
@@ -408,6 +408,11 @@ export function apiPost<T>(path: string, body?: unknown, options: RequestOptions
 
 export function apiPatch<T>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
   return request<T>("PATCH", path, body, options);
+}
+
+// Fase 7E: la aprobación de captura NDR reemplaza la configuración entera (PUT).
+export function apiPut<T>(path: string, body: unknown, options: RequestOptions = {}): Promise<T> {
+  return request<T>("PUT", path, body, options);
 }
 
 export function apiDelete<T>(path: string, options: RequestOptions = {}): Promise<T> {

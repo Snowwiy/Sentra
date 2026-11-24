@@ -34,6 +34,9 @@ NAMES_CAPABILITY = "network.discovery.names"
 # Fase 7A.4: el sensor sabe tomar huellas de servicio (DNS-SD, HTTP Server/título, sujeto
 # TLS) y acepta discovery_advanced v3. Sin ella recibe v2 (o v1), como hasta ahora.
 FINGERPRINT_CAPABILITY = "network.discovery.fingerprint"
+# Fase 7E.1: observación pasiva de red. No es un job: habilita el bloque `config.ndr` del
+# heartbeat y la ingesta POST /sensor/ndr/batches, siempre tras la aprobación de un admin.
+NDR_CAPABILITY = "network.ndr.passive"
 # Capacidades que el servidor reconoce. Lo que el sensor declare fuera de esta lista se
 # descarta (un sensor no puede "anunciar" capacidades para recibir trabajos que no existen).
 CAPABILITIES: frozenset[str] = frozenset(
@@ -42,6 +45,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         ADVANCED_CAPABILITY,
         NAMES_CAPABILITY,
         FINGERPRINT_CAPABILITY,
+        NDR_CAPABILITY,
         "network.arp",
         "network.icmp",
         "network.tcp",
@@ -59,7 +63,7 @@ REQUIRED_CAPABILITY = {
 }
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.7.0"
+SENSOR_RUNTIME_VERSION = "0.8.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

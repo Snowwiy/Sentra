@@ -1569,6 +1569,53 @@ def _threat_match(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     )
 
 
+_NDR_CONFIDENCE = {"suspicious": Conf.LOW, "probable": Conf.MEDIUM, "confirmed": Conf.HIGH}
+_NDR_SEVERITY = {
+    "informational": Sev.INFORMATIONAL,
+    "low": Sev.LOW,
+    "medium": Sev.MEDIUM,
+    "high": Sev.HIGH,
+    "critical": Sev.CRITICAL,
+}
+
+
+def _ndr_anomaly(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    """NET-NDR-001 (Fase 7E.4): una anomalía NDR atribuida a este activo.
+
+    La severidad es la de la anomalía; la confianza sale de su veredicto (suspicious = baja,
+    probable = media, confirmed = alta). Una detección por anomalía (clave ndr:<id>): si el
+    veredicto sube, la nueva señal amplía la misma detección dentro del cooldown.
+    """
+    verdict = str(_get(s, "verdict") or "suspicious")
+    # La técnica MITRE es la de la regla NDR que generó la anomalía (7E.5), no una fija.
+    tactic, technique = _get(s, "mitre_tactic"), _get(s, "mitre_technique")
+    mitre = (
+        Mitre(str(tactic), str(technique), _get(s, "mitre_subtechnique"))
+        if tactic and technique
+        else None
+    )
+    summary = (
+        f"{_get(s, 'rule_id') or 'NDR'} ({verdict}): {_get(s, 'summary') or ''}"
+        " Observado por un sensor pasivo de red; revisar la anomalía NDR para la evidencia."
+    )
+    return _single(
+        s,
+        _key(s.subject, "ndr:*"),
+        summary[:1000],
+        severity=_NDR_SEVERITY.get(str(_get(s, "severity")), Sev.MEDIUM),
+        confidence=_NDR_CONFIDENCE.get(verdict, Conf.LOW),
+        details={
+            "anomaly_id": _get(s, "anomaly_id"),
+            "ndr_rule_id": _get(s, "rule_id"),
+            "ndr_rule_title": _get(s, "rule_title"),
+            "verdict": verdict,
+            "subject_ip": _get(s, "subject_ip"),
+            "subject_mac": _get(s, "subject_mac"),
+        },
+        mitre=mitre,
+    )
+
+
 def _meta(**kwargs: Any) -> RuleMeta:
     return RuleMeta(**{"version": 1, "kind": SINGLE, **kwargs})
 
@@ -2495,6 +2542,34 @@ RULES: tuple[DetectionRule, ...] = (
             cooldown=timedelta(hours=24),
         ),
         _threat_match,
+    ),
+    SimpleRule(
+        _meta(
+            id="NET-NDR-001",
+            category="network",
+            title="Anomalía de red NDR en el activo",
+            description=(
+                "Un sensor NDR pasivo registró una anomalía (ARP, puerta de enlace, DHCP, DNS,"
+                " escaneo, movimiento lateral, comportamiento) atribuida a este activo, con"
+                " veredicto suspicious o superior."
+            ),
+            why=(
+                "La red ve lo que el agente no: suplantaciones, escaneos o exfiltración desde"
+                " el equipo. La anomalía conserva la evidencia y el veredicto de la regla NDR;"
+                " esta detección la lleva al riesgo, las alertas y los incidentes."
+            ),
+            severity=Sev.MEDIUM,
+            confidence=Conf.LOW,
+            triggers=frozenset({SignalKind.NDR_ANOMALY}),
+            required_data=("Sensor NDR aprobado (Fase 7E) y el activo inventariado en su site",),
+            recommendations=(
+                "Abrir la anomalía NDR enlazada y revisar su evidencia y su veredicto.",
+                "Seguir las recomendaciones de la regla NDR correspondiente.",
+                "Si es legítimo, marcar la anomalía como falso positivo con una nota.",
+            ),
+            cooldown=timedelta(hours=24),
+        ),
+        _ndr_anomaly,
     ),
 )
 

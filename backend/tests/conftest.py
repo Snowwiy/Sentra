@@ -204,6 +204,17 @@ os.environ["AI_MAX_PROMPT_CHARS"] = "24000"
 os.environ["AI_CONSOLE_MAX_EXECUTIONS"] = "6"
 # 7C-Fix2: sin reasoning_effort por defecto (Jesus lo usa con llama.cpp en su .env).
 os.environ["AI_REASONING_EFFORT"] = ""
+# Fase 7E: NDR con sus valores por defecto (un .env de desarrollo con otros límites o
+# retenciones cambiaría lo que comprueban los tests de ingesta y purga).
+os.environ["NDR_INGEST_MAX_PER_MINUTE"] = "120"
+os.environ["NDR_MAX_RECORDS_PER_BATCH"] = "1000"
+os.environ["NDR_FLOW_RETENTION_DAYS"] = "7"
+os.environ["NDR_OBSERVATION_RETENTION_DAYS"] = "30"
+os.environ["NDR_BATCH_RETENTION_DAYS"] = "7"
+os.environ["NDR_ANOMALY_RETENTION_DAYS"] = "180"
+os.environ["NDR_BINDING_RETENTION_DAYS"] = "30"
+os.environ["NDR_ENGINE_INTERVAL_SECONDS"] = "300"
+os.environ["NDR_BASELINE_MIN_SAMPLES"] = "24"
 
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
@@ -363,7 +374,9 @@ def client(engine: Engine) -> Iterator[TestClient]:
                 " reports, site_networks, sensor_enrollment_tokens, sensors,"
                 " network_devices, snmp_credential_profiles, wlan_observations,"
                 " wlan_agent_reports, wlan_clients, wlan_bss, wlan_access_points,"
-                " wlan_configured_networks"
+                " wlan_configured_networks,"
+                " ndr_protocol_observations, ndr_flows, ndr_batches, ndr_capture_configs,"
+                " ndr_anomalies, ndr_ip_mac_bindings, ndr_baselines, ndr_engine_cursors"
                 " RESTART IDENTITY CASCADE"
             )
         )

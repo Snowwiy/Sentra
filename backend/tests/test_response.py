@@ -539,7 +539,7 @@ def test_builtin_playbooks_are_low_risk_and_runnable_by_analyst(
     items = _ok(client.get(f"{R}/playbooks"))["items"]
     builtins = {p["key"]: p for p in items if p["builtin"]}
     assert set(builtins) == {"investigate_endpoint", "refresh_asset_analysis",
-                             "investigate_detection"}  # fmt: skip
+                             "investigate_detection", "investigate_network_anomaly"}  # fmt: skip
     assert all(p["risk_level"] == "low" and p["required_role"] == "analyst"
                for p in builtins.values())  # fmt: skip
     authenticate(client, engine, "analyst")

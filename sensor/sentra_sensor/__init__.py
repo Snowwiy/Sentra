@@ -4,7 +4,7 @@
 
 from sentra_sensor import snmp as _snmp
 
-__version__ = "0.7.0"
+__version__ = "0.8.0"
 
 # Capacidades realmente implementadas. Se declaran al servidor en enroll y heartbeat; no se
 # anuncia nada que el sensor no sepa hacer. Wi-Fi (6C.3) solo como inventario SNMP de lectura

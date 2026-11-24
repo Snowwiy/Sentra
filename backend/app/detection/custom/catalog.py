@@ -522,6 +522,67 @@ _SOURCES: tuple[LogSource, ...] = (
     ),
 )
 
+# Fase 7E.5: logsources de red pasiva (sensores NDR). Se añaden aparte para no mezclar con
+# los del agente; el motor no distingue: son señales por activo como las demás.
+_NDR_SOURCES = (
+    LogSource(
+        name="ndr_anomaly",
+        title="Anomalías NDR (señales)",
+        kinds=_kinds(SignalKind.NDR_ANOMALY),
+        channel=None,
+        platforms=("network",),
+        support=Support.SUPPORTED,
+        fields=_signal_fields(
+            _f("ndr.rule_id", "rule_id", "Regla NDR (NDR-ARP-001, NDR-SCAN-001...)."),
+            _f("ndr.category", "category", "Categoría de la regla (arp, dns, scan...)."),
+            _f(
+                "ndr.verdict",
+                "verdict",
+                "Veredicto de la anomalía.",
+                values=("suspicious", "probable", "confirmed"),
+            ),
+            _f(
+                "ndr.severity",
+                "severity",
+                "Severidad de la anomalía.",
+                values=("low", "medium", "high", "critical"),
+            ),
+            _f("ndr.subject_ip", "subject_ip", "IP del sujeto de la anomalía."),
+            _f("ndr.subject_mac", "subject_mac", "MAC del sujeto de la anomalía."),
+            kinds=_kinds(SignalKind.NDR_ANOMALY),
+        ),
+        notes=(
+            "Anomalías de los sensores NDR atribuidas a un activo, con veredicto suspicious o"
+            " superior (una señal por escalón de veredicto). Las 'observed' no llegan."
+        ),
+    ),
+    LogSource(
+        name="ndr_dns",
+        title="Consultas DNS observadas por NDR (señales)",
+        kinds=_kinds(SignalKind.NDR_DNS),
+        channel=None,
+        platforms=("network",),
+        support=Support.PARTIAL,
+        fields=_signal_fields(
+            _f("dns.query", "qname", "Nombre consultado (minúsculas)."),
+            _f("dns.query_type", "qtype", "Tipo de registro (A, AAAA, TXT...)."),
+            _f("dns.client_ip", "client_ip", "IP del equipo que consulta."),
+            _f("dns.resolver_ip", "resolver_ip", "IP del resolvedor."),
+            _f("dns.rcode", "rcode", "Código de respuesta más frecuente (noerror, nxdomain...)."),
+            _f("dns.queries", "queries", "Consultas agregadas en la ventana.", INT),
+            kinds=_kinds(SignalKind.NDR_DNS),
+        ),
+        notes=(
+            "Consultas DNS en claro (UDP/TCP 53) vistas por un sensor NDR con metadatos DNS"
+            " aprobados, desde equipos inventariados del site. Agregadas por ventana de"
+            " exportación (no una por paquete); sin DoH/DoT ni respuestas completas. Solo se"
+            " registran mientras haya alguna regla activa de este logsource."
+        ),
+        sigma_hint="category: dns (parcial)",
+    ),
+)
+_SOURCES = (*_SOURCES, *_NDR_SOURCES)
+
 LOGSOURCES: dict[str, LogSource] = {source.name: source for source in _SOURCES}
 # Canal de Windows -> logsource de eventos (para el filtro de la ingesta).
 EVENT_LOGSOURCE_BY_CHANNEL: dict[str, str] = {
@@ -554,6 +615,8 @@ DEFAULT_CATEGORY: dict[str, str] = {
     "discovery": "network",
     "antimalware": "defense",
     "audit": "defense",
+    "ndr_anomaly": "network",
+    "ndr_dns": "network",
 }
 
 

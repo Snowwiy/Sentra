@@ -30,6 +30,7 @@ from app.services.background import (
     purge_old_data,
     run_asset_cleanup,
     run_detection_engine,
+    run_ndr_engine,
     run_network_maintenance,
     run_report_worker,
     run_response_engine,
@@ -152,6 +153,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 run_sensor_maintenance,
             )
         )
+        # Fase 7E.3: líneas base y beaconing NDR (0 = desactivado).
+        if settings.ndr_engine_interval_seconds:
+            jobs.append(
+                PeriodicJob("ndr-engine", settings.ndr_engine_interval_seconds, run_ndr_engine)
+            )
         # Fase 6B: solo si hay consultas periódicas o retención del historial de red (opt-in).
         if settings.snmp_poll_interval_minutes or settings.snmp_history_retention_days:
             jobs.append(
@@ -293,6 +299,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     )
     app.state.sensor_poll_limiter = make_limiter(
         backend, "sensor_poll", settings.sensor_poll_max_per_minute, 60, get_engine
+    )
+    # Fase 7E.1: lotes NDR por sensor (el sensor reintenta desde su spool con Retry-After).
+    app.state.sensor_ndr_limiter = make_limiter(
+        backend, "sensor_ndr", settings.ndr_ingest_max_per_minute, 60, get_engine
     )
     # Fase 5A: pruebas históricas de reglas por usuario (además del lock global de 1 a la vez).
     app.state.rule_test_limiter = make_limiter(

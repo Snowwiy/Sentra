@@ -91,6 +91,8 @@ const reportsFallback = <LoadingState label="Cargando informes…" />;
 // Fase 5F: sites y sensores distribuidos en su propio chunk.
 const SitesPage = lazy(() => import("./pages/SitesPage").then((m) => ({ default: m.SitesPage })));
 const SensorsPage = lazy(() => import("./pages/SensorsPage").then((m) => ({ default: m.SensorsPage })));
+// Fase 7E: Network Detection & Response.
+const NdrPage = lazy(() => import("./pages/NdrPage").then((m) => ({ default: m.NdrPage })));
 // Fase 6B: infraestructura de red (SNMP / LLDP / CDP) en su propio chunk.
 const InfrastructurePage = lazy(() =>
   import("./pages/InfrastructurePage").then((m) => ({ default: m.InfrastructurePage })),
@@ -348,6 +350,16 @@ export function AppRoutes() {
               <RequirePermission permission="monitoring:read">
                 <Suspense fallback={incidentsFallback}>
                   <SitesPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="ndr"
+            element={
+              <RequirePermission permission="ndr:read">
+                <Suspense fallback={incidentsFallback}>
+                  <NdrPage />
                 </Suspense>
               </RequirePermission>
             }

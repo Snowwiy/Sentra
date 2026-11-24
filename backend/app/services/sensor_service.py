@@ -95,6 +95,7 @@ from app.models.site import (
     SensorObservation,
     Site,
 )
+from app.ndr.config import sensor_ndr_config
 from app.network.catalog import SNMP_JOB_TYPE
 from app.schemas.network_protocol import SnmpJobCredentials, SnmpRecord
 from app.schemas.site import (
@@ -429,6 +430,8 @@ def _config(session: Session, settings: Settings, sensor: Sensor, site: Site) ->
         and _version_status(sensor, settings) != "unsupported"
     )
     return SensorConfig(
+        # Fase 7E.1: captura pasiva aprobada (None para sensores sin la capacidad).
+        ndr=sensor_ndr_config(session, settings, sensor, jobs_enabled),
         site_id=site.public_id,
         site_name=site.name,
         allowed_networks=enabled_networks(session, site.id) if jobs_enabled else [],
@@ -1146,6 +1149,10 @@ class SensorProtocol:
             if body.last_successful_job_at
             else None,
         }
+        if body.ndr is not None:
+            # Fase 7E.1: estado de la captura NDR ya validado (alias, contadores, estados
+            # enumerados); nunca nombres de dispositivo.
+            sensor.health["ndr"] = body.ndr.model_dump(mode="json")
         if body.sent_at is not None:
             sensor.clock_skew_seconds = int((body.sent_at - now).total_seconds())
         sensor.last_seen_at = now

@@ -71,6 +71,16 @@ from app.models.incident import (
 from app.models.ingest_quota import IngestQuotaBucket
 from app.models.inventory import AssetInventory
 from app.models.isolation import IsolationSession
+from app.models.ndr import (
+    NdrAnomaly,
+    NdrBaseline,
+    NdrBatch,
+    NdrCaptureConfig,
+    NdrEngineCursor,
+    NdrFlow,
+    NdrIpMacBinding,
+    NdrProtocolObservation,
+)
 from app.models.network import (
     NetworkDevice,
     NetworkDevicePoll,
@@ -218,6 +228,14 @@ __all__ = [
     "MaintenanceArtifact",
     "MaintenanceOperation",
     "MonitoringMethod",
+    "NdrAnomaly",
+    "NdrBaseline",
+    "NdrBatch",
+    "NdrCaptureConfig",
+    "NdrEngineCursor",
+    "NdrFlow",
+    "NdrIpMacBinding",
+    "NdrProtocolObservation",
     "NetworkChange",
     "NetworkControlRequest",
     "NetworkDevice",

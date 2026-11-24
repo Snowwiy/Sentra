@@ -80,6 +80,22 @@ administrativa: [docs/discovery.md](discovery.md).
 Payloads and error format: [docs/agent-protocol.md](agent-protocol.md). Interactive docs at
 `/docs` in development.
 
+## Fase 7E (server 0.8.0)
+
+Network Detection & Response. Detalle, permisos y ejemplos en
+[fase-7e.md](fase-7e.md) y [fase-7e-architecture.md](fase-7e-architecture.md).
+
+- Sensor: `POST /sensor/ndr/batches` (credencial del sensor, cuota por minuto, 429 con
+  `Retry-After`).
+- `GET /ndr/overview`, `GET /ndr/sensors`, `GET /ndr/rules`, `GET /ndr/anomalies`,
+  `GET /ndr/anomalies/{id}`, `GET /ndr/anomalies/{id}/response-plan` (`ndr:read`).
+- `PUT /ndr/sensors/{sensor_id}/config` (`ndr:manage`, concurrencia por `expected_revision`).
+- `GET /ndr/flows`, `GET /ndr/observations`, `GET /ndr/bindings` (`ndr:evidence`).
+- `POST /ndr/anomalies/{id}/status` (`ndr:triage`; cerrar exige `note`).
+- `POST /ndr/anomalies/{id}/network-controls` (`ndr:read` + `incidents:manage`): registra
+  una sugerencia del plan como control `pending_approval` en un incidente.
+- Response: acción `collect_ndr_context` y playbook integrado `investigate_network_anomaly`.
+
 ## Fase 7D.2 (server 0.7.1)
 
 Sin endpoints nuevos. Cambios aditivos en las rutas de ingesta de agentes:

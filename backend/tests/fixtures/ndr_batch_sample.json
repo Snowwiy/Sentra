@@ -1,0 +1,208 @@
+{
+ "arp": [
+  {
+   "count": 1,
+   "eth_src_mac": "02:00:00:00:00:0a",
+   "first_seen": "2027-01-15T08:00:02+00:00",
+   "gratuitous": false,
+   "last_seen": "2027-01-15T08:00:02+00:00",
+   "operation": "request",
+   "sender_ip": "10.50.0.5",
+   "sender_mac": "02:00:00:00:00:0a",
+   "target_ip": "10.50.0.1",
+   "unsolicited": 0,
+   "vlan": null
+  },
+  {
+   "count": 1,
+   "eth_src_mac": "02:00:00:00:00:01",
+   "first_seen": "2027-01-15T08:00:02.010000+00:00",
+   "gratuitous": false,
+   "last_seen": "2027-01-15T08:00:02.010000+00:00",
+   "operation": "reply",
+   "sender_ip": "10.50.0.1",
+   "sender_mac": "02:00:00:00:00:01",
+   "target_ip": "10.50.0.5",
+   "unsolicited": 0,
+   "vlan": null
+  }
+ ],
+ "backend": "pcap_file",
+ "batch_id": "00000000-0000-4000-8000-000000000001",
+ "config_revision": 0,
+ "dhcp": [
+  {
+   "client_mac": "02:00:00:00:00:0a",
+   "count": 1,
+   "dns_servers": [
+    "10.50.0.53"
+   ],
+   "first_seen": "2027-01-15T08:00:03+00:00",
+   "last_seen": "2027-01-15T08:00:03+00:00",
+   "message_type": "offer",
+   "routers": [
+    "10.50.0.1"
+   ],
+   "server_ip": "10.50.0.1",
+   "server_mac": "02:00:00:00:00:01",
+   "vlan": null,
+   "your_ip": "10.50.0.5"
+  }
+ ],
+ "dns": [
+  {
+   "answers": [
+    "10.50.0.20"
+   ],
+   "client_ip": "10.50.0.5",
+   "count": 2,
+   "first_seen": "2027-01-15T08:00:01+00:00",
+   "last_seen": "2027-01-15T08:00:01.010000+00:00",
+   "min_ttl": 300,
+   "qname": "files.example",
+   "qtype": "A",
+   "queries": 1,
+   "rcodes": {
+    "noerror": 1
+   },
+   "resolver_ip": "10.50.0.53",
+   "responses": 1,
+   "transport": "udp",
+   "vlan": null
+  }
+ ],
+ "flows": [
+  {
+   "app_hints": [
+    "tls"
+   ],
+   "bytes_in": 108,
+   "bytes_out": 239,
+   "dst_ip": "10.50.0.9",
+   "dst_mac": "02:00:00:00:00:0b",
+   "dst_port": 443,
+   "final": false,
+   "first_seen": "2027-01-15T08:00:00+00:00",
+   "flags": [],
+   "fragments": 0,
+   "icmp_type": null,
+   "ip_version": 4,
+   "last_seen": "2027-01-15T08:00:00.600000+00:00",
+   "packets_in": 2,
+   "packets_out": 3,
+   "retransmissions": 0,
+   "segment": 0,
+   "src_ip": "10.50.0.5",
+   "src_mac": "02:00:00:00:00:0a",
+   "src_port": 50000,
+   "state": "closed",
+   "tcp_flags_in": 19,
+   "tcp_flags_out": 27,
+   "transport": "tcp",
+   "uid": "29bc8585cdf103c9496f4825c8701f08",
+   "vlan": null
+  },
+  {
+   "app_hints": [
+    "dns"
+   ],
+   "bytes_in": 89,
+   "bytes_out": 73,
+   "dst_ip": "10.50.0.53",
+   "dst_mac": "02:00:00:00:00:0b",
+   "dst_port": 53,
+   "final": false,
+   "first_seen": "2027-01-15T08:00:01+00:00",
+   "flags": [],
+   "fragments": 0,
+   "icmp_type": null,
+   "ip_version": 4,
+   "last_seen": "2027-01-15T08:00:01.010000+00:00",
+   "packets_in": 1,
+   "packets_out": 1,
+   "retransmissions": 0,
+   "segment": 0,
+   "src_ip": "10.50.0.5",
+   "src_mac": "02:00:00:00:00:0a",
+   "src_port": 40000,
+   "state": "open",
+   "tcp_flags_in": 0,
+   "tcp_flags_out": 0,
+   "transport": "udp",
+   "uid": "e5fc25e632ab898baa5d968ab95c0266",
+   "vlan": null
+  },
+  {
+   "app_hints": [
+    "dhcp"
+   ],
+   "bytes_in": 312,
+   "bytes_out": 0,
+   "dst_ip": "10.50.0.1",
+   "dst_mac": "02:00:00:00:00:01",
+   "dst_port": 67,
+   "final": false,
+   "first_seen": "2027-01-15T08:00:03+00:00",
+   "flags": [
+    "asymmetric"
+   ],
+   "fragments": 0,
+   "icmp_type": null,
+   "ip_version": 4,
+   "last_seen": "2027-01-15T08:00:03+00:00",
+   "packets_in": 1,
+   "packets_out": 0,
+   "retransmissions": 0,
+   "segment": 0,
+   "src_ip": "255.255.255.255",
+   "src_mac": "ff:ff:ff:ff:ff:ff",
+   "src_port": 68,
+   "state": "open",
+   "tcp_flags_in": 0,
+   "tcp_flags_out": 0,
+   "transport": "udp",
+   "uid": "d375ff52c5285eba82f6a1e230620799",
+   "vlan": null
+  }
+ ],
+ "interface": "replay",
+ "part": 0,
+ "parts": 1,
+ "stats": {
+  "budget_dropped": 0,
+  "bytes_seen": 905,
+  "capture_state": "degraded",
+  "cpu_percent": 56.7,
+  "degraded_reasons": [
+   "cpu_budget"
+  ],
+  "est_memory_kb": 2,
+  "export_failures": 0,
+  "flows_active": 0,
+  "flows_evicted": 0,
+  "flows_exported": 3,
+  "interface_dropped": 0,
+  "kernel_dropped": 0,
+  "malformed": 0,
+  "observations_overflow": 0,
+  "packets_processed": 10,
+  "packets_seen": 10,
+  "pps_budget": 5000000,
+  "truncated": 0,
+  "unattributed_fragments": 0,
+  "unsupported": 0
+ },
+ "tls": [
+  {
+   "client_ip": "10.50.0.5",
+   "count": 1,
+   "first_seen": "2027-01-15T08:00:00.020000+00:00",
+   "last_seen": "2027-01-15T08:00:00.020000+00:00",
+   "server_ip": "10.50.0.9",
+   "server_port": 443,
+   "sni": "intranet.example"
+  }
+ ],
+ "window_end": "2026-11-24T03:13:55.114493+00:00",
+ "window_start": "2026-11-24T03:13:55.113997+00:00"
+}

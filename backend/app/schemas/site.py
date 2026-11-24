@@ -17,6 +17,7 @@ from pydantic import AwareDatetime, Field, field_validator
 
 from app.discovery.probes import normalize_mac
 from app.schemas.common import RequestModel, ResponseModel
+from app.schemas.ndr import NdrHealthIn, SensorNdrConfig
 from app.schemas.network_protocol import SnmpJobCredentials, SnmpJobSummary, SnmpRecord
 
 SiteStatus = Literal["active", "disabled", "archived"]
@@ -257,6 +258,9 @@ class SensorConfig(ResponseModel):
     max_dns_queries: int
     advanced_max_ports: int
     max_deadline_seconds: int
+    # Fase 7E.1: solo para sensores que declaran network.ndr.passive. Un sensor anterior no
+    # recibe la clave (null) y uno 0.8.0 solo envía su estado NDR si la recibe.
+    ndr: SensorNdrConfig | None = None
 
 
 class SensorEnrollRequest(RequestModel):
@@ -300,6 +304,7 @@ class SensorHeartbeatRequest(RequestModel):
     uptime_seconds: int | None = Field(default=None, ge=0, le=10 * 365 * 86_400)
     last_successful_job_at: AwareDatetime | None = None
     sent_at: AwareDatetime | None = None
+    ndr: NdrHealthIn | None = None
 
     @field_validator("capabilities")
     @classmethod

@@ -169,6 +169,17 @@ class Permission(enum.StrEnum):
     # Solo admin: cambia la identidad de un dispositivo; las sugerencias se leen con
     # monitoring:read y nunca se aplican solas.
     IDENTITY_MANAGE = "identity:manage"
+    # Fase 7E: Network Detection & Response, separado de monitoring:read porque los flujos
+    # y los metadatos DNS/SNI dicen con quién habla cada equipo. ndr:read: estado de la
+    # captura y agregados (volúmenes, protocolos, salud de sensores), sin detalle por flujo.
+    NDR_READ = "ndr:read"
+    # Detalle de evidencia: flujos, consultas DNS, SNI, ARP y DHCP individuales. Analyst.
+    NDR_EVIDENCE = "ndr:evidence"
+    # Fase 7E.2: triaje de anomalías NDR (reconocer, resolver, falso positivo). Analyst.
+    NDR_TRIAGE = "ndr:triage"
+    # Aprobar o cambiar qué interfaces captura un sensor y con qué metadatos: decide qué se
+    # observa de la red de un site. Solo admin, siempre auditado.
+    NDR_MANAGE = "ndr:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -183,6 +194,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.RESPONSE_READ,
             Permission.REPORTS_READ,
             Permission.TOOLS_READ,
+            Permission.NDR_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -215,6 +227,9 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.CONTAINMENT_PREVIEW,
             Permission.TOOLS_READ,
             Permission.TOOLS_EXECUTE,
+            Permission.NDR_READ,
+            Permission.NDR_EVIDENCE,
+            Permission.NDR_TRIAGE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

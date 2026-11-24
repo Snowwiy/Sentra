@@ -60,6 +60,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { to: "/vulnerabilities", label: "Vulnerabilidades", icon: "vulnerability", permission: "vulnerabilities:read" },
       { to: "/threat-intel", label: "Inteligencia", icon: "intel", permission: "threat_intel:read" },
+      // Fase 7E: detección pasiva de red (sensores NDR aprobados).
+      { to: "/ndr", label: "Red (NDR)", icon: "sensor", permission: "ndr:read" },
       {
         to: "/detections/rules",
         label: "Reglas",

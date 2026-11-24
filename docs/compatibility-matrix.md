@@ -1,3 +1,23 @@
+# Matriz de compatibilidad (Fase 7E, Sentra 0.8.0)
+
+Servidor, frontend y sensor 0.8.0; agente 0.7.1 sin cambios. Migraciones 0053-0056 (cabeza
+0056). Detalle en docs/fase-7e.md.
+
+| Componente | Versión 7E | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.8.0 | Sí | NDR: ingesta de lotes, anomalías, correlación, TI, Sigma DNS, plan de respuesta |
+| Frontend | 0.8.0 | Sí | Página "Red (NDR)" |
+| Agente | 0.7.1 | No | NDR no usa el agente |
+| Sensor | 0.8.0 | Sí | Captura pasiva opcional (`[ndr]`), apagada por defecto |
+
+| Cliente | Servidor 0.7.1 | Servidor 0.8.0 |
+| --- | --- | --- |
+| Sensor 0.7.0 | Completo | Completo, sin NDR (no declara la capacidad) |
+| Sensor 0.8.0 | Completo, sin NDR: el servidor no envía configuración NDR y el sensor no captura | Completo |
+| Frontend 0.7.1 | Completo | Compatible: no muestra NDR |
+| Frontend 0.8.0 | La página NDR recibe 404 | Completo |
+| Agente 0.7.1 | Completo | Completo |
+
 # Matriz de compatibilidad (Fase 7D.2, Sentra 0.7.1)
 
 Servidor, frontend y agente 0.7.1; sensor 0.7.0 sin cambios. Migración 0052 (cabeza 0052).

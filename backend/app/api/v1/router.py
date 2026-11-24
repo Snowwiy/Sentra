@@ -31,6 +31,7 @@ from app.api.v1.routes import (
     isolation,
     lookup,
     metrics,
+    ndr,
     network,
     processes,
     reports,
@@ -98,6 +99,7 @@ api_router.include_router(sensors.router, responses=_COMMON)
 api_router.include_router(sensor_protocol.router, responses=_COMMON)
 api_router.include_router(network.router, responses=_COMMON)
 api_router.include_router(wlan.router, responses=_COMMON)
+api_router.include_router(ndr.router, responses=_COMMON)
 api_router.include_router(topology.router, responses=_COMMON)
 api_router.include_router(topology_history.router, responses=_COMMON)
 api_router.include_router(dhcp.router, responses=_COMMON)
