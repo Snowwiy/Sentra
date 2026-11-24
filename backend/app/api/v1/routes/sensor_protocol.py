@@ -20,6 +20,9 @@ from app.api.deps import AgentToken, AppSettings, DbSession, Thresholds
 from app.api.responses import error_responses
 from app.core.exceptions import RateLimitedError
 from app.core.rate_limit import Limiter
+from app.ndr.analysis import ndr_analyzers
+from app.ndr.ingest import NdrIngest
+from app.schemas.ndr import NdrBatchAccepted, NdrBatchIn
 from app.schemas.site import (
     SensorEnrollRequest,
     SensorEnrollResponse,
@@ -146,3 +149,22 @@ def rotate_credential(
 ) -> SensorRotateResponse:
     sensor = protocol.authenticate(credential, allow_disabled=False)
     return protocol.rotate(sensor, client_ip(request))
+
+
+@router.post(
+    "/ndr/batches",
+    response_model=NdrBatchAccepted,
+    responses=error_responses(401, 403, 413, 422, 429),
+)
+def ndr_batch(
+    body: NdrBatchIn,
+    request: Request,
+    protocol: Protocol,
+    session: DbSession,
+    settings: AppSettings,
+    credential: Credential,
+) -> NdrBatchAccepted:
+    """Fase 7E.1: lote de observación pasiva (flujos y metadatos). Ver app/ndr/ingest.py."""
+    sensor = protocol.authenticate(credential, allow_disabled=False)
+    _limit(request, "sensor_ndr_limiter", str(sensor.public_id), "sensor_ndr")
+    return NdrIngest(session, settings, ndr_analyzers()).process(sensor, body)

@@ -59,3 +59,22 @@ dhcp_max_file_kb = 4096
 # name = "dc01-dhcp"
 # path = "C:/ProgramData/Sentra/DhcpExport/leases.csv"
 # format = "windows_dhcp_csv"
+
+# --- Fase 7E (sensor 0.8.0): observación pasiva de red (NDR) -----------------------------
+# Desactivada por defecto. Doble control: aquí se declaran las interfaces (alias -> dispositivo)
+# y un admin de Sentra aprueba por ALIAS cuáles se capturan; el servidor nunca envía nombres de
+# dispositivo, filtros BPF ni comandos. Solo lectura pasiva: sin inyección, sin descifrado TLS
+# y sin guardar payloads (solo metadatos de flujos, ARP, DHCP y, si se aprueban, DNS/SNI).
+# Requisitos: Linux CAP_NET_RAW (packaging/linux/sentra-sensor-ndr.conf); Windows Npcap
+# instalado por el operador; macOS libpcap del sistema con acceso a /dev/bpf*.
+# Comprobar con `sentra-sensor ndr-check`. Ver docs/fase-7e.md.
+#
+# [ndr]
+# enabled = true
+# backend = "auto"        # auto | af_packet | libpcap
+# spool_max_mb = 256      # spool propio (ndr-spool.sqlite3), separado del de jobs
+# buffer_kb = 4096        # búfer de recepción del socket AF_PACKET
+#
+# [[ndr.interfaces]]
+# name = "lan"            # alias que ve el servidor: ^[a-z0-9_-]{1,32}$
+# device = "eth1"         # Windows: \Device\NPF_{GUID} (ver `sentra-sensor ndr-check`)

@@ -18,6 +18,33 @@ TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "t
 
 # TypeScript interface -> OpenAPI schema (response models only).
 INTERFACES = {
+    # Fase 7E: Network Detection & Response.
+    "NdrCaptureConfigRead": "NdrCaptureConfigRead",
+    "NdrInterfaceHealth": "NdrInterfaceHealth",
+    "NdrSensorRead": "NdrSensorRead",
+    "NdrSensorList": "NdrSensorList",
+    "NdrProtocolCount": "NdrProtocolCount",
+    "NdrTalker": "NdrTalker",
+    "NdrOverview": "NdrOverview",
+    "NdrFlowRead": "NdrFlowRead",
+    "NdrFlowList": "NdrFlowList",
+    "NdrObservationRead": "NdrObservationRead",
+    "NdrObservationList": "NdrObservationList",
+    "NdrMitreRead": "NdrMitreRead",
+    "NdrRuleRead": "NdrRuleRead",
+    "NdrRuleList": "NdrRuleList",
+    "NdrAssetRef": "NdrAssetRef",
+    "NdrSwitchLocation": "NdrSwitchLocation",
+    "NdrDetectionRef": "NdrDetectionRef",
+    "NdrIncidentRef": "NdrIncidentRef",
+    "NdrAnomalyContext": "NdrAnomalyContext",
+    "NdrAnomalyRead": "NdrAnomalyRead",
+    "NdrAnomalyList": "NdrAnomalyList",
+    "NdrBindingRead": "NdrBindingRead",
+    "NdrBindingList": "NdrBindingList",
+    "NdrResponseSuggestion": "NdrResponseSuggestion",
+    "NdrResponsePlan": "NdrResponsePlan",
+    "NdrControlRequest": "NdrControlRequest",
     # Fase 7B: atribución, identidad de dispositivos y Analyst Console.
     "MaintenanceArtifactRead": "MaintenanceArtifactRead",
     "MaintenanceOperationRead": "MaintenanceOperationRead",

@@ -191,4 +191,19 @@ BUILTIN_PLAYBOOKS: tuple[BuiltinPlaybook, ...] = (
             {"action_id": "collect_response_bundle"},
         ),
     ),
+    BuiltinPlaybook(
+        key="investigate_network_anomaly",
+        version=1,
+        name="Investigar anomalía de red",
+        description="Contexto NDR del activo (anomalías, flujos, nombres DNS/SNI), timeline,"
+        " reevaluación de detecciones, recálculo de riesgo y resumen de evidencia. Solo"
+        " lectura y reevaluaciones: no bloquea nada en la red.",
+        steps=(
+            {"action_id": "collect_ndr_context"},
+            {"action_id": "collect_timeline"},
+            {"action_id": "reevaluate_detections"},
+            {"action_id": "recalculate_risk"},
+            {"action_id": "collect_response_bundle"},
+        ),
+    ),
 )

@@ -350,6 +350,19 @@ def run_sensor_maintenance() -> None:
         schedule_due_reads(session, get_settings())
 
 
+def run_ndr_engine() -> None:
+    """Fase 7E.3: agrega las horas completas de flujos NDR contra las líneas base por equipo y
+    busca beaconing. Solo lee flujos ya guardados; sin sensores NDR no hay nada que hacer."""
+    from app.ndr.engine import run_ndr_engine as evaluate
+
+    with get_sessionmaker()() as session:
+        result = evaluate(session, get_settings())
+    if result["beacons"]:
+        logger.info(
+            "ndr engine", extra={"ndr_hours": result["hours"], "ndr_beacons": result["beacons"]}
+        )
+
+
 def run_network_maintenance() -> None:
     """Fase 6B: encola las consultas SNMP periódicas vencidas (SNMP_POLL_INTERVAL_MINUTES) y
     aplica la retención opt-in del historial de red (SNMP_HISTORY_RETENTION_DAYS) y, desde la

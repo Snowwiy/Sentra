@@ -17,6 +17,7 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "reports:read",
     // Fase 7A: ver el catálogo de herramientas del analista.
     "tools:read",
+    "ndr:read",
   ],
   analyst: [
     "monitoring:read",
@@ -47,6 +48,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // Fase 7A: ver y ejecutar herramientas del analista.
     "tools:read",
     "tools:execute",
+    "ndr:read",
+    "ndr:evidence",
+    "ndr:triage",
   ],
   admin: [
     "monitoring:read",
@@ -104,6 +108,11 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // Fase 7B: operaciones de mantenimiento y asociaciones manuales de identidad (solo admin).
     "maintenance:manage",
     "identity:manage",
+    // Fase 7E: NDR (agregados, evidencia y aprobación de captura).
+    "ndr:read",
+    "ndr:evidence",
+    "ndr:triage",
+    "ndr:manage",
   ],
 };
 

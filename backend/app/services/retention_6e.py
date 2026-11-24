@@ -13,12 +13,15 @@ from sqlalchemy.orm import Session
 from app.core.config import Settings
 from app.dhcp.service import purge_dhcp
 from app.endpoint.service import purge_endpoint
+from app.ndr.retention import ndr_retention_enabled, purge_ndr
 from app.topology.history_service import purge_topology_history
 
 
 def phase_6e_retention_enabled(settings: Settings) -> bool:
     """¿Hay alguna retención de 6E configurada? Decide si el job de retención se arranca
     aunque las retenciones opt-in de 4M estén todas apagadas."""
+    if ndr_retention_enabled(settings):
+        return True
     return any(
         days is not None
         for days in (
@@ -42,5 +45,7 @@ def purge_phase_6e(
     out.update(purge_topology_history(session, settings, now))
     out.update(purge_dhcp(session, settings, now))
     out.update(purge_endpoint(session, settings, now))
+    # Fase 7E: flujos y metadatos NDR (activos por defecto para acotar el crecimiento).
+    out.update(purge_ndr(session, settings, now))
     session.commit()
     return out

@@ -37,6 +37,8 @@ from sentra_sensor.jobs import (
 )
 from sentra_sensor.logs import register_secret
 from sentra_sensor.names import IdentityProber
+from sentra_sensor.ndr import NDR_CAPABILITY
+from sentra_sensor.ndr.pipeline import NdrManager
 from sentra_sensor.protocol import ProtocolError, ServerConfig
 from sentra_sensor.scanner import (
     IcmpProber,
@@ -49,7 +51,7 @@ from sentra_sensor.scanner import (
 )
 from sentra_sensor.snmp.collector import SnmpCollector, SnmpCredentials, SnmpReport
 from sentra_sensor.snmp.transport import SnmpTransport
-from sentra_sensor.spool import KIND_COMPLETE, KIND_RESULTS, Spool, SpoolItem
+from sentra_sensor.spool import KIND_COMPLETE, KIND_NDR, KIND_RESULTS, Spool, SpoolItem
 from sentra_sensor.state import (
     MODE_ACTIVE,
     MODE_DISABLED,
@@ -155,6 +157,8 @@ class SensorRunner:
         rng: random.Random | None = None,
         threaded_jobs: bool = True,
         snmp_transport: SnmpTransportFactory | None = None,
+        ndr_manager: NdrManager | None = None,
+        ndr_spool: Spool | None = None,
     ) -> None:
         self.config = config
         self._transport = transport
@@ -170,7 +174,20 @@ class SensorRunner:
         )
         # El runner solo cierra el spool que abre él (uno inyectado es de quien lo creó).
         self._owns_spool = spool is None
+        # Fase 7E.1: spool propio de NDR, solo si el operador del host habilitó NDR (sin NDR
+        # no se crea ningún fichero nuevo en el host).
+        self.ndr_spool: Spool | None = ndr_spool
+        self._owns_ndr_spool = False
         try:
+            if self.ndr_spool is None and config.ndr.enabled:
+                self.ndr_spool = Spool(
+                    config.ndr_spool_file(),
+                    max_bytes=config.ndr.spool_max_mb * 1024 * 1024,
+                    max_items=1_000_000,
+                    max_age_seconds=24 * 3600,
+                    clock=clock,
+                )
+                self._owns_ndr_spool = True
             self._probers = probers or ProberSet
             self._clock = clock
             self._rng = rng or random.Random()  # noqa: S311  (jitter, no criptografía)
@@ -194,11 +211,14 @@ class SensorRunner:
             self.pending_jobs = 0
             self.active: ActiveJob | None = None
             self.next_heartbeat_at = 0.0
+            self.ndr = ndr_manager or NdrManager(config.ndr, self._enqueue_ndr)
         except BaseException:
             # Si el resto del arranque falla (estado ilegible, cliente), la conexión SQLite
             # recién abierta no puede quedar viva hasta el GC.
             if self._owns_spool:
                 self.spool.close()
+            if self._owns_ndr_spool and self.ndr_spool is not None:
+                self.ndr_spool.close()
             raise
         self.next_poll_at = 0.0
         self._heartbeat_failures = 0
@@ -253,6 +273,13 @@ class SensorRunner:
     def wake(self) -> None:
         self._wake.set()
 
+    def _enqueue_ndr(self, interface: str, batch: dict[str, Any]) -> None:
+        """Llamado desde el hilo de captura: el spool serializa el acceso con su lock."""
+        if self.ndr_spool is None:
+            return
+        self.ndr_spool.enqueue(f"ndr:{interface}", KIND_NDR, batch, batch_id=batch.get("batch_id"))
+        self.wake()
+
     def stop(self) -> None:
         self._stopping.set()
         if self.active is not None:
@@ -289,6 +316,8 @@ class SensorRunner:
                 if active.thread is not None:
                     active.thread.join(timeout=30)
                 self._reap_job()
+            # Las capturas exportan lo pendiente al parar; queda en el spool de NDR.
+            self.ndr.stop()
             # Último intento de entregar lo pendiente; lo que no salga sigue en el spool.
             if self.mode == MODE_ACTIVE and self._server_reachable:
                 self.flush()
@@ -301,6 +330,8 @@ class SensorRunner:
     def close(self) -> None:
         """Libera los recursos locales del runner (la conexión del spool). Idempotente."""
         self.spool.close()
+        if self._owns_ndr_spool and self.ndr_spool is not None:
+            self.ndr_spool.close()
 
     def tick(self) -> float:
         """Una vuelta del bucle. Devuelve cuántos segundos dormir hasta la siguiente."""
@@ -331,6 +362,10 @@ class SensorRunner:
             spool_due = self.spool.next_attempt_time()
             if spool_due is not None:
                 candidates.append(max(spool_due, self._flush_not_before))
+            if self.ndr_spool is not None:
+                ndr_due = self.ndr_spool.next_attempt_time()
+                if ndr_due is not None:
+                    candidates.append(max(ndr_due, self._flush_not_before))
         return max(MIN_WAIT_SECONDS, min(candidates) - now)
 
     def _maybe_reload_identity(self) -> None:
@@ -360,7 +395,8 @@ class SensorRunner:
         body: dict[str, Any] = {
             **host_metadata(),
             "sensor_version": __version__,
-            "capabilities": list(CAPABILITIES),
+            "capabilities": list(CAPABILITIES)
+            + ([NDR_CAPABILITY] if self.config.ndr.enabled else []),
             # Trabajo pendiente: jobs con envíos en el spool + el que se está escaneando.
             "queue_depth": queued_jobs + (1 if self.active is not None else 0),
             "spool_items": stats.items,
@@ -370,6 +406,18 @@ class SensorRunner:
         }
         if self.state.last_successful_job_at:
             body["last_successful_job_at"] = self.state.last_successful_job_at
+        # Fase 7E.1: estado de NDR solo si el servidor lo entiende (envió un bloque ndr): un
+        # servidor anterior a 7E rechazaría la clave desconocida (422).
+        if self.server_config is not None and self.server_config.ndr is not None:
+            health = self.ndr.health()
+            if self.ndr_spool is not None:
+                ndr_stats = self.ndr_spool.stats()
+                health.update(
+                    spool_items=ndr_stats.items,
+                    spool_bytes=ndr_stats.bytes,
+                    spool_dropped=ndr_stats.dropped_total,
+                )
+            body["ndr"] = health
         return body
 
     def heartbeat(self) -> None:
@@ -385,6 +433,7 @@ class SensorRunner:
                 return
             self._heartbeat_failed(str(exc), exc.retry_after)
             return
+        self._apply_ndr(config, response.get("status"))
         recovered = self._heartbeat_failures > 0 or not self._server_reachable
         self._heartbeat_failures = 0
         self._server_reachable = True
@@ -434,6 +483,9 @@ class SensorRunner:
 
     def _handle_auth_error(self, exc: ApiError) -> bool:
         """401/403: cambia de modo, nunca descarta datos. Devuelve True si lo gestionó."""
+        if exc.status == 403 and exc.code in ("sensor_revoked", "sensor_disabled"):
+            # Revocado o deshabilitado: la captura se para (lo ya encolado se conserva).
+            self.ndr.apply(None)
         if exc.status == 403 and exc.code == "sensor_revoked":
             self.mode = MODE_REVOKED
             self._server_reachable = False
@@ -467,6 +519,16 @@ class SensorRunner:
             self.next_heartbeat_at = self._clock() + self._backoff(self._heartbeat_failures)
             return True
         return False
+
+    def _apply_ndr(self, config: ServerConfig, status: object) -> None:
+        # Un sensor deshabilitado no captura aunque la configuración NDR siga aprobada.
+        ndr = config.ndr if status != "disabled" else None
+        if ndr is not None and self.ndr_spool is not None:
+            # El servidor puede pedir menos disco o menos antigüedad que el host, nunca más.
+            local_mb = self.config.ndr.spool_max_mb
+            self.ndr_spool.max_bytes = min(local_mb, ndr.spool_max_mb) * 1024 * 1024
+            self.ndr_spool.max_age_seconds = ndr.spool_max_age_hours * 3600
+        self.ndr.apply(ndr)
 
     def _apply_config(self, config: ServerConfig) -> None:
         if config.site_id and config.site_id != self.identity.site_id:
@@ -961,4 +1023,42 @@ class SensorRunner:
                         "duplicate": response.get("duplicate"),
                     },
                 )
+        return delivered + self._flush_ndr()
+
+    def _flush_ndr(self) -> int:
+        """Envía los lotes de NDR vencidos. Misma política de errores que el spool de jobs,
+        salvo 403 ndr_not_authorized: la captura ya no está aprobada y esos datos no deben
+        conservarse ni reenviarse."""
+        spool = self.ndr_spool
+        if spool is None:
+            return 0
+        delivered = 0
+        while self._clock() >= self._flush_not_before:
+            item = spool.next_due()
+            if item is None:
+                break
+            try:
+                self.client.ndr_batch(item.payload)
+            except TransportError as exc:
+                delay = self._backoff(item.attempts + 1)
+                spool.defer(item.id, delay, str(exc))
+                self._flush_not_before = self._clock() + delay
+                break
+            except ApiError as exc:
+                if exc.status == 403 and exc.code == "ndr_not_authorized":
+                    spool.discard(item, exc.code)
+                    continue
+                if exc.status in (401, 403):
+                    self._handle_auth_error(exc)
+                    self._flush_not_before = self.next_heartbeat_at
+                    break
+                if exc.retryable:
+                    delay = self._backoff(item.attempts + 1, exc.retry_after)
+                    spool.defer(item.id, delay, str(exc))
+                    self._flush_not_before = self._clock() + delay
+                    break
+                spool.discard(item, exc.code or f"http_{exc.status}")
+                continue
+            spool.ack(item.id)
+            delivered += 1
         return delivered

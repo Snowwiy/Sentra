@@ -414,6 +414,23 @@ ACTIONS: dict[str, ActionDefinition] = {
             handler=handlers.collect_timeline,
         ),
         ActionDefinition(
+            id="collect_ndr_context",
+            name="Contexto de red (NDR)",
+            description="Anomalías NDR del activo, resumen de sus flujos con los interlocutores"
+            " de más volumen y nombres DNS/SNI consultados en la ventana (solo lectura).",
+            category="evidence",
+            scope="server",
+            target_type="asset",
+            risk_level="low",
+            # Flujos y nombres consultados son evidencia NDR: mismo permiso que su pestaña.
+            permissions=(_READ, Permission.NDR_READ, Permission.NDR_EVIDENCE),
+            params_model=LookbackParams,
+            expected_effect="Solo lectura: el resultado queda guardado como evidencia de la"
+            " ejecución.",
+            allow_archived=True,
+            handler=handlers.collect_ndr_context,
+        ),
+        ActionDefinition(
             id="collect_response_bundle",
             name="Resumen de respuesta",
             description="Resumen de evidencia del activo: estado, agente, riesgo, detecciones,"

@@ -29,7 +29,10 @@ logger = logging.getLogger("sentra_sensor.spool")
 
 KIND_RESULTS = "results"
 KIND_COMPLETE = "complete"
-KINDS = frozenset({KIND_RESULTS, KIND_COMPLETE})
+# Fase 7E.1: lotes de NDR. Van en un spool propio (ndr-spool.sqlite3) para que una avalancha
+# de flujos no desplace resultados de jobs; el "job_id" es la interfaz (ndr:<alias>).
+KIND_NDR = "ndr"
+KINDS = frozenset({KIND_RESULTS, KIND_COMPLETE, KIND_NDR})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (

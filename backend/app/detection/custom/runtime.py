@@ -382,6 +382,16 @@ def load_index(session: Session) -> CustomRuleIndex:
 
 def active_event_channels(session: Session) -> frozenset[str]:
     """Canales de Windows con alguna regla activa de logsource de eventos (caché corta)."""
+    return frozenset(
+        channel
+        for name in active_logsources(session)
+        if (source := LOGSOURCES.get(name)) is not None and (channel := source.channel)
+    )
+
+
+def active_logsources(session: Session) -> frozenset[str]:
+    """Logsources con alguna regla personalizada o Sigma activa (caché corta). Fase 7E.5: la
+    usan también los sensores NDR para registrar señales ndr_dns solo cuando hacen falta."""
     key = _cache_key(session)
     now = time.monotonic()
     with _lock:
@@ -396,14 +406,10 @@ def active_event_channels(session: Session) -> frozenset[str]:
         )
         .distinct()
     ).all()
-    channels = frozenset(
-        channel
-        for name in names
-        if (source := LOGSOURCES.get(name)) is not None and (channel := source.channel)
-    )
+    active = frozenset(str(name) for name in names)
     with _lock:
-        _channels_cache[key] = (now, channels)
-    return channels
+        _channels_cache[key] = (now, active)
+    return active
 
 
 def reset_caches() -> None:

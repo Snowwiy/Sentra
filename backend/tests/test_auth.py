@@ -190,6 +190,8 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "reports:read", "reports:generate", "network:poll",
         "telemetry:read", "forensics:read", "forensics:acquire", "forensics:download",
         "containment:preview", "tools:read", "tools:execute",
+        # Fase 7E: NDR, agregados y evidencia (aprobar la captura es solo admin).
+        "ndr:read", "ndr:evidence", "ndr:triage",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -466,6 +468,8 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.MONITORING_READ, Permission.AI_USE, Permission.INCIDENTS_READ,
         Permission.RULES_READ, Permission.VULNERABILITIES_READ, Permission.THREAT_INTEL_READ,
         Permission.RESPONSE_READ, Permission.REPORTS_READ, Permission.TOOLS_READ,
+        # Fase 7E: estado de la captura y agregados de red, sin flujos individuales.
+        Permission.NDR_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -482,7 +486,10 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.TELEMETRY_READ, Permission.FORENSICS_READ, Permission.FORENSICS_ACQUIRE,
         Permission.FORENSICS_DOWNLOAD, Permission.CONTAINMENT_PREVIEW,
         Permission.TOOLS_READ, Permission.TOOLS_EXECUTE,
+        Permission.NDR_READ, Permission.NDR_EVIDENCE, Permission.NDR_TRIAGE,
     }  # fmt: skip
+    # Fase 7E: aprobar la captura NDR de un sensor, solo admin.
+    assert Permission.NDR_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Fase 6E: fuentes DHCP, gestión forense y aislar/liberar un endpoint, solo admin.
     for admin_only in (
         Permission.DHCP_MANAGE,
@@ -678,6 +685,7 @@ NON_SESSION_ROUTES = {
     ("POST", "/api/v1/sensor/jobs/{job_id}/results"),
     ("POST", "/api/v1/sensor/jobs/{job_id}/complete"),
     ("POST", "/api/v1/sensor/credential/rotate"),
+    ("POST", "/api/v1/sensor/ndr/batches"),  # Fase 7E.1: lotes NDR (credencial del sensor)
 }
 
 
@@ -711,6 +719,8 @@ def _concrete(path: str) -> str:
         "task_id", "control_id",
         # Fase 7B: operaciones de mantenimiento, clientes Wi-Fi y observaciones de identidad.
         "operation_id", "client_id", "observation_id",
+        # Fase 7E.2: anomalías NDR.
+        "anomaly_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 7A: herramientas del registro por identificador estable.

@@ -1425,7 +1425,13 @@ export type Permission =
   | "tools:manage"
   | "network_controls:approve"
   | "maintenance:manage"
-  | "identity:manage";
+  | "identity:manage"
+  // Fase 7E: NDR. Agregados (todos), evidencia por flujo/DNS/ARP (analyst y admin) y aprobar
+  // la captura de un sensor (solo admin).
+  | "ndr:read"
+  | "ndr:evidence"
+  | "ndr:triage"
+  | "ndr:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -6596,4 +6602,318 @@ export interface CorrelationReviewApplyResult {
   reviewed: number;
   resolved: number;
   kept: number;
+}
+
+// --- Fase 7E: Network Detection & Response (sensores pasivos) -------------------------------
+
+export type NdrCaptureState = "disabled" | "not_configured" | "starting" | "running" | "degraded" | "error";
+export type NdrAnomalyVerdict = "observed" | "suspicious" | "probable" | "confirmed";
+export type NdrAnomalyStatus = "open" | "acknowledged" | "resolved" | "false_positive";
+export type NdrAnomalySeverity = "informational" | "low" | "medium" | "high" | "critical";
+export type NdrObservationKind = "arp" | "dns" | "dhcp" | "tls";
+
+export interface NdrCaptureConfigRead {
+  enabled: boolean;
+  revision: number;
+  interfaces: string[];
+  observation_point: string | null;
+  promiscuous: boolean;
+  snaplen: number;
+  max_flows: number;
+  max_packets_per_second: number;
+  max_cpu_percent: number;
+  export_interval_seconds: number;
+  flow_idle_timeout_seconds: number;
+  flow_active_timeout_seconds: number;
+  arp_metadata: boolean;
+  dhcp_metadata: boolean;
+  dns_metadata: boolean;
+  tls_metadata: boolean;
+  updated_by: string | null;
+  updated_at: string;
+}
+
+/** Cuerpo de PUT /ndr/sensors/{id}/config (solo admin, ndr:manage). */
+export interface NdrCaptureConfigUpdate {
+  enabled: boolean;
+  interfaces: string[];
+  observation_point: string | null;
+  confirm_passive_authorized: boolean;
+  dns_metadata: boolean;
+  tls_metadata: boolean;
+  expected_revision: number;
+}
+
+export interface NdrInterfaceHealth {
+  name: string;
+  state: NdrCaptureState;
+  error_code: string | null;
+  backend: string | null;
+  packets_seen: number | null;
+  packets_processed: number | null;
+  budget_dropped: number | null;
+  malformed: number | null;
+  cpu_percent: number | null;
+  pps_budget: number | null;
+  last_packet_at: string | null;
+  last_export_at: string | null;
+  degraded_reasons: string[];
+}
+
+export interface NdrSensorRead {
+  sensor_id: string;
+  name: string;
+  site_id: string;
+  site_name: string;
+  status: string;
+  sensor_version: string | null;
+  last_seen_at: string | null;
+  capable: boolean;
+  capture_state: NdrCaptureState | null;
+  reported_revision: number | null;
+  interfaces: NdrInterfaceHealth[];
+  spool_items: number | null;
+  spool_dropped: number | null;
+  config: NdrCaptureConfigRead | null;
+  last_batch_at: string | null;
+  packets_24h: number;
+  dropped_24h: number;
+}
+
+export interface NdrSensorList {
+  items: NdrSensorRead[];
+}
+
+export interface NdrProtocolCount {
+  key: string;
+  flows: number;
+  bytes: number;
+}
+
+export interface NdrTalker {
+  ip: string;
+  flows: number;
+  bytes: number;
+}
+
+export interface NdrOverview {
+  window_hours: number;
+  sensors_capable: number;
+  sensors_enabled: number;
+  sensors_capturing: number;
+  sensors_degraded: number;
+  flows: number;
+  bytes: number;
+  packets_seen: number;
+  packets_dropped: number;
+  observations: Record<string, number>;
+  transports: NdrProtocolCount[];
+  services: NdrProtocolCount[];
+  top_talkers: NdrTalker[];
+  last_batch_at: string | null;
+}
+
+export interface NdrFlowRead {
+  id: number;
+  sensor_id: string;
+  sensor_name: string;
+  site_id: string;
+  interface: string;
+  uid: string;
+  ip_version: number;
+  transport: string;
+  src_ip: string;
+  src_port: number | null;
+  dst_ip: string;
+  dst_port: number | null;
+  vlan: number | null;
+  src_mac: string | null;
+  dst_mac: string | null;
+  first_seen: string;
+  last_seen: string;
+  packets_out: number;
+  packets_in: number;
+  bytes_out: number;
+  bytes_in: number;
+  tcp_flags_out: number;
+  tcp_flags_in: number;
+  state: string;
+  final: boolean;
+  segments: number;
+  flags: string[];
+  retransmissions: number;
+  fragments: number;
+  icmp_type: number | null;
+  app_hints: string[];
+}
+
+export interface NdrFlowList {
+  items: NdrFlowRead[];
+  total: number;
+}
+
+export interface NdrObservationRead {
+  id: number;
+  sensor_id: string;
+  sensor_name: string;
+  site_id: string;
+  interface: string;
+  kind: NdrObservationKind;
+  ip: string | null;
+  peer_ip: string | null;
+  mac: string | null;
+  name: string | null;
+  vlan: number | null;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+  data: Record<string, unknown>;
+}
+
+export interface NdrObservationList {
+  items: NdrObservationRead[];
+  total: number;
+}
+
+export interface NdrMitreRead {
+  tactic: string;
+  technique: string;
+  subtechnique: string | null;
+}
+
+export interface NdrRuleRead {
+  id: string;
+  version: number;
+  category: string;
+  title: string;
+  description: string;
+  why: string;
+  recommendations: string[];
+  verdicts: Record<string, string>;
+  mitre: NdrMitreRead | null;
+}
+
+export interface NdrRuleList {
+  items: NdrRuleRead[];
+}
+
+export interface NdrAssetRef {
+  asset_id: string;
+  name: string;
+  primary_ip: string;
+  mac_address: string | null;
+}
+
+export interface NdrSwitchLocation {
+  device_id: string;
+  device_name: string | null;
+  interface: string | null;
+  vlan: number | null;
+  location: string;
+  last_seen: string;
+}
+
+export interface NdrDetectionRef {
+  detection_id: string;
+  rule_id: string;
+  severity: string;
+  confidence: string;
+  status: string;
+}
+
+export interface NdrIncidentRef {
+  incident_id: string;
+  number: number;
+  title: string;
+  status: string;
+}
+
+export interface NdrAnomalyContext {
+  asset: NdrAssetRef | null;
+  switch_locations: NdrSwitchLocation[];
+  detections: NdrDetectionRef[];
+  incidents: NdrIncidentRef[];
+}
+
+export interface NdrAnomalyRead {
+  anomaly_id: string;
+  site_id: string;
+  site_name: string;
+  sensor_id: string | null;
+  sensor_name: string | null;
+  rule_id: string;
+  rule_version: number;
+  category: string;
+  title: string;
+  verdict: NdrAnomalyVerdict;
+  severity: NdrAnomalySeverity;
+  status: NdrAnomalyStatus;
+  subject_ip: string | null;
+  subject_mac: string | null;
+  summary: string;
+  evidence: Record<string, unknown>;
+  occurrences: number;
+  first_seen: string;
+  last_seen: string;
+  status_by: string | null;
+  status_at: string | null;
+  status_note: string | null;
+  asset_id: string | null;
+  asset_name: string | null;
+  /** Solo en el detalle (GET /ndr/anomalies/{id}). */
+  context: NdrAnomalyContext | null;
+  mitre: NdrMitreRead | null;
+}
+
+export interface NdrAnomalyList {
+  items: NdrAnomalyRead[];
+  total: number;
+}
+
+export interface NdrBindingRead {
+  site_id: string;
+  vlan: number | null;
+  ip: string;
+  mac: string;
+  source: string;
+  gateway: boolean;
+  count: number;
+  first_seen: string;
+  last_seen: string;
+}
+
+export interface NdrBindingList {
+  items: NdrBindingRead[];
+  total: number;
+}
+
+// --- Fase 7E.7: plan de respuesta de una anomalía NDR -------------------------------------
+
+export type NdrSuggestionKind = "network_control" | "manual" | "playbook";
+
+export interface NdrResponseSuggestion {
+  suggestion_id: string;
+  kind: NdrSuggestionKind;
+  title: string;
+  rationale: string;
+  instructions: string[];
+  control_type: string | null;
+  target: Record<string, unknown> | null;
+  direction: string | null;
+  playbook_key: string | null;
+}
+
+export interface NdrResponsePlan {
+  anomaly_id: string;
+  applied_by_sentra: boolean;
+  note: string;
+  incidents: NdrIncidentRef[];
+  suggestions: NdrResponseSuggestion[];
+}
+
+export interface NdrControlRequest {
+  incident_id: string;
+  suggestion_id: string;
+  justification: string;
+  expires_at?: string | null;
 }

@@ -68,6 +68,14 @@ class SignalKind(enum.StrEnum):
     PERSISTENCE_CHANGE = "persistence_change"
     PROTECTION_CHANGE = "protection_change"
     FIREWALL_CHANGE = "firewall_change"
+    # Fase 7E.4: una anomalía NDR (sensor pasivo) atribuida a un activo inventariado, con
+    # veredicto suspicious o superior. La emite app/ndr/anomalies.py; la regla NET-NDR-001 la
+    # convierte en detección, que alimenta riesgo, alertas e incidentes como cualquier otra.
+    NDR_ANOMALY = "ndr_anomaly"
+    # Fase 7E.5: consulta DNS observada por un sensor NDR desde un activo inventariado. Solo
+    # se registra si hay alguna regla personalizada o Sigma activa del logsource ndr_dns
+    # (como EVENT): sin reglas, cero filas.
+    NDR_DNS = "ndr_dns"
 
 
 class SourceType(enum.StrEnum):
@@ -77,6 +85,7 @@ class SourceType(enum.StrEnum):
     DISCOVERY = "discovery"
     THREAT_INTEL = "threat_intel"
     ENDPOINT_ACTIVITY = "endpoint_activity"
+    NDR = "ndr"
 
 
 @dataclass(frozen=True)

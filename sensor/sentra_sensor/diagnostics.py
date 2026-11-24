@@ -76,6 +76,12 @@ def local_status(config: LocalConfig) -> dict[str, Any]:
         status["jobs_enabled"] = state.server_config.get("jobs_enabled")
     status["spool"] = _spool_summary(config.spool_file(), config)
     status["dhcp_sources"] = describe_sources(config)
+    status["ndr"] = {
+        "enabled": config.ndr.enabled,
+        "interfaces": [item.name for item in config.ndr.interfaces],
+        "server_config": (state.server_config or {}).get("ndr"),
+        "spool": _spool_summary(config.ndr_spool_file(), config),
+    }
     return status
 
 

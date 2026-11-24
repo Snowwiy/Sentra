@@ -16,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from pydantic import BaseModel
-from sqlalchemy import func, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.core.config import Settings
@@ -32,6 +32,7 @@ from app.models.change import AssetChange
 from app.models.detection import Detection, DetectionStatus
 from app.models.event import EventLevel, SystemEvent
 from app.models.incident import ACTIVE_STATUSES, Incident, IncidentAsset
+from app.models.ndr import NdrAnomaly, NdrFlow, NdrProtocolObservation
 from app.models.risk import AssetRisk
 from app.models.threat_intel import ThreatIntelMatch
 from app.models.user import User
@@ -321,6 +322,104 @@ def collect_timeline(ctx: ActionContext) -> ActionResult:
             "counts": counts,
             "events_in_window": int(events_total or 0),
             "items": items,
+        },
+    )
+
+
+NDR_PEERS_MAX = 20
+NDR_NAMES_MAX = 30
+
+
+def collect_ndr_context(ctx: ActionContext) -> ActionResult:
+    """Fase 7E.7: lo que la red vio del activo en la ventana (solo lectura).
+
+    Anomalías NDR atribuidas, resumen de flujos con los interlocutores de más volumen y
+    nombres DNS/SNI consultados. Solo metadatos ya guardados: no hay payload que leer ni se
+    pide nada al sensor. Los flujos se buscan por la IP principal en el site del activo
+    porque un flujo no guarda activo (la atribución es por IP o MAC, como en 7E.4).
+    """
+    asset = _asset(ctx)
+    hours = int(getattr(ctx.params, "hours", 24))
+    since = ctx.now - timedelta(hours=hours)
+    session = ctx.session
+    anomalies = [
+        {
+            "anomaly_id": str(row.public_id),
+            "rule_id": row.rule_id,
+            "title": _clip(row.title),
+            "verdict": row.verdict,
+            "severity": row.severity,
+            "status": row.status,
+            "occurrences": row.occurrences,
+            "last_seen": row.last_seen.isoformat(),
+        }
+        for row in session.scalars(
+            select(NdrAnomaly)
+            .where(NdrAnomaly.asset_id == asset.id, NdrAnomaly.last_seen >= since)
+            .order_by(NdrAnomaly.last_seen.desc())
+            .limit(TIMELINE_PER_KIND)
+        )
+    ]
+    ip = asset.primary_ip
+    flows: dict[str, Any] = {"count": 0, "bytes_out": 0, "bytes_in": 0, "peers": []}
+    names: list[dict[str, Any]] = []
+    if ip:
+        scope = (
+            NdrFlow.site_id == asset.site_id,
+            NdrFlow.last_seen >= since,
+            or_(NdrFlow.src_ip == ip, NdrFlow.dst_ip == ip),
+        )
+        # Sentido visto desde el activo: lo que envía es bytes_out si inició él el flujo.
+        sent = case((NdrFlow.src_ip == ip, NdrFlow.bytes_out), else_=NdrFlow.bytes_in)
+        received = case((NdrFlow.src_ip == ip, NdrFlow.bytes_in), else_=NdrFlow.bytes_out)
+        count, total_out, total_in = session.execute(
+            select(
+                func.count(), func.coalesce(func.sum(sent), 0), func.coalesce(func.sum(received), 0)
+            ).where(*scope)
+        ).one()
+        peer = case((NdrFlow.src_ip == ip, NdrFlow.dst_ip), else_=NdrFlow.src_ip)
+        volume = func.sum(NdrFlow.bytes_out + NdrFlow.bytes_in)
+        flows = {
+            "count": int(count),
+            "bytes_out": int(total_out),
+            "bytes_in": int(total_in),
+            "peers": [
+                {"ip": peer_ip, "flows": int(n), "bytes": int(b or 0)}
+                for peer_ip, n, b in session.execute(
+                    select(peer, func.count(), volume)
+                    .where(*scope)
+                    .group_by(peer)
+                    .order_by(volume.desc(), peer)
+                    .limit(NDR_PEERS_MAX)
+                )
+            ],
+        }
+        hits = func.sum(NdrProtocolObservation.count)
+        names = [
+            {"kind": kind, "name": name, "count": int(n or 0)}
+            for kind, name, n in session.execute(
+                select(NdrProtocolObservation.kind, NdrProtocolObservation.name, hits)
+                .where(
+                    NdrProtocolObservation.site_id == asset.site_id,
+                    NdrProtocolObservation.kind.in_(("dns", "tls")),
+                    NdrProtocolObservation.ip == ip,
+                    NdrProtocolObservation.name.is_not(None),
+                    NdrProtocolObservation.last_seen >= since,
+                )
+                .group_by(NdrProtocolObservation.kind, NdrProtocolObservation.name)
+                .order_by(hits.desc(), NdrProtocolObservation.name)
+                .limit(NDR_NAMES_MAX)
+            )
+        ]
+    return ActionResult(
+        f"Contexto NDR de {hours} h: {len(anomalies)} anomalías, {flows['count']} flujos",
+        {
+            "hours": hours,
+            "since": since.isoformat(),
+            "ip": ip,
+            "anomalies": anomalies,
+            "flows": flows,
+            "names": names,
         },
     )
 

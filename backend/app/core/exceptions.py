@@ -511,3 +511,27 @@ class SecretStoreUnavailableError(SentraError):
     # mensaje nunca incluye la ruta ni el contenido del fichero.
     status_code = status.HTTP_503_SERVICE_UNAVAILABLE
     code = "snmp_secret_store_unavailable"
+
+
+class NdrNotAuthorizedError(ForbiddenError):
+    # Fase 7E.1: lote NDR de un sensor sin captura aprobada para esa interfaz (o sin la
+    # capacidad, deshabilitado su site...). El sensor descarta el lote y no lo reintenta.
+    code = "ndr_not_authorized"
+
+
+class NdrValidationError(SentraError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class NdrConflictError(ConflictError):
+    def __init__(self, code: str, message: str, details: list[dict[str, Any]] | None = None):
+        super().__init__(message, details)
+        self.code = code
+
+
+class NdrAnomalyNotFoundError(NotFoundError):
+    code = "ndr_anomaly_not_found"

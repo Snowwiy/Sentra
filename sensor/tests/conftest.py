@@ -109,6 +109,8 @@ class FakeServer:
         self.max_body_seen = 0
         # Fase 6B: credencial que devuelve el start de un job snmp_inventory.
         self.start_credentials: dict[str, Any] | None = None
+        # Fase 7E.1: lotes NDR recibidos (deduplicados por batch_id).
+        self.ndr_batches: dict[str, dict[str, Any]] = {}
 
     # --- utilidades de test ---------------------------------------------------------
     def paths(self) -> list[str]:
@@ -190,6 +192,11 @@ class FakeServer:
         # Primer uso de la nueva credencial: la antigua deja de valer.
         if len(self.valid_credentials) > 1 and auth[7:].startswith("rotated-"):
             self.valid_credentials = {auth[7:]}
+        if path == "/sensor/ndr/batches":
+            batch_id = payload["batch_id"]
+            duplicate = batch_id in self.ndr_batches
+            self.ndr_batches.setdefault(batch_id, payload)
+            return _json(200, {"batch_id": batch_id, "duplicate": duplicate})
         if path == "/sensor/jobs/poll":
             jobs, self.jobs = self.jobs[: payload["max_jobs"]], self.jobs[payload["max_jobs"] :]
             return _json(200, {"jobs": jobs, "config": self.config})
