@@ -18,6 +18,32 @@ TYPES_TS = Path(__file__).resolve().parents[2] / "frontend" / "src" / "api" / "t
 
 # TypeScript interface -> OpenAPI schema (response models only).
 INTERFACES = {
+    # Fase 7F: integración SIEM.
+    "SiemConnectorRead": "SiemConnectorRead",
+    "SiemConnectorList": "SiemConnectorList",
+    "SiemSourceRead": "SiemSourceRead",
+    "SiemSourceList": "SiemSourceList",
+    "SiemBatchAccepted": "SiemBatchAccepted",
+    "SiemAssetRef": "SiemAssetRef",
+    "SiemEventRead": "SiemEventRead",
+    "SiemAttribution": "SiemAttribution",
+    "SiemAttributionCandidate": "SiemAttributionCandidate",
+    "SiemEventLinkRead": "SiemEventLinkRead",
+    "SiemEventList": "SiemEventList",
+    "SiemCount": "SiemCount",
+    "SiemOverview": "SiemOverview",
+    # Fase 7F.6: hunting e investigación.
+    "SiemSearchResult": "SiemSearchResult",
+    "SiemSavedSearchRead": "SiemSavedSearchRead",
+    "SiemSavedSearchList": "SiemSavedSearchList",
+    "SiemRelatedDetection": "SiemRelatedDetection",
+    "SiemRelatedEvent": "SiemRelatedEvent",
+    "SiemRelated": "SiemRelated",
+    "SiemTimelineItem": "SiemTimelineItem",
+    "SiemTimeline": "SiemTimeline",
+    "SiemEvidenceExport": "SiemEvidenceExport",
+    "IncidentSiemEventRead": "IncidentSiemEventRead",
+    "IncidentSiemEventList": "IncidentSiemEventList",
     # Fase 7E: Network Detection & Response.
     "NdrCaptureConfigRead": "NdrCaptureConfigRead",
     "NdrInterfaceHealth": "NdrInterfaceHealth",

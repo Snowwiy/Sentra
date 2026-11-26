@@ -105,7 +105,9 @@ EXPOSURE_RULES = frozenset({"NET-001", "NET-002"})
 # Fase 7B-Fix1 (v7): reglas que abren una detección por artefacto (SCR-001: una por script).
 # Varias detecciones de la misma regla en un activo son UN grupo: cuenta la más fuerte con
 # un factor de repetición acotado, no N grupos que amplifican el score.
-FAMILY_RULES = frozenset({"SCR-001"})
+# Fase 7F: las alertas externas (SIEM-EXT-001) de un activo son una familia: un IDS ruidoso
+# con cientos de firmas distintas no puede sumar cientos de grupos independientes.
+FAMILY_RULES = frozenset({"SCR-001", "SIEM-EXT-001"})
 REPETITION = "repetition"
 # Clase de cada contribución: directa (una evidencia propia), correlacionada (una cadena de
 # varias señales) o contextual (modificadores del activo).

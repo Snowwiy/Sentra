@@ -263,6 +263,7 @@ class RiskEngine:
                 Detection.details["script"].label("script"),
                 Detection.details["scripts"].label("scripts"),
                 Detection.details["script_keys"].label("script_keys"),
+                Detection.details["causal_keys"].label("extra_causal_keys"),
                 func.row_number()
                 .over(
                     partition_by=Detection.asset_id,
@@ -311,7 +312,12 @@ class RiskEngine:
                     members=frozenset(members.get(row.id, ())),
                     attribution_verdict=row.attribution_verdict,
                     causal_keys=causal_keys(
-                        row.rule_id, row.dedup_key, row.script, row.scripts, row.script_keys
+                        row.rule_id,
+                        row.dedup_key,
+                        row.script,
+                        row.scripts,
+                        row.script_keys,
+                        row.extra_causal_keys,
                     ),
                 )
             )
@@ -736,6 +742,7 @@ def causal_keys(
     script: Any,
     scripts: Any,
     script_keys: Any = None,
+    extra: Any = None,
 ) -> frozenset[str]:
     """Claves de la secuencia causal de una detección (Fase 7B.1).
 
@@ -763,6 +770,14 @@ def causal_keys(
         # la correlación en lugar de contar cada uno aparte.
         for key in script_keys if isinstance(script_keys, list) else ():
             if isinstance(key, str) and key.startswith("script:"):
+                keys.add(key[:300])
+    elif rule_id == "NET-NDR-001" and dedup_key:
+        # Fase 7F: la anomalía NDR (clave ndr:<id>) es la misma que una alerta SIEM enlazada
+        # a ella (SIEM-EXT-001 la lleva en details.causal_keys): cuentan una vez.
+        keys.add(dedup_key[:300])
+    if rule_id.startswith("SIEM-"):
+        for key in extra if isinstance(extra, list) else ():
+            if isinstance(key, str) and key.startswith("ndr:"):
                 keys.add(key[:300])
     return frozenset(keys)
 

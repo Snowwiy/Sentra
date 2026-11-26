@@ -32,7 +32,10 @@ KIND_COMPLETE = "complete"
 # Fase 7E.1: lotes de NDR. Van en un spool propio (ndr-spool.sqlite3) para que una avalancha
 # de flujos no desplace resultados de jobs; el "job_id" es la interfaz (ndr:<alias>).
 KIND_NDR = "ndr"
-KINDS = frozenset({KIND_RESULTS, KIND_COMPLETE, KIND_NDR})
+# Fase 7F: lotes SIEM (Syslog, ficheros). Spool propio (siem-spool.sqlite3) por el mismo
+# motivo; el "job_id" es la entrada (siem:<alias>).
+KIND_SIEM = "siem"
+KINDS = frozenset({KIND_RESULTS, KIND_COMPLETE, KIND_NDR, KIND_SIEM})
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS items (

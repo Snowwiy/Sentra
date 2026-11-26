@@ -864,6 +864,9 @@ export const aiApi = {
     apiPost<Insight>(`/ai/incidents/${encodeURIComponent(incidentId)}/analyze`, { task, refresh }),
   analyzeVulnerability: (findingId: string, refresh = false) =>
     apiPost<Insight>(`/ai/vulnerabilities/${encodeURIComponent(findingId)}/analyze`, { refresh }),
+  /** Fase 7F.6: resumen de solo lectura de un evento SIEM (exige siem:evidence). */
+  analyzeSiemEvent: (eventId: string, refresh = false) =>
+    apiPost<Insight>(`/ai/siem/events/${encodeURIComponent(eventId)}/analyze`, { refresh }),
   list: (
     query: {
       kind?: InsightKind;

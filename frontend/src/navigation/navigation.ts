@@ -34,6 +34,8 @@ export const NAV_GROUPS: NavGroup[] = [
     label: "General",
     items: [
       { to: "/", label: "Panel", icon: "dashboard", exact: true },
+      // Fase 7F.7: stream en directo (SSE) de detecciones, alertas, casos y alertas SIEM.
+      { to: "/live", label: "Live SOC", icon: "alert", permission: "monitoring:read" },
       { to: "/alerts", label: "Alertas", icon: "alert" },
       { to: "/detections", label: "Detecciones", icon: "detection" },
       { to: "/incidents", label: "Incidentes", icon: "incident", permission: "incidents:read" },
@@ -62,6 +64,8 @@ export const NAV_GROUPS: NavGroup[] = [
       { to: "/threat-intel", label: "Inteligencia", icon: "intel", permission: "threat_intel:read" },
       // Fase 7E: detección pasiva de red (sensores NDR aprobados).
       { to: "/ndr", label: "Red (NDR)", icon: "sensor", permission: "ndr:read" },
+      // Fase 7F: fuentes SIEM externas opcionales y sus eventos normalizados.
+      { to: "/siem", label: "SIEM", icon: "intel", permission: "siem:read" },
       {
         to: "/detections/rules",
         label: "Reglas",

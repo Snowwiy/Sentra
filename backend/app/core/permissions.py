@@ -180,6 +180,15 @@ class Permission(enum.StrEnum):
     # Aprobar o cambiar qué interfaces captura un sensor y con qué metadatos: decide qué se
     # observa de la red de un site. Solo admin, siempre auditado.
     NDR_MANAGE = "ndr:manage"
+    # Fase 7F: integración SIEM. siem:read ve el catálogo de fuentes, su salud y agregados
+    # (volúmenes, rechazos, retrasos) sin el contenido de los eventos.
+    SIEM_READ = "siem:read"
+    # Eventos individuales (IPs, usuarios, mensajes, extracto del registro original),
+    # búsquedas de threat hunting y paquetes de evidencia. Analyst.
+    SIEM_EVIDENCE = "siem:evidence"
+    # Registrar, habilitar o retirar fuentes e importar ficheros exportados: decide qué
+    # telemetría externa entra en Sentra. Solo admin, siempre auditado.
+    SIEM_MANAGE = "siem:manage"
 
 
 ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
@@ -195,6 +204,7 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.REPORTS_READ,
             Permission.TOOLS_READ,
             Permission.NDR_READ,
+            Permission.SIEM_READ,
         }
     ),
     # Analyst opera la seguridad (alertas, detecciones, discovery dentro de la allowlist)
@@ -230,6 +240,8 @@ ROLE_PERMISSIONS: dict[Role, frozenset[Permission]] = {
             Permission.NDR_READ,
             Permission.NDR_EVIDENCE,
             Permission.NDR_TRIAGE,
+            Permission.SIEM_READ,
+            Permission.SIEM_EVIDENCE,
         }
     ),
     Role.ADMIN: frozenset(Permission),

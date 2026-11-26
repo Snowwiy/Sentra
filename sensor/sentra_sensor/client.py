@@ -218,3 +218,7 @@ class SensorClient:
     def ndr_batch(self, body: dict[str, Any]) -> dict[str, Any]:
         """Fase 7E.1: lote de flujos y metadatos de una interfaz aprobada."""
         return self._post("/sensor/ndr/batches", body)
+
+    def siem_batch(self, body: dict[str, Any]) -> dict[str, Any]:
+        """Fase 7F: lote de registros SIEM de una entrada aprobada."""
+        return self._post("/sensor/siem/batches", body)

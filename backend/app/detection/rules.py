@@ -1616,6 +1616,70 @@ def _ndr_anomaly(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
     )
 
 
+_SIEM_SEVERITY = {
+    "low": Sev.LOW,
+    "medium": Sev.MEDIUM,
+    "high": Sev.HIGH,
+    "critical": Sev.CRITICAL,
+}
+
+
+def _siem_alert(ctx: RuleContext, s: DetectionSignal) -> RuleResult:
+    """SIEM-EXT-001 (Fase 7F): alerta de un producto externo atribuida a este activo.
+
+    Origen `imported`: es evidencia externa (una firma de Suricata o una regla de Wazuh que
+    coincidió), no una intrusión confirmada. Confianza baja; media solo si el propio sensor
+    NDR de Sentra vio la misma comunicación (enlace por 5-tupla). La severidad es la que dio
+    la política explícita de la fuente. Una detección por (firma, activo, rol, extremo).
+    """
+    flows = _get(s, "ndr_flow_uids") or []
+    corroborated = isinstance(flows, list) and bool(flows)
+    techniques = _get(s, "mitre_techniques") or []
+    tactic = _get(s, "mitre_tactic")
+    mitre = None
+    if tactic and isinstance(techniques, list) and techniques:
+        technique = str(techniques[0])
+        base, _, _sub = technique.partition(".")
+        mitre = Mitre(str(tactic), base, technique if "." in technique else None)
+    origin = "correlated" if corroborated else "imported"
+    summary = (
+        f"Alerta externa ({_get(s, 'source_type')}, {_get(s, 'source_name') or 'fuente SIEM'}):"
+        f" {_get(s, 'message') or _get(s, 'signature_id') or 'sin descripción'}."
+        f" Rol del activo: {_get(s, 'role')}."
+        + (
+            " El sensor NDR de Sentra observó la misma comunicación."
+            if corroborated
+            else " Sin corroboración de los sensores propios de Sentra."
+        )
+    )
+    anomaly_ids = _get(s, "ndr_anomaly_ids") or []
+    return _single(
+        s,
+        _key(s.subject, "siem:*"),
+        summary[:1000],
+        severity=_SIEM_SEVERITY.get(str(_get(s, "severity")), Sev.LOW),
+        confidence=Conf.MEDIUM if corroborated else Conf.LOW,
+        details={
+            "origin": origin,
+            "siem_event_id": _get(s, "event_id"),
+            "source_type": _get(s, "source_type"),
+            "source_name": _get(s, "source_name"),
+            "signature_id": _get(s, "signature_id"),
+            "external_rule_id": _get(s, "rule_id"),
+            "source_severity": _get(s, "source_severity"),
+            "role": _get(s, "role"),
+            "attribution_method": _get(s, "attribution_method"),
+            "src_ip": _get(s, "src_ip"),
+            "dst_ip": _get(s, "dst_ip"),
+            "dst_port": _get(s, "dst_port"),
+            "ndr_flow_uids": flows if isinstance(flows, list) else [],
+            # Claves para no contar dos veces en el riesgo el mismo hecho visto por NDR.
+            "causal_keys": [f"ndr:{a}" for a in anomaly_ids if isinstance(a, str)][:5],
+        },
+        mitre=mitre,
+    )
+
+
 def _meta(**kwargs: Any) -> RuleMeta:
     return RuleMeta(**{"version": 1, "kind": SINGLE, **kwargs})
 
@@ -2570,6 +2634,39 @@ RULES: tuple[DetectionRule, ...] = (
             cooldown=timedelta(hours=24),
         ),
         _ndr_anomaly,
+    ),
+    SimpleRule(
+        _meta(
+            id="SIEM-EXT-001",
+            category="external",
+            title="Alerta de seguridad externa (SIEM)",
+            description=(
+                "Una alerta de un producto externo integrado como fuente SIEM (firma de"
+                " Suricata, regla de Wazuh) atribuida a este activo, con severidad baja o"
+                " superior según la política explícita de la fuente."
+            ),
+            why=(
+                "Lleva la evidencia de las herramientas que ya tiene la organización al mismo"
+                " flujo de riesgo, alertas e incidentes. Es evidencia externa: una firma que"
+                " coincide no confirma una intrusión, por eso la confianza es baja salvo que"
+                " el sensor NDR de Sentra vea la misma comunicación."
+            ),
+            severity=Sev.LOW,
+            confidence=Conf.LOW,
+            triggers=frozenset({SignalKind.SIEM_ALERT}),
+            required_data=(
+                "Fuente SIEM habilitada (Suricata EVE o alertas de Wazuh) y el activo"
+                " inventariado en su site",
+            ),
+            recommendations=(
+                "Abrir el evento SIEM enlazado: firma, extremos, extracto y procedencia.",
+                "Revisar los flujos NDR y eventos relacionados antes de concluir nada.",
+                "Si la firma es ruidosa en este entorno, ajustar la política de la fuente o"
+                " crear una excepción con justificación.",
+            ),
+            cooldown=timedelta(hours=24),
+        ),
+        _siem_alert,
     ),
 )
 

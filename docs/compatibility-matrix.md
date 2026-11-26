@@ -1,3 +1,23 @@
+# Matriz de compatibilidad (Fase 7F, Sentra 0.9.0)
+
+Servidor, frontend y sensor 0.9.0; agente 0.7.1 sin cambios. Migraciones 0057-0059 (cabeza
+0059). Detalle en docs/fase-7f.md.
+
+| Componente | Versión 7F | ¿Cambia? | Notas |
+| --- | --- | --- | --- |
+| Servidor (backend) | 0.9.0 | Sí | Ingesta SIEM, conectores, correlación, hunting, investigación, Live SOC (SSE) |
+| Frontend | 0.9.0 | Sí | Página SIEM (fuentes, eventos, búsqueda) y Live SOC |
+| Agente | 0.7.1 | No | La integración SIEM no usa el agente |
+| Sensor | 0.9.0 | Sí | Receptor Syslog y lector de ficheros opcionales (`[siem]`), apagados por defecto |
+
+| Cliente | Servidor 0.8.0 | Servidor 0.9.0 |
+| --- | --- | --- |
+| Sensor 0.8.0 | Completo | Completo, sin SIEM (no declara la capacidad) |
+| Sensor 0.9.0 | Completo, sin SIEM: el servidor no aprueba entradas y el sensor no escucha | Completo |
+| Frontend 0.8.0 | Completo | Compatible: no muestra SIEM ni Live SOC |
+| Frontend 0.9.0 | SIEM y Live SOC reciben 404 | Completo |
+| Agente 0.7.1 | Completo | Completo |
+
 # Matriz de compatibilidad (Fase 7E, Sentra 0.8.0)
 
 Servidor, frontend y sensor 0.8.0; agente 0.7.1 sin cambios. Migraciones 0053-0056 (cabeza

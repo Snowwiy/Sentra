@@ -14,6 +14,7 @@ from app.core.config import Settings
 from app.dhcp.service import purge_dhcp
 from app.endpoint.service import purge_endpoint
 from app.ndr.retention import ndr_retention_enabled, purge_ndr
+from app.siem.retention import purge_siem
 from app.topology.history_service import purge_topology_history
 
 
@@ -21,6 +22,9 @@ def phase_6e_retention_enabled(settings: Settings) -> bool:
     """¿Hay alguna retención de 6E configurada? Decide si el job de retención se arranca
     aunque las retenciones opt-in de 4M estén todas apagadas."""
     if ndr_retention_enabled(settings):
+        return True
+    # Fase 7F: eventos SIEM (retención por edad o tope de almacenamiento).
+    if settings.siem_event_retention_days is not None or settings.siem_max_stored_events:
         return True
     return any(
         days is not None
@@ -47,5 +51,7 @@ def purge_phase_6e(
     out.update(purge_endpoint(session, settings, now))
     # Fase 7E: flujos y metadatos NDR (activos por defecto para acotar el crecimiento).
     out.update(purge_ndr(session, settings, now))
+    # Fase 7F: eventos y recibos SIEM (por fuente, por edad y con tope global).
+    out.update(purge_siem(session, settings, now))
     session.commit()
     return out

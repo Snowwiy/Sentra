@@ -111,6 +111,8 @@ class FakeServer:
         self.start_credentials: dict[str, Any] | None = None
         # Fase 7E.1: lotes NDR recibidos (deduplicados por batch_id).
         self.ndr_batches: dict[str, dict[str, Any]] = {}
+        # Fase 7F: lotes SIEM recibidos (deduplicados por batch_id).
+        self.siem_batches: dict[str, dict[str, Any]] = {}
 
     # --- utilidades de test ---------------------------------------------------------
     def paths(self) -> list[str]:
@@ -197,6 +199,23 @@ class FakeServer:
             duplicate = batch_id in self.ndr_batches
             self.ndr_batches.setdefault(batch_id, payload)
             return _json(200, {"batch_id": batch_id, "duplicate": duplicate})
+        if path == "/sensor/siem/batches":
+            batch_id = payload["batch_id"]
+            duplicate = batch_id in self.siem_batches
+            self.siem_batches.setdefault(batch_id, payload)
+            records = len(payload["records"])
+            return _json(
+                200,
+                {
+                    "batch_id": batch_id,
+                    "duplicate": duplicate,
+                    "records": records,
+                    "accepted": records,
+                    "duplicates": 0,
+                    "rejected": 0,
+                    "reject_reasons": {},
+                },
+            )
         if path == "/sensor/jobs/poll":
             jobs, self.jobs = self.jobs[: payload["max_jobs"]], self.jobs[payload["max_jobs"] :]
             return _json(200, {"jobs": jobs, "config": self.config})

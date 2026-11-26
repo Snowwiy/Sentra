@@ -1575,3 +1575,15 @@ pre {
 .pager {
   flex-wrap: wrap;
 }
+
+/* Fase 7F.7: feed del Live SOC (lista acotada a 200 mensajes; sin animaciones). */
+.live-feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.live-feed > li {
+  padding: 0.4rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+  overflow-wrap: anywhere;
+}

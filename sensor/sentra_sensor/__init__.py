@@ -1,10 +1,10 @@
 """Sentra Sensor: runtime del sensor distribuido de un Site (5F; 6A discovery avanzado; 6B SNMP;
 6C.3 módulo SNMP wlan; Corrección 6C sondas de nombre; 6E leases DHCP de ficheros locales;
-7A.4 huellas de servicio)."""
+7A.4 huellas de servicio; 7E NDR pasivo; 7F receptores SIEM)."""
 
 from sentra_sensor import snmp as _snmp
 
-__version__ = "0.8.0"
+__version__ = "0.9.0"
 
 # Capacidades realmente implementadas. Se declaran al servidor en enroll y heartbeat; no se
 # anuncia nada que el sensor no sepa hacer. Wi-Fi (6C.3) solo como inventario SNMP de lectura

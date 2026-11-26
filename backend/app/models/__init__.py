@@ -109,6 +109,14 @@ from app.models.risk import (
     RiskLevel,
     RiskSnapshot,
 )
+from app.models.siem import (
+    IncidentSiemEvent,
+    SiemBatch,
+    SiemEvent,
+    SiemEventLink,
+    SiemSavedSearch,
+    SiemSource,
+)
 from app.models.site import (
     Sensor,
     SensorEnrollmentToken,
@@ -217,6 +225,7 @@ __all__ = [
     "IncidentDetection",
     "IncidentFeedback",
     "IncidentNote",
+    "IncidentSiemEvent",
     "IncidentTask",
     "IncidentThreatMatch",
     "IncidentVulnerability",
@@ -267,6 +276,11 @@ __all__ = [
     "SensorJob",
     "SensorJobBatch",
     "SensorObservation",
+    "SiemBatch",
+    "SiemEvent",
+    "SiemEventLink",
+    "SiemSavedSearch",
+    "SiemSource",
     "Site",
     "SiteNetwork",
     "SnmpCredentialProfile",

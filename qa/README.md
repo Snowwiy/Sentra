@@ -273,6 +273,20 @@ Con datos sintéticos mide la ingesta de lotes de 1000 eventos de proceso (ruta 
 y una página de actividad. Borra lo que crea (prefijo `perf-endpoint-`). Resultados de
 referencia en [docs/process-tree.md](../docs/process-tree.md).
 
+### Rendimiento de la integración SIEM (Fase 7F)
+
+```powershell
+cd backend
+$env:PYTHONPATH = "."
+.venv\Scripts\python.exe ..\qa\perf_siem.py   # --events 20000 --runs 20
+```
+
+Con datos EVE sintéticos mide la ingesta completa en lotes de 1000 (normalización,
+deduplicación, atribución, correlación y señales), la latencia de búsquedas típicas del
+hunting y la consulta del Live SOC. Usa la base de `DATABASE_URL` (solo una base de pruebas
+propia), crea una fuente `perf-siem-` y la borra con sus eventos al terminar. Resultados de
+referencia en [docs/fase-7f.md](../docs/fase-7f.md).
+
 ### Fase 4M: producción y dashboard paginado
 
 `qa/e2e_production.py` (solo stdlib) prueba la API en modo producción detrás de un Caddy real

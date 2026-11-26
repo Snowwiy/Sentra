@@ -17,6 +17,7 @@ from urllib.parse import urlsplit
 
 from sentra_sensor.fsperm import make_private_dir
 from sentra_sensor.ndr.config import NdrConfigError, NdrLocalConfig, parse_local_ndr
+from sentra_sensor.siem.config import SiemConfigError, SiemLocalConfig, parse_local_siem
 
 LOOPBACK_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 LOG_LEVELS = frozenset({"DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"})
@@ -180,6 +181,11 @@ class LocalConfig:
     # declaradas por el operador del host (ver ndr/config.py). Su spool va aparte.
     ndr: NdrLocalConfig = field(default_factory=NdrLocalConfig)
     ndr_spool_path: str = "ndr-spool.sqlite3"
+    # Fase 7F: receptores SIEM (Syslog). Desactivados salvo `[siem] enabled = true` con
+    # entradas declaradas por el operador del host (ver siem/config.py). Spool aparte.
+    siem: SiemLocalConfig = field(default_factory=SiemLocalConfig)
+    siem_spool_path: str = "siem-spool.sqlite3"
+    siem_offsets_path: str = "siem-offsets.json"
 
     def dhcp_source(self, name: str) -> DhcpLeaseFile | None:
         for source in self.dhcp_lease_files:
@@ -212,6 +218,8 @@ class LocalConfig:
         self.spool_file()
         self.state_file()
         self.ndr_spool_file()
+        self.siem_spool_file()
+        self.siem_offsets_file()
         return self
 
     def credential_file(self) -> Path:
@@ -225,6 +233,12 @@ class LocalConfig:
 
     def ndr_spool_file(self) -> Path:
         return resolve_inside(self.data_dir, self.ndr_spool_path, "ndr_spool_path")
+
+    def siem_spool_file(self) -> Path:
+        return resolve_inside(self.data_dir, self.siem_spool_path, "siem_spool_path")
+
+    def siem_offsets_file(self) -> Path:
+        return resolve_inside(self.data_dir, self.siem_offsets_path, "siem_offsets_path")
 
     def logs_dir(self) -> Path:
         return self.log_dir or self.data_dir / "logs"
@@ -256,7 +270,7 @@ _BOOL_FIELDS = {"allow_system_ping", "allow_system_arp"}
 def _check_type(key: str, value: Any) -> None:
     # TOML ya tipa los valores; se comprueba para dar un error claro en vez de un TypeError
     # en mitad del arranque (y bool no cuenta como int aunque Python lo permita).
-    if value is None or key in ("dhcp_lease_files", "ndr"):
+    if value is None or key in ("dhcp_lease_files", "ndr", "siem"):
         # dhcp_lease_files tiene su propia validación (parse_dhcp_lease_files).
         return
     if key in _INT_FIELDS:
@@ -302,6 +316,11 @@ def load_config(path: Path | None, overrides: dict[str, Any] | None = None) -> L
             if "ndr" in section:
                 raise ConfigError("ndr is defined both at top level and inside [sensor]")
             values["ndr"] = data["ndr"]
+        # Fase 7F: `[siem]` (con `[[siem.inputs]]`) al nivel superior, como NDR.
+        if section is not data and "siem" in data:
+            if "siem" in section:
+                raise ConfigError("siem is defined both at top level and inside [sensor]")
+            values["siem"] = data["siem"]
     for key, value in (overrides or {}).items():
         if value is not None:
             values[key] = value
@@ -322,6 +341,11 @@ def load_config(path: Path | None, overrides: dict[str, Any] | None = None) -> L
         try:
             values["ndr"] = parse_local_ndr(values["ndr"])
         except NdrConfigError as exc:
+            raise ConfigError(str(exc)) from exc
+    if "siem" in values and not isinstance(values["siem"], SiemLocalConfig):
+        try:
+            values["siem"] = parse_local_siem(values["siem"])
+        except SiemConfigError as exc:
             raise ConfigError(str(exc)) from exc
     try:
         config = replace(LocalConfig(), **values)

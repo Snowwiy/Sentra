@@ -19,6 +19,7 @@ from app.discovery.probes import normalize_mac
 from app.schemas.common import RequestModel, ResponseModel
 from app.schemas.ndr import NdrHealthIn, SensorNdrConfig
 from app.schemas.network_protocol import SnmpJobCredentials, SnmpJobSummary, SnmpRecord
+from app.schemas.siem import SensorSiemConfig, SiemHealthIn
 
 SiteStatus = Literal["active", "disabled", "archived"]
 SensorStatus = Literal["pending", "online", "offline", "stale", "disabled", "revoked"]
@@ -261,6 +262,8 @@ class SensorConfig(ResponseModel):
     # Fase 7E.1: solo para sensores que declaran network.ndr.passive. Un sensor anterior no
     # recibe la clave (null) y uno 0.8.0 solo envía su estado NDR si la recibe.
     ndr: SensorNdrConfig | None = None
+    # Fase 7F: fuentes SIEM habilitadas para este sensor (solo si declara siem.ingest).
+    siem: SensorSiemConfig | None = None
 
 
 class SensorEnrollRequest(RequestModel):
@@ -305,6 +308,7 @@ class SensorHeartbeatRequest(RequestModel):
     last_successful_job_at: AwareDatetime | None = None
     sent_at: AwareDatetime | None = None
     ndr: NdrHealthIn | None = None
+    siem: SiemHealthIn | None = None
 
     @field_validator("capabilities")
     @classmethod

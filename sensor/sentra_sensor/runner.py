@@ -49,9 +49,11 @@ from sentra_sensor.scanner import (
     ScanReport,
     TcpProber,
 )
+from sentra_sensor.siem import SIEM_CAPABILITY
+from sentra_sensor.siem.manager import SiemManager
 from sentra_sensor.snmp.collector import SnmpCollector, SnmpCredentials, SnmpReport
 from sentra_sensor.snmp.transport import SnmpTransport
-from sentra_sensor.spool import KIND_COMPLETE, KIND_NDR, KIND_RESULTS, Spool, SpoolItem
+from sentra_sensor.spool import KIND_COMPLETE, KIND_NDR, KIND_RESULTS, KIND_SIEM, Spool, SpoolItem
 from sentra_sensor.state import (
     MODE_ACTIVE,
     MODE_DISABLED,
@@ -159,6 +161,8 @@ class SensorRunner:
         snmp_transport: SnmpTransportFactory | None = None,
         ndr_manager: NdrManager | None = None,
         ndr_spool: Spool | None = None,
+        siem_manager: SiemManager | None = None,
+        siem_spool: Spool | None = None,
     ) -> None:
         self.config = config
         self._transport = transport
@@ -178,6 +182,9 @@ class SensorRunner:
         # no se crea ningún fichero nuevo en el host).
         self.ndr_spool: Spool | None = ndr_spool
         self._owns_ndr_spool = False
+        # Fase 7F: spool propio de SIEM, solo con `[siem] enabled = true` en sensor.toml.
+        self.siem_spool: Spool | None = siem_spool
+        self._owns_siem_spool = False
         try:
             if self.ndr_spool is None and config.ndr.enabled:
                 self.ndr_spool = Spool(
@@ -188,6 +195,15 @@ class SensorRunner:
                     clock=clock,
                 )
                 self._owns_ndr_spool = True
+            if self.siem_spool is None and config.siem.enabled:
+                self.siem_spool = Spool(
+                    config.siem_spool_file(),
+                    max_bytes=config.siem.spool_max_mb * 1024 * 1024,
+                    max_items=1_000_000,
+                    max_age_seconds=24 * 3600,
+                    clock=clock,
+                )
+                self._owns_siem_spool = True
             self._probers = probers or ProberSet
             self._clock = clock
             self._rng = rng or random.Random()  # noqa: S311  (jitter, no criptografía)
@@ -212,6 +228,12 @@ class SensorRunner:
             self.active: ActiveJob | None = None
             self.next_heartbeat_at = 0.0
             self.ndr = ndr_manager or NdrManager(config.ndr, self._enqueue_ndr)
+            self.siem = siem_manager or SiemManager(
+                config.siem,
+                self._enqueue_siem,
+                clock=clock,
+                offsets_path=config.siem_offsets_file(),
+            )
         except BaseException:
             # Si el resto del arranque falla (estado ilegible, cliente), la conexión SQLite
             # recién abierta no puede quedar viva hasta el GC.
@@ -219,6 +241,8 @@ class SensorRunner:
                 self.spool.close()
             if self._owns_ndr_spool and self.ndr_spool is not None:
                 self.ndr_spool.close()
+            if self._owns_siem_spool and self.siem_spool is not None:
+                self.siem_spool.close()
             raise
         self.next_poll_at = 0.0
         self._heartbeat_failures = 0
@@ -280,6 +304,13 @@ class SensorRunner:
         self.ndr_spool.enqueue(f"ndr:{interface}", KIND_NDR, batch, batch_id=batch.get("batch_id"))
         self.wake()
 
+    def _enqueue_siem(self, name: str, batch: dict[str, Any]) -> None:
+        """Llamado desde los hilos de los receptores (o del bucle al vencer el intervalo)."""
+        if self.siem_spool is None:
+            return
+        self.siem_spool.enqueue(f"siem:{name}", KIND_SIEM, batch, batch_id=batch.get("batch_id"))
+        self.wake()
+
     def stop(self) -> None:
         self._stopping.set()
         if self.active is not None:
@@ -318,6 +349,8 @@ class SensorRunner:
                 self._reap_job()
             # Las capturas exportan lo pendiente al parar; queda en el spool de NDR.
             self.ndr.stop()
+            # Los receptores SIEM dejan de escuchar y lo agrupado pasa al spool.
+            self.siem.stop()
             # Último intento de entregar lo pendiente; lo que no salga sigue en el spool.
             if self.mode == MODE_ACTIVE and self._server_reachable:
                 self.flush()
@@ -332,6 +365,8 @@ class SensorRunner:
         self.spool.close()
         if self._owns_ndr_spool and self.ndr_spool is not None:
             self.ndr_spool.close()
+        if self._owns_siem_spool and self.siem_spool is not None:
+            self.siem_spool.close()
 
     def tick(self) -> float:
         """Una vuelta del bucle. Devuelve cuántos segundos dormir hasta la siguiente."""
@@ -346,6 +381,9 @@ class SensorRunner:
                 self.poll()
                 # Un job ejecutado en línea (tests) ya terminó: se cierra en esta vuelta.
                 self._reap_job()
+        # Los lotes SIEM vencidos pasan al spool aunque el servidor no responda: el spool es
+        # el que tiene tope de disco y antigüedad, no la memoria del receptor.
+        self.siem.flush_due()
         if self._can_work() and self._clock() >= self._flush_not_before:
             self.flush()
         return self._next_wait()
@@ -356,6 +394,9 @@ class SensorRunner:
     def _next_wait(self) -> float:
         now = self._clock()
         candidates = [self.next_heartbeat_at]
+        siem_flush = self.siem.next_flush_time()
+        if siem_flush is not None:
+            candidates.append(siem_flush)
         if self._can_work():
             if self.active is None and self.server_config and self.server_config.jobs_enabled:
                 candidates.append(self.next_poll_at)
@@ -366,6 +407,10 @@ class SensorRunner:
                 ndr_due = self.ndr_spool.next_attempt_time()
                 if ndr_due is not None:
                     candidates.append(max(ndr_due, self._flush_not_before))
+            if self.siem_spool is not None:
+                siem_due = self.siem_spool.next_attempt_time()
+                if siem_due is not None:
+                    candidates.append(max(siem_due, self._flush_not_before))
         return max(MIN_WAIT_SECONDS, min(candidates) - now)
 
     def _maybe_reload_identity(self) -> None:
@@ -396,7 +441,8 @@ class SensorRunner:
             **host_metadata(),
             "sensor_version": __version__,
             "capabilities": list(CAPABILITIES)
-            + ([NDR_CAPABILITY] if self.config.ndr.enabled else []),
+            + ([NDR_CAPABILITY] if self.config.ndr.enabled else [])
+            + ([SIEM_CAPABILITY] if self.config.siem.enabled else []),
             # Trabajo pendiente: jobs con envíos en el spool + el que se está escaneando.
             "queue_depth": queued_jobs + (1 if self.active is not None else 0),
             "spool_items": stats.items,
@@ -418,6 +464,17 @@ class SensorRunner:
                     spool_dropped=ndr_stats.dropped_total,
                 )
             body["ndr"] = health
+        # Fase 7F: igual que NDR, solo si el servidor envió un bloque siem.
+        if self.server_config is not None and self.server_config.siem is not None:
+            siem_health = self.siem.health()
+            if self.siem_spool is not None:
+                siem_stats = self.siem_spool.stats()
+                siem_health.update(
+                    spool_items=siem_stats.items,
+                    spool_bytes=siem_stats.bytes,
+                    spool_dropped=siem_stats.dropped_total,
+                )
+            body["siem"] = siem_health
         return body
 
     def heartbeat(self) -> None:
@@ -434,6 +491,7 @@ class SensorRunner:
             self._heartbeat_failed(str(exc), exc.retry_after)
             return
         self._apply_ndr(config, response.get("status"))
+        self._apply_siem(config, response.get("status"))
         recovered = self._heartbeat_failures > 0 or not self._server_reachable
         self._heartbeat_failures = 0
         self._server_reachable = True
@@ -484,8 +542,10 @@ class SensorRunner:
     def _handle_auth_error(self, exc: ApiError) -> bool:
         """401/403: cambia de modo, nunca descarta datos. Devuelve True si lo gestionó."""
         if exc.status == 403 and exc.code in ("sensor_revoked", "sensor_disabled"):
-            # Revocado o deshabilitado: la captura se para (lo ya encolado se conserva).
+            # Revocado o deshabilitado: la captura y los receptores SIEM se paran (lo ya
+            # encolado se conserva).
             self.ndr.apply(None)
+            self.siem.apply(None)
         if exc.status == 403 and exc.code == "sensor_revoked":
             self.mode = MODE_REVOKED
             self._server_reachable = False
@@ -529,6 +589,16 @@ class SensorRunner:
             self.ndr_spool.max_bytes = min(local_mb, ndr.spool_max_mb) * 1024 * 1024
             self.ndr_spool.max_age_seconds = ndr.spool_max_age_hours * 3600
         self.ndr.apply(ndr)
+
+    def _apply_siem(self, config: ServerConfig, status: object) -> None:
+        # Un sensor deshabilitado no escucha aunque haya fuentes SIEM habilitadas.
+        siem = config.siem if status != "disabled" else None
+        if siem is not None and self.siem_spool is not None:
+            # Igual que NDR: el servidor puede pedir menos disco o antigüedad, nunca más.
+            local_mb = self.config.siem.spool_max_mb
+            self.siem_spool.max_bytes = min(local_mb, siem.spool_max_mb) * 1024 * 1024
+            self.siem_spool.max_age_seconds = siem.spool_max_age_hours * 3600
+        self.siem.apply(siem)
 
     def _apply_config(self, config: ServerConfig) -> None:
         if config.site_id and config.site_id != self.identity.site_id:
@@ -1023,13 +1093,27 @@ class SensorRunner:
                         "duplicate": response.get("duplicate"),
                     },
                 )
-        return delivered + self._flush_ndr()
+        return delivered + self._flush_ndr() + self._flush_siem()
 
     def _flush_ndr(self) -> int:
         """Envía los lotes de NDR vencidos. Misma política de errores que el spool de jobs,
         salvo 403 ndr_not_authorized: la captura ya no está aprobada y esos datos no deben
         conservarse ni reenviarse."""
-        spool = self.ndr_spool
+        return self._flush_side_spool(self.ndr_spool, self.client.ndr_batch, "ndr_not_authorized")
+
+    def _flush_siem(self) -> int:
+        """Fase 7F: igual que NDR. 403 siem_not_authorized = la fuente ya no está habilitada
+        para este sensor (o cambió de site): esos registros se descartan, no se reenvían."""
+        return self._flush_side_spool(
+            self.siem_spool, self.client.siem_batch, "siem_not_authorized"
+        )
+
+    def _flush_side_spool(
+        self,
+        spool: Spool | None,
+        send: Callable[[dict[str, Any]], dict[str, Any]],
+        not_authorized: str,
+    ) -> int:
         if spool is None:
             return 0
         delivered = 0
@@ -1038,14 +1122,14 @@ class SensorRunner:
             if item is None:
                 break
             try:
-                self.client.ndr_batch(item.payload)
+                send(item.payload)
             except TransportError as exc:
                 delay = self._backoff(item.attempts + 1)
                 spool.defer(item.id, delay, str(exc))
                 self._flush_not_before = self._clock() + delay
                 break
             except ApiError as exc:
-                if exc.status == 403 and exc.code == "ndr_not_authorized":
+                if exc.status == 403 and exc.code == not_authorized:
                     spool.discard(item, exc.code)
                     continue
                 if exc.status in (401, 403):

@@ -23,6 +23,8 @@ InsightKindName = Literal[
     "incident_evidence",
     "incident_next_steps",
     "vulnerability_analysis",
+    # Fase 7F.6: resumen de un evento SIEM.
+    "siem_event_analysis",
     # Fase 7C.2: asistente de la Analyst Console.
     "console_summary",
     "console_risk",
@@ -176,7 +178,9 @@ class InsightResult(ResponseModel):
 class InsightRead(ResponseModel):
     insight_id: UUID
     kind: InsightKindName
-    scope: Literal["asset", "detection", "incident", "vulnerability", "fleet", "console"]
+    scope: Literal[
+        "asset", "detection", "incident", "vulnerability", "fleet", "console", "siem_event"
+    ]
     asset_id: UUID | None
     asset_name: str | None
     detection_id: UUID | None
