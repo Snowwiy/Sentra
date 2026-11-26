@@ -23,6 +23,7 @@ from app.core.rate_limit import Limiter
 from app.ndr.analysis import ndr_analyzers
 from app.ndr.ingest import NdrIngest
 from app.schemas.ndr import NdrBatchAccepted, NdrBatchIn
+from app.schemas.siem import SiemBatchAccepted, SiemBatchIn
 from app.schemas.site import (
     SensorEnrollRequest,
     SensorEnrollResponse,
@@ -39,6 +40,9 @@ from app.schemas.site import (
     SensorRotateResponse,
 )
 from app.services.sensor_service import SensorProtocol
+from app.siem.analysis import siem_analyzers
+from app.siem.contract import RawRecord
+from app.siem.ingest import SiemIngest
 
 router = APIRouter(prefix="/sensor", tags=["sensor protocol"])
 
@@ -168,3 +172,55 @@ def ndr_batch(
     sensor = protocol.authenticate(credential, allow_disabled=False)
     _limit(request, "sensor_ndr_limiter", str(sensor.public_id), "sensor_ndr")
     return NdrIngest(session, settings, ndr_analyzers()).process(sensor, body)
+
+
+@router.post(
+    "/siem/batches",
+    response_model=SiemBatchAccepted,
+    responses=error_responses(401, 403, 413, 422, 429),
+)
+def siem_batch(
+    body: SiemBatchIn,
+    request: Request,
+    protocol: Protocol,
+    session: DbSession,
+    settings: AppSettings,
+    credential: Credential,
+) -> SiemBatchAccepted:
+    """Fase 7F.1: lote de registros de una fuente SIEM que este sensor recibe o lee.
+
+    El site sale de la credencial del sensor y la fuente debe ser suya (app/siem/ingest.py):
+    el contenido de los registros nunca decide a qué site o fuente pertenecen.
+    """
+    sensor = protocol.authenticate(credential, allow_disabled=False)
+    _limit(request, "sensor_siem_limiter", str(sensor.public_id), "sensor_siem")
+    ingest = SiemIngest(session, settings, siem_analyzers())
+    source = ingest.authorize_sensor(sensor, body)
+    records = [
+        RawRecord(
+            raw=record.raw,
+            transport=record.transport,
+            reference=_reference(
+                body.input, record.transport, record.peer_ip, record.file_id, record.offset
+            ),
+            record_id=record.record_id,
+            collected_at=record.collected_at,
+            peer_ip=record.peer_ip,
+            peer_port=record.peer_port,
+        )
+        for record in body.records
+    ]
+    stats = body.stats.model_dump() if body.stats is not None else None
+    return ingest.process(
+        source, body.batch_id, records, origin="sensor", sensor=sensor, stats=stats
+    )
+
+
+def _reference(
+    alias: str, transport: str, peer: str | None, file_id: str | None, offset: int | None
+) -> str:
+    """Referencia al registro original: entrada, transporte y origen (IP del emisor o
+    fichero y desplazamiento). Permite volver al registro en el equipo de origen."""
+    if transport == "file":
+        return f"{alias}:file:{file_id or '?'}@{offset if offset is not None else '?'}"
+    return f"{alias}:{transport}:{peer or '?'}"

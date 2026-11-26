@@ -82,6 +82,8 @@ interface Props {
   incidentId?: string;
   /** Fase 5B: análisis de un finding de vulnerabilidad (solo lectura). */
   vulnerabilityFindingId?: string;
+  /** Fase 7F.6: no cargar el último análisis guardado (el listado no filtra por esta entidad). */
+  skipCached?: boolean;
   run: (refresh: boolean) => Promise<Insight>;
 }
 
@@ -93,6 +95,7 @@ export function AIAnalyzePanel({
   detectionId,
   incidentId,
   vulnerabilityFindingId,
+  skipCached = false,
   run,
 }: Props) {
   const auth = useAuth();
@@ -104,7 +107,7 @@ export function AIAnalyzePanel({
 
   // Último análisis guardado (lectura barata: no llama al modelo).
   useEffect(() => {
-    if (!allowed) return;
+    if (!allowed || skipCached) return;
     const controller = new AbortController();
     aiApi
       .list(
@@ -123,7 +126,7 @@ export function AIAnalyzePanel({
       })
       .catch(() => undefined);
     return () => controller.abort();
-  }, [allowed, kind, assetId, detectionId, incidentId, vulnerabilityFindingId]);
+  }, [allowed, skipCached, kind, assetId, detectionId, incidentId, vulnerabilityFindingId]);
 
   const analyze = useCallback(
     async (refresh: boolean) => {

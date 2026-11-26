@@ -76,6 +76,10 @@ class SignalKind(enum.StrEnum):
     # se registra si hay alguna regla personalizada o Sigma activa del logsource ndr_dns
     # (como EVENT): sin reglas, cero filas.
     NDR_DNS = "ndr_dns"
+    # Fase 7F: alerta de un producto externo (Suricata, Wazuh) importada por una fuente SIEM y
+    # atribuida a un activo del site. La emite app/siem/signals.py; la regla SIEM-EXT-001 la
+    # convierte en detección con origen "imported" (evidencia externa, no intrusión confirmada).
+    SIEM_ALERT = "siem_alert"
 
 
 class SourceType(enum.StrEnum):
@@ -86,6 +90,7 @@ class SourceType(enum.StrEnum):
     THREAT_INTEL = "threat_intel"
     ENDPOINT_ACTIVITY = "endpoint_activity"
     NDR = "ndr"
+    SIEM = "siem"
 
 
 @dataclass(frozen=True)

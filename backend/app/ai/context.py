@@ -67,6 +67,7 @@ from app.models.incident import (
     IncidentThreatMatch,
 )
 from app.models.risk import RiskSnapshot
+from app.models.siem import SiemEvent, SiemEventLink, SiemSource
 from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.tool import ToolExecution
 from app.models.vulnerability import Vulnerability, VulnerabilityFinding
@@ -98,6 +99,7 @@ RefType = Literal[
     "vulnerability",
     "threat_match",
     "tool_execution",
+    "siem_event",
 ]
 
 # Prefijo del identificador corto de cada tipo (lo que ve el modelo).
@@ -120,6 +122,8 @@ _PREFIX: dict[str, str] = {
     "threat_match": "T",
     # Fase 7C.2: resultado de una herramienta del Analyst Tool Engine (consola).
     "tool_execution": "R",
+    # Fase 7F.6: evento de una fuente SIEM externa.
+    "siem_event": "G",
 }
 
 # Claves de diccionarios no confiables que se seudonimizan como campo estructurado.
@@ -137,6 +141,7 @@ _KEY_FIELDS: dict[str, str] = {
     "host": "hostnames",
     "domain": "hostnames",
     "source_ip": "ips",
+    "destination_ip": "ips",
     "ip": "ips",
     "ip_address": "ips",
     "address": "ips",
@@ -984,6 +989,82 @@ class ContextBuilder:
             risk_snapshot_pk=self._latest_snapshot_pk(asset),
             vulnerability_pk=finding.id,
         )
+
+    def siem_event(self, public_id: UUID) -> AIContext:
+        """Evento SIEM (Fase 7F.6): lo que dijo la fuente externa, la atribución de Sentra y
+        sus relaciones explicadas. El texto del evento es dato no confiable."""
+        row = self._session.execute(
+            select(SiemEvent, SiemSource)
+            .join(SiemSource, SiemSource.id == SiemEvent.source_id)
+            .where(SiemEvent.event_id == public_id)
+        ).first()
+        if row is None:
+            raise NotFoundError("SIEM event not found")
+        event, source = row
+        asset = self._session.get(Asset, event.asset_id) if event.asset_id else None
+        asset_public = str(asset.public_id) if asset else None
+        data: dict[str, Any] = {"generated_for": "siem_event", "now": self._now}
+        if asset is not None:
+            data["asset"] = self._asset_item(asset)
+        attribution = event.attribution if isinstance(event.attribution, dict) else {}
+        data["siem_event"] = {
+            "ref": self._ref(
+                "siem_event",
+                str(event.event_id),
+                f"{event.source_type}: {event.event_type}",
+                asset_public,
+            ),
+            "source_type": event.source_type,
+            "source_name": self._text(source.name, 100),
+            "event_type": event.event_type,
+            "category": event.category,
+            "observed_at": event.observed_at,
+            "severity": event.severity,
+            "source_severity": self._text(event.source_severity, 32),
+            "confidence": event.confidence,
+            "message": self._text(event.message, 400),
+            "rule_id": self._text(event.rule_id, 64),
+            "signature_id": self._text(event.signature_id, 64),
+            "mitre_techniques": list(event.mitre_techniques or [])[:4],
+            "network": self._safe(
+                {
+                    "source_ip": event.src_ip,
+                    "destination_ip": event.dst_ip,
+                    "source_port": event.src_port,
+                    "destination_port": event.dst_port,
+                    "protocol": event.protocol,
+                }
+            ),
+            "identity": self._safe({"username": event.username, "hostname": event.hostname}),
+            "attribution": {
+                "verdict": attribution.get("verdict"),
+                "origin": attribution.get("origin"),
+                "methods": [
+                    {k: c.get(k) for k in ("role", "method", "confidence")}
+                    for c in (attribution.get("candidates") or [])[:5]
+                    if isinstance(c, dict)
+                ],
+            },
+            "note": (
+                "Evento de una fuente EXTERNA normalizado por Sentra. La atribución la decidió "
+                "Sentra de forma conservadora; una alerta externa no confirma una intrusión."
+            ),
+        }
+        data["relations"] = [
+            {
+                "kind": link.kind,
+                "method": link.method,
+                "confidence": link.confidence,
+                "explanation": self._text((link.details or {}).get("explanation"), 300),
+            }
+            for link in self._session.scalars(
+                select(SiemEventLink)
+                .where(SiemEventLink.event_id == event.id)
+                .order_by(SiemEventLink.id)
+                .limit(10)
+            )
+        ]
+        return self._finish("siem_event", data, asset_pk=asset.id if asset else None)
 
     def _exploitation(self, cve: str | None) -> dict[str, Any]:
         """KEV/EPSS del CVE con su procedencia, separado de la evidencia local."""

@@ -152,6 +152,22 @@ def analyze_vulnerability(
     return service.analyze_vulnerability(finding_id, bool(body and body.refresh))
 
 
+@router.post(
+    "/siem/events/{event_id}/analyze",
+    response_model=InsightRead,
+    responses=_ANALYSIS_ERRORS,
+    dependencies=[Depends(require_permission(Permission.SIEM_EVIDENCE))],
+)
+def analyze_siem_event(
+    event_id: UUID, service: Service, body: AnalyzeRequest | None = None
+) -> InsightRead:
+    """Fase 7F.6: resumir un evento SIEM con su atribución y relaciones.
+
+    Solo lectura: genera un insight y nunca cambia el evento, su severidad ni su atribución.
+    """
+    return service.analyze_siem_event(event_id, bool(body and body.refresh))
+
+
 # 7C-Security-Fix1: enviar resultados de herramientas a un modelo exige poder ejecutarlas
 # (tools:execute, analyst y admin) además de ai:use; un viewer no comparte datos con la IA
 # desde la consola.

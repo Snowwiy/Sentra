@@ -880,6 +880,58 @@ class Settings(BaseSettings):
     # desviación no son representativas y cualquier pico sería un falso positivo.
     ndr_baseline_min_samples: int = Field(default=24, ge=3, le=24 * 60)
 
+    # --- Fase 7F: integración SIEM (docs/fase-7f.md) --------------------------------------
+    # Nada entra hasta que un admin registra y habilita una fuente (siem:manage). Lotes por
+    # sensor y minuto (429 con Retry-After; el sensor reintenta desde su spool).
+    siem_ingest_max_per_minute: int = Field(default=120, ge=1, le=6000)
+    # Registros por lote que el servidor ordena al sensor y acepta. El sensor parte además por
+    # bytes para no superar SENSOR_MAX_REQUEST_KB.
+    siem_max_records_per_batch: int = Field(default=1000, ge=10, le=5000)
+    # Tamaño máximo de UN registro (línea Syslog o JSON). Lo mayor se rechaza (too_large).
+    siem_max_record_bytes: int = Field(default=16_384, ge=1024, le=65_536)
+    # Cuota por defecto de una fuente nueva (eventos por minuto); cada fuente puede tener la
+    # suya. Por encima, 429 siem_quota: backpressure hacia el sensor, nunca pérdida silenciosa.
+    siem_default_events_per_minute: int = Field(default=6000, ge=1, le=600_000)
+    # Retención (días) de eventos y recibos de lote. Una fuente puede acortar o alargar la de
+    # sus eventos. Null = sin purga por edad (sigue aplicando SIEM_MAX_STORED_EVENTS).
+    siem_event_retention_days: int | None = Field(default=30, ge=1, le=3650)
+    siem_batch_retention_days: int | None = Field(default=7, ge=1, le=3650)
+    # Tope de almacenamiento: por encima, la purga borra los eventos más antiguos (por lotes).
+    # 0 = sin tope (no recomendado en hardware modesto).
+    siem_max_stored_events: int = Field(default=5_000_000, ge=0, le=1_000_000_000)
+    # Bytes del registro original que se guardan como extracto de evidencia (0 = ninguno).
+    # El hash SHA-256 del registro completo se guarda siempre.
+    siem_raw_store_bytes: int = Field(default=2048, ge=0, le=8192)
+    # Salud de las fuentes: sin reporte del receptor en este tiempo la fuente está offline;
+    # con más retraso que este entre el evento y su recepción, degraded.
+    siem_source_offline_minutes: int = Field(default=15, ge=2, le=1440)
+    siem_lag_degraded_seconds: int = Field(default=900, ge=10, le=86_400)
+    # Registros por importación manual desde el dashboard (además de MAX_REQUEST_BYTES).
+    siem_upload_max_records: int = Field(default=5000, ge=1, le=50_000)
+    # Fase 7F.6: búsqueda (hunting). Tiempo máximo de cada consulta en PostgreSQL
+    # (statement_timeout local a la transacción), rango máximo de fechas y tope del recuento:
+    # una búsqueda nunca puede recorrer la tabla entera ni bloquear la base.
+    siem_search_timeout_ms: int = Field(default=5000, ge=100, le=60_000)
+    siem_search_max_days: int = Field(default=31, ge=1, le=366)
+    siem_search_count_cap: int = Field(default=10_000, ge=100, le=1_000_000)
+    # Eventos por exportación de evidencia (fichero JSON con hashes).
+    siem_export_max_events: int = Field(default=500, ge=1, le=5000)
+
+    # --- Fase 7F.7: Live SOC (SSE, docs/fase-7f-live-soc.md) ------------------------------
+    # Cada stream consulta la base con cursores por id (sin memoria compartida ni Redis:
+    # funciona igual con varios workers). Intervalo de consulta, latido, duración máxima (el
+    # cliente reconecta con Last-Event-ID y se revalida todo) y revalidación de la sesión.
+    live_poll_interval_ms: int = Field(default=2000, ge=100, le=60_000)
+    live_heartbeat_seconds: int = Field(default=15, ge=1, le=300)
+    live_max_stream_seconds: int = Field(default=900, ge=1, le=86_400)
+    live_revalidate_seconds: int = Field(default=30, ge=1, le=600)
+    # Límites POR PROCESO (worker): streams por usuario y totales. 429 live_stream_limit.
+    live_max_streams_per_user: int = Field(default=3, ge=1, le=50)
+    live_max_streams: int = Field(default=50, ge=1, le=10_000)
+    # Atraso máximo que se reenvía al reconectar; por encima se salta al presente y se avisa
+    # (estado degraded con motivo backlog_skipped): nunca se acumula en memoria.
+    live_backlog_limit: int = Field(default=500, ge=10, le=10_000)
+
     # Logs: json (una línea por evento, para journald/SIEM) o text (lectura humana en consola).
     log_format: Literal["json", "text"] = "json"
     # Fichero de log con rotación propia (útil en Windows Server). Vacío: solo stdout, que en

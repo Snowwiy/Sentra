@@ -208,6 +208,29 @@ class AuthService:
             select(UserSession).where(UserSession.token_hash == hash_token(token))
         ).one_or_none()
 
+    def _valid(self, row: UserSession, now: datetime) -> bool:
+        user = row.user
+        return not (
+            row.revoked_at is not None
+            or now >= row.expires_at
+            or now - row.last_seen_at >= self._policy.idle
+            or not user.is_active
+            # Sesión anterior al último cambio de contraseña: nunca válida.
+            or row.created_at < user.password_changed_at
+        )
+
+    def recheck(self, token: str, client_ip: str | None) -> AuthContext | None:
+        """Como `resolve`, pero sin renovar la actividad de la sesión (Fase 7F.7).
+
+        Lo usa el stream del Live SOC para revalidar periódicamente la sesión y el rol: un
+        stream abierto no cuenta como actividad del operador, así que una pestaña olvidada no
+        mantiene viva la sesión más allá de su caducidad por inactividad.
+        """
+        row = self._find(token)
+        if row is None or not self._valid(row, _now()):
+            return None
+        return AuthContext(row.user, row, token, permissions_for(row.user.role), client_ip)
+
     def resolve(self, token: str | None, client_ip: str | None) -> AuthContext | None:
         """Contexto de la sesión si sigue siendo válida; None si no (la ruta responde 401)."""
         if not token:
@@ -217,14 +240,7 @@ class AuthService:
             return None
         now = _now()
         user = row.user
-        if (
-            row.revoked_at is not None
-            or now >= row.expires_at
-            or now - row.last_seen_at >= self._policy.idle
-            or not user.is_active
-            # Sesión anterior al último cambio de contraseña: nunca válida.
-            or row.created_at < user.password_changed_at
-        ):
+        if not self._valid(row, now):
             return None
         if now - row.last_seen_at >= LAST_SEEN_RESOLUTION:
             row.last_seen_at = now

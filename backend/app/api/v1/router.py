@@ -29,6 +29,7 @@ from app.api.v1.routes import (
     incidents,
     inventory,
     isolation,
+    live,
     lookup,
     metrics,
     ndr,
@@ -39,6 +40,7 @@ from app.api.v1.routes import (
     risk,
     sensor_protocol,
     sensors,
+    siem,
     sites,
     telemetry,
     threat_intel,
@@ -100,6 +102,8 @@ api_router.include_router(sensor_protocol.router, responses=_COMMON)
 api_router.include_router(network.router, responses=_COMMON)
 api_router.include_router(wlan.router, responses=_COMMON)
 api_router.include_router(ndr.router, responses=_COMMON)
+api_router.include_router(siem.router, responses=_COMMON)
+api_router.include_router(live.router, responses=_COMMON)
 api_router.include_router(topology.router, responses=_COMMON)
 api_router.include_router(topology_history.router, responses=_COMMON)
 api_router.include_router(dhcp.router, responses=_COMMON)

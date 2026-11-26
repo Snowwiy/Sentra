@@ -37,6 +37,10 @@ FINGERPRINT_CAPABILITY = "network.discovery.fingerprint"
 # Fase 7E.1: observación pasiva de red. No es un job: habilita el bloque `config.ndr` del
 # heartbeat y la ingesta POST /sensor/ndr/batches, siempre tras la aprobación de un admin.
 NDR_CAPABILITY = "network.ndr.passive"
+# Fase 7F: el sensor sabe reenviar registros de fuentes SIEM declaradas en su sensor.toml
+# (Syslog, ficheros JSON). Habilita el bloque `config.siem` del heartbeat y la ingesta
+# POST /sensor/siem/batches, siempre para fuentes que un admin registró y habilitó.
+SIEM_CAPABILITY = "siem.ingest"
 # Capacidades que el servidor reconoce. Lo que el sensor declare fuera de esta lista se
 # descarta (un sensor no puede "anunciar" capacidades para recibir trabajos que no existen).
 CAPABILITIES: frozenset[str] = frozenset(
@@ -46,6 +50,7 @@ CAPABILITIES: frozenset[str] = frozenset(
         NAMES_CAPABILITY,
         FINGERPRINT_CAPABILITY,
         NDR_CAPABILITY,
+        SIEM_CAPABILITY,
         "network.arp",
         "network.icmp",
         "network.tcp",
@@ -63,7 +68,7 @@ REQUIRED_CAPABILITY = {
 }
 
 # Versión del runtime sensor/ que acompaña a este servidor.
-SENSOR_RUNTIME_VERSION = "0.8.0"
+SENSOR_RUNTIME_VERSION = "0.9.0"
 
 _VERSION = re.compile(r"^(\d+)\.(\d+)\.(\d+)")
 

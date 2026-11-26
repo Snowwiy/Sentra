@@ -826,7 +826,8 @@ def test_cli_ndr_commands(tmp_path: Path) -> None:
 def test_example_config_ndr_block_parses(tmp_path: Path) -> None:
     example = Path(__file__).resolve().parents[1] / "sensor.example.toml"
     text = example.read_text(encoding="utf-8")
-    block = text[text.index("# [ndr]") :]
+    # Hasta la sección siguiente del ejemplo (7F, receptores SIEM).
+    block = text[text.index("# [ndr]") : text.index("# --- Fase 7F")]
     uncommented = "\n".join(
         line[2:] if line.startswith("# ") and not line.startswith("# Requisitos") else ""
         for line in block.splitlines()

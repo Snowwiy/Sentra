@@ -145,6 +145,7 @@ from app.services import audit_service
 from app.services.alert_service import AlertThresholds
 from app.services.audit_service import Actor
 from app.services.site_service import enabled_networks, site_refs
+from app.siem.sensor_link import record_siem_health, sensor_siem_config
 
 logger = logging.getLogger(__name__)
 
@@ -432,6 +433,8 @@ def _config(session: Session, settings: Settings, sensor: Sensor, site: Site) ->
     return SensorConfig(
         # Fase 7E.1: captura pasiva aprobada (None para sensores sin la capacidad).
         ndr=sensor_ndr_config(session, settings, sensor, jobs_enabled),
+        # Fase 7F: fuentes SIEM aprobadas (None para sensores sin siem.ingest).
+        siem=sensor_siem_config(session, settings, sensor, jobs_enabled),
         site_id=site.public_id,
         site_name=site.name,
         allowed_networks=enabled_networks(session, site.id) if jobs_enabled else [],
@@ -1153,6 +1156,11 @@ class SensorProtocol:
             # Fase 7E.1: estado de la captura NDR ya validado (alias, contadores, estados
             # enumerados); nunca nombres de dispositivo.
             sensor.health["ndr"] = body.ndr.model_dump(mode="json")
+        if body.siem is not None:
+            # Fase 7F: estado de los receptores SIEM (alias y contadores) en el sensor y en
+            # cada fuente que alimenta.
+            sensor.health["siem"] = body.siem.model_dump(mode="json")
+            record_siem_health(session, sensor, body.siem, now)
         if body.sent_at is not None:
             sensor.clock_skew_seconds = int((body.sent_at - now).total_seconds())
         sensor.last_seen_at = now

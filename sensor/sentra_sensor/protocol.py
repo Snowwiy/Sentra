@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sentra_sensor.ndr.config import NdrServerConfig
+from sentra_sensor.siem.config import SiemServerConfig
 
 IPNetwork = ipaddress.IPv4Network | ipaddress.IPv6Network
 
@@ -59,6 +60,9 @@ class ServerConfig:
     # Fase 7E.1: captura NDR aprobada para este sensor. None = el servidor no conoce NDR
     # (anterior a 7E): el sensor no envía entonces nada de NDR, ni siquiera su estado.
     ndr: NdrServerConfig | None = None
+    # Fase 7F: fuentes SIEM habilitadas para este sensor. None = servidor anterior a 7F (o
+    # sensor sin la capacidad siem.ingest): no se reenvía nada ni se informa estado SIEM.
+    siem: SiemServerConfig | None = None
 
     @classmethod
     def parse(cls, data: object) -> "ServerConfig":
@@ -103,6 +107,7 @@ class ServerConfig:
             advanced_max_ports=_opt_int(data, "advanced_max_ports", 1, 1024, 0),
             max_deadline_seconds=_opt_int(data, "max_deadline_seconds", 60, 86_400, 0),
             ndr=NdrServerConfig.parse(data.get("ndr")),
+            siem=SiemServerConfig.parse(data.get("siem")),
         )
 
     def to_json(self) -> dict[str, Any]:
@@ -127,6 +132,7 @@ class ServerConfig:
             "advanced_max_ports": self.advanced_max_ports,
             "max_deadline_seconds": self.max_deadline_seconds,
             **({"ndr": _ndr_json(self.ndr)} if self.ndr is not None else {}),
+            **({"siem": self.siem.to_json()} if self.siem is not None else {}),
         }
 
 

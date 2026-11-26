@@ -8,8 +8,9 @@ su telemetría y sus eventos, detecta comportamientos sospechosos, calcula el ri
 activo de forma explicable y da a los analistas las herramientas para investigar, abrir casos
 y responder con un humano siempre en el bucle.
 
-Sentra tiene su propio modelo de datos, su API y sus motores. Wazuh, Suricata, Syslog u otras
-herramientas podrán conectarse más adelante como integraciones opcionales, nunca como núcleo.
+Sentra tiene su propio modelo de datos, su API y sus motores. Desde la Fase 7F, Syslog,
+Suricata, Zeek y Wazuh pueden conectarse como integraciones opcionales (apagadas por defecto),
+nunca como núcleo.
 
 ## 2. Objetivo del proyecto
 
@@ -32,11 +33,11 @@ Cada componente tiene su versión; no hay una versión global.
 
 | Componente | Versión | Notas |
 | --- | --- | --- |
-| Servidor (backend) | 0.6.2 | API `/api/v1` |
-| Frontend | 0.6.2 | Requiere servidor 0.6.2 |
-| Agente | 0.6.2 | Compatible con servidores anteriores |
-| Sensor | 0.7.0 | Compatible con servidores anteriores |
-| Migraciones Alembic | 0050 | Siguiente libre: 0051 |
+| Servidor (backend) | 0.9.0 | API `/api/v1` |
+| Frontend | 0.9.0 | Requiere servidor 0.9.0 |
+| Agente | 0.7.1 | Compatible con servidores anteriores |
+| Sensor | 0.9.0 | Compatible con servidores anteriores |
+| Migraciones Alembic | 0059 | Siguiente libre: 0060 |
 
 Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md).
 
@@ -45,8 +46,8 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
 | Fase | Estado |
 | --- | --- |
 | 1-6E | Completadas y publicadas (inventario, detección, riesgo, IA local opcional, incidentes, producción, reglas Sigma, vulnerabilidades, threat intelligence, respuesta, informes, sensores, SNMP, topología, telemetría de endpoint, forense y aislamiento seguro) |
-| 7A y 7B | Completadas y publicadas: Analyst Tool Engine, hub Red, tareas y controles en los casos, atribución de detecciones con mantenimiento autorizado, identidad por niveles y Analyst Console |
-| **7C** | **Completada en esta entrega**, pendiente de validación en el equipo real: modelo open-weight opcional con asistente de la consola, selectores sin ids tecleados, rediseño de consola y panel, informes v3 con gráficas e identidad sin SNMP ([docs/fase-7c.md](docs/fase-7c.md)) |
+| 7A-7E | Completadas: Analyst Tool Engine, hub Red, tareas y controles en los casos, atribución de detecciones, Analyst Console, modelo open-weight, endurecimiento de identidad y transporte (7D) y NDR pasivo (7E) |
+| **7F** | **Completada en esta entrega**, pendiente de validación en Windows y con integraciones reales: integración SIEM (Syslog, Suricata, Zeek, Wazuh), correlación multifuente, hunting e investigación, y Live SOC en directo ([docs/fase-7f.md](docs/fase-7f.md)) |
 
 ## 6. Funcionalidades implementadas
 
@@ -86,6 +87,17 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
 - Informes PDF/HTML con SHA-256 y gráficas circulares; IA local opcional como capa de análisis
   (desactivada por defecto, nunca requisito, sin fallback a Internet).
 
+**SIEM y Live SOC (7F)**
+
+- Fuentes externas autorizadas por site (Syslog por el sensor, ficheros EVE de Suricata, Zeek
+  JSON, `alerts.json` de Wazuh, JSON propio e importación manual) normalizadas a un contrato
+  único, con cuotas, retención y procedencia.
+- Correlación explicada con NDR, detecciones y otras fuentes, sin doble conteo y sin causalidad
+  por tiempo; atribución conservadora a activos.
+- Búsqueda tipada con búsquedas guardadas, relacionados, línea de tiempo, exportación con
+  hashes, añadir a un caso y resumen con IA local de solo lectura.
+- Live SOC: detecciones, alertas, actividad de casos y alertas SIEM en directo por SSE.
+
 **Plataforma**
 
 - Usuarios locales con roles admin, analyst y viewer, RBAC en el backend y auditoría.
@@ -97,8 +109,8 @@ Cruces de versiones: [docs/compatibility-matrix.md](docs/compatibility-matrix.md
 
 - Puntos de control de red reales (firewall, DNS o proxy integrados) para aplicar las
   solicitudes aprobadas; hoy Sentra solo las registra.
-- MSI firmado del agente, actualizaciones en vivo (WebSockets/SSE), integraciones opcionales
-  (Wazuh, Suricata, Syslog).
+- MSI firmado del agente; lectura de la API de Wazuh (requiere decidir cómo guardar sus
+  credenciales).
 
 ## 8. Arquitectura general
 
@@ -368,11 +380,12 @@ Pruebas e2e y de rendimiento contra una instalación de prueba: [qa/README.md](q
 | Detección y riesgo | [motor de detección](docs/detection-engine.md), [reglas personalizadas](docs/custom-detection-rules.md), [Sigma](docs/sigma-support.md), [comportamiento](docs/behavioral-detection.md), [PowerShell](docs/powershell-detections.md), [riesgo](docs/risk-engine.md), [vulnerabilidades](docs/vulnerability-management.md), [threat intelligence](docs/threat-intelligence.md) |
 | Casos y respuesta | [incidentes](docs/incident-management.md), [tareas y controles](docs/case-operations.md), [Analyst Tool Engine](docs/analyst-tool-engine.md), [Response](docs/response-engine.md), [playbooks](docs/playbooks.md), [forense](docs/forensic-investigation.md), [aislamiento](docs/safe-isolation.md) |
 | Panel e informes | [vista de seguridad](docs/security-dashboard.md), [informes](docs/reporting.md), [IA local](docs/ai-security-insights.md), [modelo open-weight](docs/open-weight-model.md), [consola](docs/analyst-console.md), [selectores](docs/contextual-selectors.md), [Fase 7C](docs/fase-7c.md) |
+| SIEM y Live SOC | [Fase 7F](docs/fase-7f.md), [Syslog](docs/fase-7f-syslog.md), [Suricata](docs/fase-7f-suricata.md), [Zeek](docs/fase-7f-zeek.md), [Wazuh](docs/fase-7f-wazuh.md), [correlación y hunting](docs/fase-7f-correlation.md), [Live SOC](docs/fase-7f-live-soc.md) |
 | Producción | [despliegue](docs/production-deployment.md), [seguridad de red](docs/network-security.md), [copias](docs/backup-restore.md), [observabilidad](docs/observability.md), [autenticación](docs/authentication.md) |
 
 ## 24. Roadmap
 
-1. Validar 7C en el equipo real (modelo local real, suites en Windows, revisión visual).
+1. Validar 7E y 7F en Windows y con integraciones reales (Npcap, Suricata, Zeek, Wazuh,
+   Syslog), según docs/fase-7f-windows-qa.md.
 2. Integración de un punto de control de red real para aplicar solicitudes aprobadas.
-3. MSI firmado del agente y actualizaciones en vivo.
-4. Integraciones opcionales (Wazuh, Suricata, Syslog) sin convertirse en núcleo.
+3. MSI firmado del agente.

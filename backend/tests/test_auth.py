@@ -192,6 +192,8 @@ def test_login_sets_a_secure_cookie_and_restores_via_me(db: Session, anonymous: 
         "containment:preview", "tools:read", "tools:execute",
         # Fase 7E: NDR, agregados y evidencia (aprobar la captura es solo admin).
         "ndr:read", "ndr:evidence", "ndr:triage",
+        # Fase 7F: SIEM, fuentes, agregados y eventos (registrar fuentes es solo admin).
+        "siem:read", "siem:evidence",
     }  # fmt: skip
     cookie = response.headers["set-cookie"]
     assert cookie.startswith(f"{COOKIE}=sentra_s_")
@@ -470,6 +472,8 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.RESPONSE_READ, Permission.REPORTS_READ, Permission.TOOLS_READ,
         # Fase 7E: estado de la captura y agregados de red, sin flujos individuales.
         Permission.NDR_READ,
+        # Fase 7F: fuentes SIEM y agregados, sin eventos individuales.
+        Permission.SIEM_READ,
     }  # fmt: skip
     writes = set(Permission) - reads
     assert ROLE_PERMISSIONS[Role.VIEWER] == reads
@@ -487,9 +491,12 @@ def test_role_permissions_are_least_privilege() -> None:
         Permission.FORENSICS_DOWNLOAD, Permission.CONTAINMENT_PREVIEW,
         Permission.TOOLS_READ, Permission.TOOLS_EXECUTE,
         Permission.NDR_READ, Permission.NDR_EVIDENCE, Permission.NDR_TRIAGE,
+        Permission.SIEM_READ, Permission.SIEM_EVIDENCE,
     }  # fmt: skip
     # Fase 7E: aprobar la captura NDR de un sensor, solo admin.
     assert Permission.NDR_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
+    # Fase 7F: registrar fuentes SIEM e importar ficheros, solo admin.
+    assert Permission.SIEM_MANAGE not in ROLE_PERMISSIONS[Role.ANALYST]
     # Fase 6E: fuentes DHCP, gestión forense y aislar/liberar un endpoint, solo admin.
     for admin_only in (
         Permission.DHCP_MANAGE,
@@ -686,6 +693,7 @@ NON_SESSION_ROUTES = {
     ("POST", "/api/v1/sensor/jobs/{job_id}/complete"),
     ("POST", "/api/v1/sensor/credential/rotate"),
     ("POST", "/api/v1/sensor/ndr/batches"),  # Fase 7E.1: lotes NDR (credencial del sensor)
+    ("POST", "/api/v1/sensor/siem/batches"),  # Fase 7F.1: lotes SIEM (credencial del sensor)
 }
 
 
@@ -721,6 +729,10 @@ def _concrete(path: str) -> str:
         "operation_id", "client_id", "observation_id",
         # Fase 7E.2: anomalías NDR.
         "anomaly_id",
+        # Fase 7F: fuentes y eventos SIEM.
+        "siem_source_id", "event_id",
+        # Fase 7F.6: búsquedas guardadas.
+        "search_id",
     ):  # fmt: skip
         path = path.replace("{" + name + "}", str(uuid4()))
     # Fase 7A: herramientas del registro por identificador estable.

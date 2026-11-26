@@ -1431,7 +1431,12 @@ export type Permission =
   | "ndr:read"
   | "ndr:evidence"
   | "ndr:triage"
-  | "ndr:manage";
+  | "ndr:manage"
+  // Fase 7F: SIEM. Fuentes y agregados (todos), eventos y búsquedas (analyst y admin) y
+  // registrar fuentes o importar ficheros (solo admin).
+  | "siem:read"
+  | "siem:evidence"
+  | "siem:manage";
 
 export interface CurrentUser {
   user_id: string;
@@ -2093,12 +2098,14 @@ export type InsightKind =
   | "incident_evidence"
   | "incident_next_steps"
   | "vulnerability_analysis"
+  // Fase 7F.6: resumen de solo lectura de un evento SIEM.
+  | "siem_event_analysis"
   // Fase 7C.2: asistente contextual de la Analyst Console (privados de quien los pide).
   | "console_summary"
   | "console_risk"
   | "console_hypotheses"
   | "console_draft";
-export type InsightScope = "asset" | "detection" | "incident" | "vulnerability" | "fleet" | "console";
+export type InsightScope = "asset" | "detection" | "incident" | "vulnerability" | "fleet" | "console" | "siem_event";
 /** Vocabulario de certeza que exige el backend a cada hallazgo. */
 export type Certainty = "observed" | "detected" | "correlated" | "possible" | "requires_validation";
 export type AIWindow = "24h" | "7d" | "30d";
@@ -6916,4 +6923,355 @@ export interface NdrControlRequest {
   suggestion_id: string;
   justification: string;
   expires_at?: string | null;
+}
+
+// --- Fase 7F: integración SIEM -------------------------------------------------------------
+
+export type SiemSourceState = "disabled" | "configured" | "healthy" | "degraded" | "offline" | "error";
+export type SiemTransport = "sensor" | "upload";
+export type SiemSeverity = "informational" | "low" | "medium" | "high" | "critical" | "unknown";
+
+export interface SiemConnectorRead {
+  source_type: string;
+  title: string;
+  version: string;
+  transports: string[];
+  sensor_input: string | null;
+  description: string;
+  severity_policy: Record<string, string>;
+  severity_policy_doc: string;
+  event_types: string[];
+  sensitive_fields: string[];
+  validation: string;
+  formats: string[];
+}
+
+export interface SiemConnectorList {
+  items: SiemConnectorRead[];
+}
+
+export interface SiemSourceConfig {
+  severity_policy?: Record<string, SiemSeverity>;
+  event_types?: string[];
+}
+
+export interface SiemSourceRead {
+  source_id: string;
+  name: string;
+  source_type: string;
+  connector_title: string | null;
+  connector_version: string;
+  transport: string;
+  site_id: string;
+  site_name: string;
+  sensor_id: string | null;
+  sensor_name: string | null;
+  input_name: string | null;
+  enabled: boolean;
+  revision: number;
+  status: SiemSourceState;
+  status_reasons: string[];
+  config: Record<string, unknown>;
+  effective_severity_policy: Record<string, string>;
+  retention_days: number | null;
+  effective_retention_days: number | null;
+  max_events_per_minute: number;
+  events_received: number;
+  events_accepted: number;
+  events_rejected: number;
+  events_duplicate: number;
+  events_dropped: number;
+  last_success_at: string | null;
+  last_event_at: string | null;
+  lag_seconds: number | null;
+  last_error_code: string | null;
+  last_error_at: string | null;
+  reported_state: string | null;
+  reported_at: string | null;
+  created_by: string | null;
+  updated_by: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSourceList {
+  items: SiemSourceRead[];
+}
+
+export interface SiemSourceCreate {
+  site_id: string;
+  name: string;
+  source_type: string;
+  transport: SiemTransport;
+  sensor_id?: string | null;
+  input_name?: string | null;
+  enabled?: boolean;
+  retention_days?: number | null;
+  max_events_per_minute?: number | null;
+  config?: SiemSourceConfig;
+}
+
+export interface SiemSourceUpdate {
+  expected_revision: number;
+  name?: string;
+  enabled?: boolean;
+  sensor_id?: string | null;
+  input_name?: string | null;
+  retention_days?: number | null;
+  clear_retention?: boolean;
+  max_events_per_minute?: number | null;
+  config?: SiemSourceConfig;
+}
+
+export interface SiemBatchAccepted {
+  batch_id: string;
+  duplicate: boolean;
+  records: number;
+  accepted: number;
+  duplicates: number;
+  rejected: number;
+  reject_reasons: Record<string, number>;
+}
+
+export interface SiemAssetRef {
+  asset_id: string;
+  name: string;
+}
+
+export interface SiemEventRead {
+  event_id: string;
+  schema_version: number;
+  normalization_version: string;
+  source_id: string;
+  source_name: string;
+  source_type: string;
+  site_id: string;
+  event_type: string;
+  category: string;
+  timestamp: string;
+  collected_at: string | null;
+  received_at: string;
+  time_quality: string;
+  severity: SiemSeverity;
+  source_severity: string | null;
+  confidence: string;
+  hostname: string | null;
+  source_ip: string | null;
+  destination_ip: string | null;
+  source_port: number | null;
+  destination_port: number | null;
+  protocol: string | null;
+  username: string | null;
+  process_name: string | null;
+  action: string | null;
+  outcome: string | null;
+  signature_id: string | null;
+  rule_id: string | null;
+  message: string | null;
+  tags: string[];
+  mitre_techniques: string[];
+  external_id: string | null;
+  flow_ref: string | null;
+  raw_reference: string;
+  evidence_hash: string;
+  asset: SiemAssetRef | null;
+  attribution: SiemAttribution | null;
+}
+
+export type SiemAttributionVerdict = "attributed" | "multiple" | "ambiguous" | "hostname_hint" | "insufficient_evidence";
+export type SiemAlertOrigin = "imported" | "correlated" | "probable_match" | "insufficient_evidence";
+
+export interface SiemAttributionCandidate {
+  asset_id: string | null;
+  asset_name: string | null;
+  role: string;
+  method: string;
+  confidence: string;
+  value: string;
+}
+
+export interface SiemAttribution {
+  verdict: SiemAttributionVerdict | string;
+  candidates: SiemAttributionCandidate[];
+  ambiguous: number;
+  origin: SiemAlertOrigin | string | null;
+}
+
+export interface SiemEventLinkRead {
+  kind: "ndr_flow" | "ndr_anomaly" | "siem_event" | "detection" | string;
+  target_ref: string;
+  method: string;
+  confidence: string;
+  explanation: string;
+  created_at: IsoDateTime;
+}
+
+export interface SiemEventDetail extends SiemEventRead {
+  raw_excerpt: string | null;
+  data: Record<string, unknown> | null;
+  links: SiemEventLinkRead[];
+}
+
+export interface SiemEventList {
+  items: SiemEventRead[];
+  total: number;
+  limit: number;
+  offset: number;
+  total_capped: boolean;
+}
+
+export interface SiemCount {
+  key: string;
+  count: number;
+}
+
+export interface SiemOverview {
+  window_hours: number;
+  sources_total: number;
+  sources_by_status: Record<string, number>;
+  events: number;
+  rejected: number;
+  duplicates: number;
+  by_source_type: SiemCount[];
+  by_severity: SiemCount[];
+  by_category: SiemCount[];
+  lagging_sources: number;
+  last_event_received_at: string | null;
+}
+
+// --- Fase 7F.6: hunting e investigación SIEM ------------------------------------------------
+
+/** Filtro tipado de hunting (sin lenguaje de consulta). `since` y `until` son obligatorios. */
+export interface SiemSearchFilter {
+  since: string;
+  until: string;
+  site_id?: string | null;
+  source_ids?: string[];
+  source_types?: string[];
+  event_types?: string[];
+  categories?: string[];
+  severities?: SiemSeverity[];
+  /** IP o CIDR (≥ /8 en IPv4, ≥ /16 en IPv6); `ip` busca en origen o destino. */
+  ip?: string | null;
+  source_ip?: string | null;
+  destination_ip?: string | null;
+  port?: number | null;
+  protocol?: string | null;
+  hostname?: string | null;
+  username?: string | null;
+  rule_id?: string | null;
+  signature_id?: string | null;
+  external_id?: string | null;
+  flow_ref?: string | null;
+  mitre_technique?: string | null;
+  asset_id?: string | null;
+  verdicts?: string[];
+  origins?: string[];
+  /** Texto literal contenido en el mensaje (3-100 caracteres). */
+  text?: string | null;
+}
+
+export interface SiemSearchRequest extends SiemSearchFilter {
+  limit?: number;
+  cursor?: string | null;
+  count?: boolean;
+}
+
+export interface SiemSearchResult {
+  items: SiemEventRead[];
+  next_cursor: string | null;
+  count: number | null;
+  count_capped: boolean;
+  took_ms: number;
+}
+
+export interface SiemSavedSearchRead {
+  search_id: string;
+  name: string;
+  query: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface SiemSavedSearchList {
+  items: SiemSavedSearchRead[];
+}
+
+export interface SiemRelatedDetection {
+  detection_id: string;
+  asset_id: string;
+  asset_name: string;
+  rule_id: string;
+  title: string;
+  severity: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  match: "topic" | "time_only";
+  explanation: string;
+}
+
+export interface SiemRelatedEvent {
+  event_id: string;
+  source_name: string;
+  source_type: string;
+  event_type: string;
+  timestamp: string;
+  direction: "outgoing" | "incoming";
+  method: string;
+  confidence: string;
+  explanation: string;
+}
+
+export interface SiemRelated {
+  event_id: string;
+  events: SiemRelatedEvent[];
+  detections: SiemRelatedDetection[];
+  window_minutes: number;
+  note: string;
+}
+
+export interface SiemTimelineItem {
+  kind: "siem_event" | "detection";
+  ref: string;
+  at: string;
+  title: string;
+  severity: string;
+  source: string;
+}
+
+export interface SiemTimeline {
+  asset_id: string;
+  since: string;
+  until: string;
+  items: SiemTimelineItem[];
+  truncated: boolean;
+}
+
+export interface SiemEvidenceExport {
+  format: "sentra-siem-evidence/1";
+  exported_at: string;
+  exported_by: string;
+  reason: string | null;
+  events: SiemEventDetail[];
+  missing: string[];
+  events_sha256: string;
+}
+
+export interface IncidentSiemEventRead {
+  event_id: string;
+  available: boolean;
+  source_name: string;
+  source_type: string;
+  event_type: string;
+  timestamp: string;
+  evidence_hash: string;
+  snapshot: Record<string, unknown>;
+  snapshot_sha256: string;
+  note: string | null;
+  attached_at: string;
+  attached_by: string;
+}
+
+export interface IncidentSiemEventList {
+  items: IncidentSiemEventRead[];
 }

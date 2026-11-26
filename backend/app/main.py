@@ -304,6 +304,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.sensor_ndr_limiter = make_limiter(
         backend, "sensor_ndr", settings.ndr_ingest_max_per_minute, 60, get_engine
     )
+    # Fase 7F.1: lotes SIEM por sensor (el sensor reintenta desde su spool con Retry-After).
+    app.state.sensor_siem_limiter = make_limiter(
+        backend, "sensor_siem", settings.siem_ingest_max_per_minute, 60, get_engine
+    )
     # Fase 5A: pruebas históricas de reglas por usuario (además del lock global de 1 a la vez).
     app.state.rule_test_limiter = make_limiter(
         backend, "rule_test", settings.rule_test_per_minute, 60, get_engine

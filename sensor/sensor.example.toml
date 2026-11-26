@@ -78,3 +78,51 @@ dhcp_max_file_kb = 4096
 # [[ndr.interfaces]]
 # name = "lan"            # alias que ve el servidor: ^[a-z0-9_-]{1,32}$
 # device = "eth1"         # Windows: \Device\NPF_{GUID} (ver `sentra-sensor ndr-check`)
+
+# --- Fase 7F (sensor 0.9.0): receptores SIEM (Syslog) --------------------------------------
+# Desactivados por defecto. Doble control como NDR: aquí se declaran las entradas (alias,
+# protocolo, puerto, pares permitidos) y un admin de Sentra registra una fuente SIEM que apunta
+# al ALIAS. Solo se escucha en entradas declaradas aquí Y habilitadas en el servidor; el
+# servidor nunca envía puertos, direcciones, rutas ni certificados.
+# Reglas fijas: UDP solo con allow_udp = true (la IP de origen UDP se falsifica y no autentica);
+# sin TLS, allowed_peers solo puede contener rangos privados, de loopback o de enlace local.
+# Ver docs/fase-7f-syslog.md.
+#
+# [siem]
+# enabled = true
+# spool_max_mb = 128      # spool propio (siem-spool.sqlite3), separado de jobs y NDR
+#
+# [[siem.inputs]]
+# name = "fw-syslog"      # alias que ve el servidor: ^[a-z0-9_-]{1,32}$
+# type = "syslog"
+# protocol = "tls"        # tcp | tls | udp (udp exige allow_udp = true)
+# bind = "0.0.0.0"
+# port = 6514
+# allowed_peers = ["10.0.10.1/32"]
+# tls_cert = "/etc/sentra-sensor/syslog.crt"   # ruta absoluta local (Linux y macOS)
+# tls_key = "/etc/sentra-sensor/syslog.key"
+## Windows: ruta con letra de unidad (sin UNC); "/etc/..." no es absoluta en Windows y se
+## rechaza. Usar "/" o "\\" en TOML:
+## tls_cert = "C:/ProgramData/SentraSensor/syslog.crt"
+## tls_key = "C:/ProgramData/SentraSensor/syslog.key"
+# max_message_bytes = 8192
+# max_connections = 32
+# max_records_per_second = 2000
+# idle_timeout_seconds = 300
+#
+# Fase 7F.3: lectura incremental de ficheros JSON Lines (Suricata eve.json, logs JSON de
+# Zeek, alerts.json de Wazuh). Solo ficheros dentro de allowed_dir; nunca enlaces simbólicos
+# ni junctions; offsets en siem-offsets.json; payloads de Suricata eliminados en el host.
+#
+# [[siem.inputs]]
+# name = "suricata"
+# type = "file"
+# format = "suricata_eve"           # suricata_eve | zeek_json | wazuh_alerts | json_lines
+# allowed_dir = "/var/log/suricata"
+## Windows (ruta con letra de unidad, sin UNC):
+## allowed_dir = "C:/Program Files/Suricata/log"
+# paths = ["eve.json"]              # relativas a allowed_dir (como mucho 16)
+# start_at = "end"                  # end | beginning (solo la primera vez, sin offset guardado)
+# max_line_bytes = 65536
+# max_records_per_second = 2000
+# poll_interval_ms = 1000

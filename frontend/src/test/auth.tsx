@@ -18,6 +18,8 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     // Fase 7A: ver el catálogo de herramientas del analista.
     "tools:read",
     "ndr:read",
+    // Fase 7F: fuentes SIEM y agregados.
+    "siem:read",
   ],
   analyst: [
     "monitoring:read",
@@ -51,6 +53,9 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "ndr:read",
     "ndr:evidence",
     "ndr:triage",
+    // Fase 7F: SIEM, fuentes y eventos.
+    "siem:read",
+    "siem:evidence",
   ],
   admin: [
     "monitoring:read",
@@ -113,6 +118,10 @@ export const ROLE_PERMISSIONS: Record<Role, Permission[]> = {
     "ndr:evidence",
     "ndr:triage",
     "ndr:manage",
+    // Fase 7F: SIEM (fuentes, eventos y gestión).
+    "siem:read",
+    "siem:evidence",
+    "siem:manage",
   ],
 };
 

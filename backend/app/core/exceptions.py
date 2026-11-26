@@ -535,3 +535,53 @@ class NdrConflictError(ConflictError):
 
 class NdrAnomalyNotFoundError(NotFoundError):
     code = "ndr_anomaly_not_found"
+
+
+class SiemNotAuthorizedError(ForbiddenError):
+    # Fase 7F.1: lote SIEM de un sensor para una fuente que no es suya, deshabilitada, de
+    # otro site o sin la capacidad. El sensor descarta el lote y no lo reintenta.
+    code = "siem_not_authorized"
+
+
+class SiemValidationError(SentraError):
+    status_code = status.HTTP_422_UNPROCESSABLE_CONTENT
+
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
+
+
+class SiemConflictError(ConflictError):
+    def __init__(self, code: str, message: str, details: list[dict[str, Any]] | None = None):
+        super().__init__(message, details)
+        self.code = code
+
+
+class SiemSourceNotFoundError(NotFoundError):
+    code = "siem_source_not_found"
+
+
+class SiemEventNotFoundError(NotFoundError):
+    code = "siem_event_not_found"
+
+
+class SiemQuotaError(RateLimitedError):
+    # Fase 7F.1: la fuente superó su cuota de eventos por minuto. El sensor conserva el lote
+    # en su spool y lo reintenta tras Retry-After (backpressure, no pérdida).
+    code = "siem_quota"
+
+
+class SiemSearchTimeoutError(SentraError):
+    # Fase 7F.6: la búsqueda superó SIEM_SEARCH_TIMEOUT_MS. Se pide acotar fechas o filtros;
+    # la consulta ya se canceló en PostgreSQL.
+    status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    code = "siem_search_timeout"
+
+
+class SiemSavedSearchNotFoundError(NotFoundError):
+    code = "siem_saved_search_not_found"
+
+
+class LiveStreamLimitError(RateLimitedError):
+    # Fase 7F.7: demasiados streams del Live SOC abiertos (por usuario o en este proceso).
+    code = "live_stream_limit"

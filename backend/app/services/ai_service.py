@@ -394,6 +394,20 @@ class AIInsightService:
             refresh=refresh,
         )
 
+    def analyze_siem_event(self, event_id: UUID, refresh: bool) -> InsightRead:
+        """Fase 7F.6: resumen de solo lectura de un evento SIEM.
+
+        Nunca cambia el evento, su severidad ni su atribución. Quien no tenga siem:evidence
+        no puede leer el insight (content_permissions), ni en la caché ni en el listado.
+        """
+        return self._run(
+            InsightKind.SIEM_EVENT_ANALYSIS,
+            lambda b: b.siem_event(event_id),
+            entity=f"siem_event:{event_id}",
+            refresh=refresh,
+            content_permissions=[Permission.SIEM_EVIDENCE.value],
+        )
+
     def _console_request(
         self,
         task: str,

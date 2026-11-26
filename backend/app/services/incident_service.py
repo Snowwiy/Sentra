@@ -16,6 +16,8 @@ Responsabilidades y límites:
   auditan además los intentos fallidos).
 """
 
+import hashlib
+import json
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +64,7 @@ from app.models.incident import (
     ResolutionCategory,
 )
 from app.models.risk import AssetRisk, RiskSnapshot
+from app.models.siem import IncidentSiemEvent, SiemEvent
 from app.models.threat_intel import ThreatIndicator, ThreatIntelMatch, ThreatIntelSource
 from app.models.user import User
 from app.models.vulnerability import VulnerabilityFinding
@@ -920,6 +923,59 @@ class IncidentService:
             self._audit("incident_detection_attached", incident, {"detection": str(detection_id)})
         self._session.commit()
         return added
+
+    def attach_siem_event(
+        self, public_id: UUID, event: SiemEvent, snapshot: dict[str, Any], note: str | None
+    ) -> bool:
+        """Fase 7F.6: añade un evento SIEM como evidencia (copia + hash; idempotente).
+
+        La copia es la vista normalizada en el momento de añadirla; el `evidence_hash` del
+        registro original permite cotejarla con la fuente. Repetirlo no duplica nada.
+        """
+        incident = self._lock(public_id)
+        self._not_frozen(incident)
+        exists = self._session.scalar(
+            select(IncidentSiemEvent.id).where(
+                IncidentSiemEvent.incident_id == incident.id,
+                IncidentSiemEvent.event_public_id == event.event_id,
+            )
+        )
+        if exists is not None:
+            self._session.commit()
+            return False
+        now = _now()
+        canonical = json.dumps(snapshot, sort_keys=True, separators=(",", ":"), default=str)
+        self._session.add(
+            IncidentSiemEvent(
+                incident_id=incident.id,
+                event_id=event.id,
+                event_public_id=event.event_id,
+                source_name=str(snapshot.get("source_name") or "")[:100],
+                source_type=event.source_type,
+                event_type=event.event_type,
+                observed_at=event.observed_at,
+                evidence_hash=event.evidence_hash,
+                snapshot=snapshot,
+                snapshot_sha256=hashlib.sha256(canonical.encode()).hexdigest(),
+                note=note,
+                attached_at=now,
+                attached_by_user_id=self.op.user.id,
+                attached_by=self.op.actor.name[:64],
+            )
+        )
+        self._activity(
+            incident,
+            "siem_event_attached",
+            f"Evento SIEM añadido: {event.event_type} ({event.source_type})",
+            now,
+            "siem_event",
+            event.event_id,
+            {"evidence_hash": event.evidence_hash},
+        )
+        self._touch(incident, now, bump=False)
+        self._audit("incident_siem_event_attached", incident, {"event": str(event.event_id)})
+        self._session.commit()
+        return True
 
     def attach_alert(self, public_id: UUID, alert_id: UUID) -> bool:
         incident = self._lock(public_id)

@@ -80,6 +80,28 @@ administrativa: [docs/discovery.md](discovery.md).
 Payloads and error format: [docs/agent-protocol.md](agent-protocol.md). Interactive docs at
 `/docs` in development.
 
+## Fase 7F (server 0.9.0)
+
+Integración SIEM y Live SOC. Detalle en [fase-7f.md](fase-7f.md),
+[fase-7f-correlation.md](fase-7f-correlation.md) y [fase-7f-live-soc.md](fase-7f-live-soc.md).
+
+- Sensor: `POST /sensor/siem/batches` (credencial del sensor, fuente habilitada, cuota por
+  fuente y por sensor; 429 con `Retry-After`). El heartbeat devuelve las entradas aprobadas
+  (alias e identificador de fuente, nunca puertos ni rutas).
+- `GET /siem/connectors`, `GET /siem/overview`, `GET /siem/sources`,
+  `GET /siem/sources/{id}` (`siem:read`).
+- `POST /siem/sources`, `PUT /siem/sources/{id}`, `DELETE /siem/sources/{id}`,
+  `POST /siem/sources/{id}/import` (`siem:manage`).
+- `GET /siem/events`, `GET /siem/events/{id}` (`siem:evidence`).
+- `POST /siem/search`, `GET/POST /siem/searches`, `DELETE /siem/searches/{id}`,
+  `POST /siem/events/export`, `GET /siem/events/{id}/related`, `GET /siem/timeline`
+  (`siem:evidence`). Timeout de búsqueda: 503 `siem_search_timeout`.
+- `POST /siem/events/{id}/incidents/{incident_id}` (`siem:evidence` + `incidents:manage`),
+  `GET /siem/incidents/{id}/events` (`siem:evidence` + `incidents:read`).
+- `POST /ai/siem/events/{id}/analyze` (`ai:use` + `siem:evidence`).
+- `GET /live/stream` (`monitoring:read`, sesión de consola): SSE con canales por permiso,
+  `Last-Event-ID` o `resume`; 429 `live_stream_limit`.
+
 ## Fase 7E (server 0.8.0)
 
 Network Detection & Response. Detalle, permisos y ejemplos en

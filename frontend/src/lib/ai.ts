@@ -12,6 +12,7 @@ export const KIND_LABELS: Record<InsightKind, string> = {
   incident_evidence: "Evidencia de incidente",
   incident_next_steps: "Siguientes pasos de incidente",
   vulnerability_analysis: "Análisis de vulnerabilidad",
+  siem_event_analysis: "Resumen de evento SIEM",
   console_summary: "Resumen de la consola",
   console_risk: "Explicación del riesgo (consola)",
   console_hypotheses: "Hipótesis (consola)",
@@ -42,6 +43,7 @@ export const REF_TYPE_LABELS: Record<string, string> = {
   vulnerability: "Vulnerabilidad",
   threat_match: "Coincidencia de inteligencia",
   tool_execution: "Resultado de herramienta",
+  siem_event: "Evento SIEM",
 };
 
 export const STALE_LABELS: Record<NonNullable<Insight["stale_reason"]>, string> = {
@@ -64,6 +66,8 @@ export function refLink(ref: EvidenceRef): string | null {
       return `/vulnerabilities/${encodeURIComponent(ref.id)}`;
     case "threat_match":
       return `/threat-intel/matches/${encodeURIComponent(ref.id)}`;
+    case "siem_event":
+      return `/siem?tab=hunt&event=${encodeURIComponent(ref.id)}`;
     case "risk_contribution":
     case "risk_snapshot":
       return asset ? `/assets/${asset}?tab=risk` : null;

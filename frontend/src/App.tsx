@@ -93,6 +93,8 @@ const SitesPage = lazy(() => import("./pages/SitesPage").then((m) => ({ default:
 const SensorsPage = lazy(() => import("./pages/SensorsPage").then((m) => ({ default: m.SensorsPage })));
 // Fase 7E: Network Detection & Response.
 const NdrPage = lazy(() => import("./pages/NdrPage").then((m) => ({ default: m.NdrPage })));
+const SiemPage = lazy(() => import("./pages/SiemPage").then((m) => ({ default: m.SiemPage })));
+const LiveSocPage = lazy(() => import("./pages/LiveSocPage").then((m) => ({ default: m.LiveSocPage })));
 // Fase 6B: infraestructura de red (SNMP / LLDP / CDP) en su propio chunk.
 const InfrastructurePage = lazy(() =>
   import("./pages/InfrastructurePage").then((m) => ({ default: m.InfrastructurePage })),
@@ -360,6 +362,26 @@ export function AppRoutes() {
               <RequirePermission permission="ndr:read">
                 <Suspense fallback={incidentsFallback}>
                   <NdrPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="live"
+            element={
+              <RequirePermission permission="monitoring:read">
+                <Suspense fallback={incidentsFallback}>
+                  <LiveSocPage />
+                </Suspense>
+              </RequirePermission>
+            }
+          />
+          <Route
+            path="siem"
+            element={
+              <RequirePermission permission="siem:read">
+                <Suspense fallback={incidentsFallback}>
+                  <SiemPage />
                 </Suspense>
               </RequirePermission>
             }
